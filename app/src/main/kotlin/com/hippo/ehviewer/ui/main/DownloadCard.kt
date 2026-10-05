@@ -47,6 +47,7 @@ import com.ehviewer.core.ui.component.GalleryListCardRating
 import com.ehviewer.core.ui.util.TransitionsVisibilityScope
 import com.ehviewer.core.ui.util.listThumbGenerator
 import com.hippo.ehviewer.EhDB
+import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhUtils
 import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.util.FileUtils
@@ -62,6 +63,7 @@ fun DownloadCard(
     info: DownloadInfo,
     selectMode: Boolean,
     showProgress: Boolean,
+    source: String? = null,
     modifier: Modifier = Modifier,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
 ) = CrystalCard(modifier = modifier, onClick = onClick, onLongClick = onLongClick, interactionSource = interactionSource) {
@@ -155,12 +157,24 @@ fun DownloadCard(
                     GalleryListCardRating(rating = info.rating, modifier = Modifier.padding(top = 1.dp, bottom = 3.dp))
                     val categoryColor = EhUtils.getCategoryColor(info.category)
                     val categoryText = EhUtils.getCategory(info.category).uppercase()
-                    Text(
-                        text = categoryText,
-                        modifier = Modifier.clip(ShapeDefaults.Small).background(categoryColor).padding(vertical = 2.dp, horizontal = 8.dp),
-                        color = EhUtils.getCategoryTextColor(categoryColor),
-                        style = MaterialTheme.typography.labelLarge,
-                    )
+                    Row {
+                        Text(
+                            text = categoryText,
+                            modifier = Modifier.clip(ShapeDefaults.Small).background(categoryColor).padding(vertical = 2.dp, horizontal = 8.dp),
+                            color = EhUtils.getCategoryTextColor(categoryColor),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        if (source != null && Settings.showDownloadSource.value) {
+                            Text(
+                                text = source,
+                                modifier = Modifier.padding(start = 4.dp).clip(ShapeDefaults.Small)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .padding(vertical = 2.dp, horizontal = 8.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                        }
+                    }
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 val running = downloadState == DownloadInfo.STATE_WAIT || downloadState == DownloadInfo.STATE_DOWNLOAD

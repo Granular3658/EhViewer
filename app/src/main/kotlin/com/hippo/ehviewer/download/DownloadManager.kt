@@ -35,6 +35,7 @@ import com.ehviewer.core.database.model.DownloadInfo
 import com.ehviewer.core.database.model.DownloadLabel
 import com.ehviewer.core.files.delete
 import com.ehviewer.core.files.find
+import com.ehviewer.core.files.isDirectory
 import com.ehviewer.core.files.toOkioPath
 import com.ehviewer.core.files.toUri
 import com.ehviewer.core.model.BaseGalleryInfo
@@ -839,6 +840,41 @@ var downloadLocation: Path
         }
     }
 
-val DownloadInfo.downloadDir get() = dirname?.let { downloadLocation / it }
+/**
+ * The directory new downloads are written to. Equals the user-selected default
+ * location, or the first configured location, or the legacy single location.
+ */
+val defaultDownloadLocation: Path
+    get() = with(Settings) {
+        val set = downloadLocations.value
+        val chosen = defaultDownloadLocationUri.value
+        when {
+            chosen != null && chosen in set -> Uri.parse(chosen).toOkioPath()
+            set.isNotEmpty() -> Uri.parse(set.first()).toOkioPath()
+            else -> downloadLocation
+        }
+    }
+
+/**
+ * All configured download directories. Falls back to the legacy single
+ * [downloadLocation] when no multi-location set has been configured yet.
+ */
+val allDownloadLocations: List<Path>
+    get() = buildList {
+        val set = Settings.downloadLocations.value
+        if (set.isEmpty()) {
+            downloadLocation.takeIf { it.toString().isNotEmpty() }?.let { add(it) }
+        } else {
+            set.forEach { uriStr ->
+                runCatching { Uri.parse(uriStr).toOkioPath() }.getOrNull()?.let { add(it) }
+            }
+        }
+    }
+
+val DownloadInfo.downloadDir: Path?
+    get() = dirname?.let { name ->
+        allDownloadLocations.firstNotNullOfOrNull { loc -> (loc / name).takeIf { it.isDirectory } }
+            ?: (defaultDownloadLocation / name)
+    }
 val DownloadInfo.archiveFile get() = downloadDir?.run { find("$gid.cbz") ?: find("$gid.zip") }
 val GalleryInfo.tempDownloadDir get() = AppConfig.externalTempPersistDir?.let { it / "$gid" }

@@ -100,6 +100,10 @@ object Settings : DataStorePreferences(null) {
     val downloadOriginImage = boolPref("download_origin_image", false)
     val saveAsCbz = boolPref("save_as_cbz", false)
     val archiveMetadata = boolPref("archive_metadata", true)
+    // Multiple download locations
+    val downloadLocations = stringSetPref("download_locations_2", emptySet())
+    val defaultDownloadLocationUri = stringOrNullPref("default_download_location")
+    val showDownloadSource = boolPref("show_download_source", false)
 
     // Privacy
     val security = boolPref("require_unlock", false)
