@@ -100,10 +100,14 @@ object Settings : DataStorePreferences(null) {
     val downloadOriginImage = boolPref("download_origin_image", false)
     val saveAsCbz = boolPref("save_as_cbz", false)
     val archiveMetadata = boolPref("archive_metadata", true)
-    // Multiple download locations
+    // Multiple download locations. The "_2" suffix distinguishes this multi-location
+    // set from the pre-existing single-location prefs (downloadScheme/Path/...).
     val downloadLocations = stringSetPref("download_locations_2", emptySet())
     val defaultDownloadLocationUri = stringOrNullPref("default_download_location")
     val showDownloadSource = boolPref("show_download_source", false)
+    // One-shot flag: the legacy single location has been folded into downloadLocations.
+    // Without it, clearing every location would make the migration restore the old one.
+    val downloadLocationsMigrated = boolPref("download_locations_migrated", false)
 
     // Privacy
     val security = boolPref("require_unlock", false)

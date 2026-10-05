@@ -62,6 +62,7 @@ import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.download.allDownloadLocations
 import com.hippo.ehviewer.download.downloadDir
 import com.hippo.ehviewer.download.downloadLocation
+import com.hippo.ehviewer.download.invalidateDownloadLocationCache
 import com.hippo.ehviewer.spider.COMIC_INFO_FILE
 import com.hippo.ehviewer.spider.MIN_SPEED_LEVEL
 import com.hippo.ehviewer.spider.SpiderDen
@@ -113,21 +114,34 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
             val addLocationLabel = stringResource(id = R.string.settings_download_add_location)
             val removeLocationLabel = stringResource(id = R.string.settings_download_remove_location)
             val setDefaultLabel = stringResource(id = R.string.settings_download_set_default)
+            val alreadyAddedLabel = stringResource(id = R.string.settings_download_location_already_added)
+            val cannotRemoveDefaultLabel = stringResource(id = R.string.settings_download_cannot_remove_default)
 
             suspend fun onLocationPicked(treeUri: Uri, setAsDefault: Boolean) {
                 contextOf<Context>().contentResolver.runCatching {
-                    persistedUriPermissions.forEach { releasePersistableUriPermission(it.uri, URI_FLAGS) }
+                    // Only take the new permission. Releasing the existing ones here would
+                    // revoke access to every other configured location: permissions are
+                    // released explicitly when a location is removed instead.
                     takePersistableUriPermission(treeUri, URI_FLAGS)
                     val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
                     val path = docUri.toOkioPath()
                     check(path.isDirectory) { "$path is not a directory" }
                     keepNoMediaFileStatus(path)
+                    val current = Settings.downloadLocations.value
+                    // Different tree URIs can resolve to the same directory
+                    if (current.any { runCatching { Uri.parse(it).toOkioPath() }.getOrNull() == path }) {
+                        launchSnackbar(alreadyAddedLabel)
+                        return@runCatching
+                    }
                     val uriStr = docUri.toString()
-                    Settings.downloadLocations.value = Settings.downloadLocations.value + uriStr
-                    if (setAsDefault) {
+                    Settings.downloadLocations.value = current + uriStr
+                    // The first location (or an explicit pick) becomes the default, so the
+                    // default never depends on the iteration order of the underlying Set
+                    if (setAsDefault || Settings.defaultDownloadLocationUri.value == null) {
                         Settings.defaultDownloadLocationUri.value = uriStr
                         downloadLocation = path
                     }
+                    invalidateDownloadLocationCache()
                 }.onFailure {
                     logcat(it)
                     launchSnackbar(cannotGetDownloadLocation)
@@ -160,7 +174,10 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                             },
                             title = R.string.waring,
                             onCancelButtonClick = {
-                                if (downloadLocation != path) {
+                                // Resetting only makes sense for the legacy single location.
+                                // With locations configured it would revoke every granted
+                                // permission without changing anything effective.
+                                if (downloadLocationsState.isEmpty() && downloadLocation != path) {
                                     contextOf<Context>().contentResolver.run {
                                         persistedUriPermissions.forEach {
                                             releasePersistableUriPermission(it.uri, URI_FLAGS)
@@ -187,6 +204,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                                 Settings.downloadLocations.value = Settings.downloadLocations.value + uriStr
                                 Settings.defaultDownloadLocationUri.value = uriStr
                                 downloadLocation = path
+                                invalidateDownloadLocationCache()
                                 return@launchIO
                             }.onFailure {
                                 logcat(it)
@@ -222,26 +240,50 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                                 modifier = Modifier.padding(end = 8.dp),
                             )
                         } else {
-                            TextButton(onClick = { launchIO { Settings.defaultDownloadLocationUri.value = uriStr } }) {
+                            TextButton(
+                                onClick = {
+                                    launchIO {
+                                        Settings.defaultDownloadLocationUri.value = uriStr
+                                        invalidateDownloadLocationCache()
+                                    }
+                                },
+                            ) {
                                 Text(setDefaultLabel)
                             }
                         }
-                        TextButton(
-                            onClick = {
-                                launchIO {
-                                    if (defaultLocationUri == uriStr) Settings.defaultDownloadLocationUri.value = null
-                                    Settings.downloadLocations.value = Settings.downloadLocations.value - uriStr
-                                    runCatching { contextOf<Context>().contentResolver.releasePersistableUriPermission(Uri.parse(uriStr), URI_FLAGS) }
-                                }
-                            },
-                        ) {
-                            Text(removeLocationLabel)
+                        // The default location anchors the whole set, so it has no remove
+                        // button at all: removing it would leave no configured location and
+                        // silently fall back to the legacy single one, which then disappears
+                        // again as soon as a new location is added.
+                        if (!isDefault) {
+                            TextButton(
+                                onClick = {
+                                    launchIO {
+                                        if (isDefault || Settings.downloadLocations.value.size <= 1) {
+                                            launchSnackbar(cannotRemoveDefaultLabel)
+                                        } else {
+                                            val remaining = Settings.downloadLocations.value - uriStr
+                                            Settings.downloadLocations.value = remaining
+                                            if (defaultLocationUri == uriStr) {
+                                                Settings.defaultDownloadLocationUri.value = remaining.minOrNull()
+                                            }
+                                            // Only the removed location loses its permission
+                                            runCatching { contextOf<Context>().contentResolver.releasePersistableUriPermission(Uri.parse(uriStr), URI_FLAGS) }
+                                            invalidateDownloadLocationCache()
+                                        }
+                                    }
+                                },
+                            ) {
+                                Text(removeLocationLabel)
+                            }
                         }
                     }
                 }
-                Preference(title = addLocationLabel) {
-                    extraDirLauncher.launch(null)
-                }
+            }
+            // Keep this outside the block above so a location can always be added back,
+            // even after the last one has been removed
+            Preference(title = addLocationLabel) {
+                extraDirLauncher.launch(null)
             }
             val mediaScan = Settings.mediaScan.asMutableState()
             SwitchPreference(

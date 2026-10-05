@@ -323,7 +323,9 @@
     <string name="settings_download_default_location">默认下载目录</string>
     <string name="settings_download_extra_locations">下载目录</string>
     <string name="settings_download_add_location">添加下载目录</string>
+    <string name="settings_download_location_already_added">该目录已添加</string>
     <string name="settings_download_remove_location">移除</string>
+    <string name="settings_download_cannot_remove_default">无法移除默认下载目录，请先将其他目录设为默认</string>
     <string name="settings_download_set_default">设为默认</string>
     <string name="settings_download_set_default_done">默认</string>
     <string name="settings_download_show_source">显示下载目录来源</string>

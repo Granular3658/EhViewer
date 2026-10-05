@@ -123,13 +123,18 @@ class EhApplication : Application(), SingletonImageLoader.Factory {
             }
         }
         launchIO {
-            // Migrate the legacy single download location into the multi-location set
-            if (Settings.downloadLocations.value.isEmpty() && Settings.downloadScheme != null) {
-                runCatching {
-                    val legacyUri = downloadLocation.toUri().toString()
-                    Settings.downloadLocations.value = setOf(legacyUri)
-                    Settings.defaultDownloadLocationUri.value = legacyUri
-                }.onFailure { logcat(it) }
+            // One-shot: fold the legacy single download location into the multi-location set.
+            // Guarded by downloadLocationsMigrated so that clearing every configured
+            // location later does not resurrect the legacy one on the next launch.
+            if (!Settings.downloadLocationsMigrated.value) {
+                if (Settings.downloadLocations.value.isEmpty() && Settings.downloadScheme != null) {
+                    runCatching {
+                        val legacyUri = downloadLocation.toUri().toString()
+                        Settings.downloadLocations.value = setOf(legacyUri)
+                        Settings.defaultDownloadLocationUri.value = legacyUri
+                    }.onFailure { logcat(it) }
+                }
+                Settings.downloadLocationsMigrated.value = true
             }
             EhTagDatabase.launchUpdate()
             @Suppress("UNUSED_EXPRESSION")

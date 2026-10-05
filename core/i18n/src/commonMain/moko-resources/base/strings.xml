@@ -339,7 +339,9 @@
     <string name="settings_download_default_location">Default download directory</string>
     <string name="settings_download_extra_locations">Download directories</string>
     <string name="settings_download_add_location">Add directory</string>
+    <string name="settings_download_location_already_added">This directory has already been added</string>
     <string name="settings_download_remove_location">Remove</string>
+    <string name="settings_download_cannot_remove_default">The default download location cannot be removed. Set another location as default first.</string>
     <string name="settings_download_set_default">Set as default</string>
     <string name="settings_download_set_default_done">Default</string>
     <string name="settings_download_show_source">Show download directory source</string>

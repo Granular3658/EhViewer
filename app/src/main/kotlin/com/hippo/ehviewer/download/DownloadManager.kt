@@ -16,6 +16,7 @@
 package com.hippo.ehviewer.download
 
 import android.net.Uri
+import java.util.concurrent.ConcurrentHashMap
 import android.util.SparseLongArray
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisallowComposableCalls
@@ -390,6 +391,8 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
                 info.downloadDir?.delete()
                 info.tempDownloadDir?.delete()
                 EhDB.removeDownloadDirname(info.gid)
+                // The directory just got removed, drop its cached resolution
+                info.dirname?.let { downloadDirCache.remove(it) }
             }
         }
     }
@@ -840,41 +843,66 @@ var downloadLocation: Path
         }
     }
 
+private val locationPathCache = ConcurrentHashMap<Set<String>, List<Path>>()
+private val downloadDirCache = ConcurrentHashMap<String, Path>()
+
+/**
+ * Must be called whenever the configured locations change or a download
+ * directory is created/removed, as both invalidate the cached resolutions.
+ */
+fun invalidateDownloadLocationCache() {
+    locationPathCache.clear()
+    downloadDirCache.clear()
+}
+
 /**
  * The directory new downloads are written to. Equals the user-selected default
  * location, or the first configured location, or the legacy single location.
+ * Never throws: a corrupted stored URI falls back to the legacy location.
  */
 val defaultDownloadLocation: Path
     get() = with(Settings) {
         val set = downloadLocations.value
         val chosen = defaultDownloadLocationUri.value
         when {
-            chosen != null && chosen in set -> Uri.parse(chosen).toOkioPath()
-            set.isNotEmpty() -> Uri.parse(set.first()).toOkioPath()
-            else -> downloadLocation
+            chosen != null && chosen in set -> runCatching { Uri.parse(chosen).toOkioPath() }.getOrNull()
+            // minOrNull keeps the fallback deterministic: Set ordering is not guaranteed
+            set.isNotEmpty() -> set.minOrNull()?.let { runCatching { Uri.parse(it).toOkioPath() }.getOrNull() }
+            else -> null
         }
+    } ?: downloadLocation
+
+/**
+ * All configured download directories, in a deterministic (sorted) order.
+ * Falls back to the legacy single [downloadLocation] when no multi-location
+ * set has been configured yet. Results are cached per configured URI set.
+ */
+val allDownloadLocations: List<Path>
+    get() {
+        val set = Settings.downloadLocations.value
+        locationPathCache[set]?.let { return it }
+        val paths = if (set.isEmpty()) {
+            downloadLocation.takeIf { it.toString().isNotEmpty() }?.let { listOf(it) } ?: emptyList()
+        } else {
+            set.mapNotNull { uriStr -> runCatching { Uri.parse(uriStr).toOkioPath() }.getOrNull() }
+                .sortedBy { it.toString() }
+        }
+        locationPathCache[set] = paths
+        return paths
     }
 
 /**
- * All configured download directories. Falls back to the legacy single
- * [downloadLocation] when no multi-location set has been configured yet.
+ * Resolved per-dirname and cached: the naive version performed a filesystem
+ * stat per list item per recomposition, on the main thread.
  */
-val allDownloadLocations: List<Path>
-    get() = buildList {
-        val set = Settings.downloadLocations.value
-        if (set.isEmpty()) {
-            downloadLocation.takeIf { it.toString().isNotEmpty() }?.let { add(it) }
-        } else {
-            set.forEach { uriStr ->
-                runCatching { Uri.parse(uriStr).toOkioPath() }.getOrNull()?.let { add(it) }
-            }
-        }
-    }
-
 val DownloadInfo.downloadDir: Path?
     get() = dirname?.let { name ->
-        allDownloadLocations.firstNotNullOfOrNull { loc -> (loc / name).takeIf { it.isDirectory } }
-            ?: (defaultDownloadLocation / name)
+        downloadDirCache[name] ?: run {
+            val resolved = allDownloadLocations.firstNotNullOfOrNull { loc -> (loc / name).takeIf { it.isDirectory } }
+                ?: (defaultDownloadLocation / name)
+            downloadDirCache[name] = resolved
+            resolved
+        }
     }
 val DownloadInfo.archiveFile get() = downloadDir?.run { find("$gid.cbz") ?: find("$gid.zip") }
 val GalleryInfo.tempDownloadDir get() = AppConfig.externalTempPersistDir?.let { it / "$gid" }

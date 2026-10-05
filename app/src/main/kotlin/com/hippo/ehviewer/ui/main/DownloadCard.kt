@@ -47,7 +47,6 @@ import com.ehviewer.core.ui.component.GalleryListCardRating
 import com.ehviewer.core.ui.util.TransitionsVisibilityScope
 import com.ehviewer.core.ui.util.listThumbGenerator
 import com.hippo.ehviewer.EhDB
-import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhUtils
 import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.util.FileUtils
@@ -164,7 +163,8 @@ fun DownloadCard(
                             color = EhUtils.getCategoryTextColor(categoryColor),
                             style = MaterialTheme.typography.labelLarge,
                         )
-                        if (source != null && Settings.showDownloadSource.value) {
+                        // A null source already means "hidden": the caller decides via the pref
+                        if (source != null) {
                             Text(
                                 text = source,
                                 modifier = Modifier.padding(start = 4.dp).clip(ShapeDefaults.Small)
