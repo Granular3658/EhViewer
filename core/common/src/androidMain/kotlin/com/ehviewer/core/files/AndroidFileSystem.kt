@@ -3,6 +3,7 @@ package com.ehviewer.core.files
 import android.content.Context
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
@@ -37,7 +38,12 @@ class AndroidFileSystem(context: Context) : FileSystem() {
 
     override fun atomicMove(source: Path, target: Path) {
         if (source.isSmb || target.isSmb) {
-            throw IOException("SMB locations are read-only: $source")
+            val extras = android.os.Bundle().apply {
+                putString("from", source.toString())
+                putString("to", target.toString())
+            }
+            contentResolver.call(source.toUri(), "rename", null, extras)
+            return
         }
         if (source.isPhysicalFile()) {
             return physicalFileSystem.atomicMove(source, target)
@@ -96,7 +102,12 @@ class AndroidFileSystem(context: Context) : FileSystem() {
 
     override fun createDirectory(dir: Path, mustCreate: Boolean) {
         if (dir.isSmb) {
-            throw IOException("SMB locations are read-only: $dir")
+            if (metadataOrNull(dir)?.isDirectory == true) {
+                if (mustCreate) throw IOException("$dir already exist")
+                return
+            }
+            contentResolver.call(dir.toUri(), "mkdir", dir.toString(), null)
+            return
         }
         if (dir.isPhysicalFile()) {
             return physicalFileSystem.createDirectory(dir, mustCreate)
@@ -150,7 +161,16 @@ class AndroidFileSystem(context: Context) : FileSystem() {
 
     override fun deleteRecursively(fileOrDirectory: Path, mustExist: Boolean) {
         if (fileOrDirectory.isSmb) {
-            throw IOException("SMB locations are read-only: $fileOrDirectory")
+            val meta = metadataOrNull(fileOrDirectory)
+            if (meta == null) {
+                if (mustExist) throw FileNotFoundException("$fileOrDirectory does not exist")
+                return
+            }
+            if (meta.isDirectory) {
+                list(fileOrDirectory).forEach { child -> deleteRecursively(child, mustExist = false) }
+            }
+            contentResolver.call(fileOrDirectory.toUri(), "delete", fileOrDirectory.toString(), null)
+            return
         }
         if (fileOrDirectory.isPhysicalFile()) {
             if (metadataOrNull(fileOrDirectory)?.isDirectory == true) {

@@ -79,4 +79,35 @@ external fun smbWrite(
 /** Flushes and closes the writer, returning the total bytes written. */
 external fun smbWriteClose(handle: Long): Long
 
+external fun smbMkdir(
+    host: String,
+    port: Int,
+    share: String,
+    sub: String,
+    user: String,
+    pass: String,
+    domain: String,
+)
+
+external fun smbDelete(
+    host: String,
+    port: Int,
+    share: String,
+    sub: String,
+    user: String,
+    pass: String,
+    domain: String,
+)
+
+external fun smbRename(
+    host: String,
+    port: Int,
+    share: String,
+    sub: String,
+    user: String,
+    pass: String,
+    domain: String,
+    toSub: String,
+)
+
 external fun smbInvalidate()

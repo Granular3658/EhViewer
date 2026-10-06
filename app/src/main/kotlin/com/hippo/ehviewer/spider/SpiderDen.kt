@@ -94,7 +94,12 @@ class SpiderDen(val info: GalleryInfo) {
         .also { fileCache = it }
 
     private val imageDir
-        get() = tempDownloadDir.takeIf { saveAsCbz } ?: downloadDir?.takeUnless { it.isSmb }
+        get() = if (downloadDir?.isSmb == true) {
+            // SMB galleries always store loose images; CBZ archival is skipped.
+            downloadDir
+        } else {
+            tempDownloadDir.takeIf { saveAsCbz } ?: downloadDir
+        }
 
     constructor(info: GalleryInfo, dirname: String) : this(info) {
         downloadDir = allDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
@@ -109,10 +114,12 @@ class SpiderDen(val info: GalleryInfo) {
     suspend fun setMode(value: Int) {
         mode = value
         if (mode == SpiderQueen.MODE_DOWNLOAD) {
-            if (downloadDir == null || downloadDir?.isSmb == true) {
+            if (downloadDir == null) {
                 downloadDir = getGalleryWritableDownloadDir(info).apply { mkdirs() }
             }
-            if (saveAsCbz && tempDownloadDir == null) {
+            // For SMB galleries, write images straight to the share; keep the
+            // local temp directory only for CBZ archiving on local storage.
+            if (saveAsCbz && tempDownloadDir == null && downloadDir?.isSmb != true) {
                 tempDownloadDir = info.tempDownloadDir!!.apply { mkdirs() }
             }
         }
@@ -404,8 +411,8 @@ suspend fun getGalleryDownloadDir(info: GalleryInfo): Path {
 }
 
 /**
- * Where new downloads must be written. SMB locations are read-only, so they are
- * never a download target, even when the same gallery also exists there.
+ * Where new downloads must be written. Includes SMB shares now that they are
+ * writable; an existing gallery directory there is reused as the target.
  */
 suspend fun getGalleryWritableDownloadDir(info: GalleryInfo): Path {
     val dirname = info.downloadDirname()

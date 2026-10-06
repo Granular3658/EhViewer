@@ -161,6 +161,39 @@ class SmbProvider : ContentProvider() {
     override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = throw IOException("SMB locations are read-only")
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = throw IOException("SMB locations are read-only")
 
+    /**
+     * Filesystem-level SMB operations routed here from [AndroidFileSystem] so the
+     * core module can stay free of the app's Rust bindings. `mkdir`/`delete`
+     * take the location as `arg`; `rename` takes `from`/`to` in [extras] (the
+     * same share, so only the destination sub-path differs).
+     */
+    override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
+        return when (method) {
+            "mkdir" -> {
+                val location = SmbLocation.parse(arg!!)
+                checkNotNull(location) { "Invalid SMB location: $arg" }
+                runBlocking { SmbRepository.mkdir(location) }
+                Bundle.EMPTY
+            }
+            "delete" -> {
+                val location = SmbLocation.parse(arg!!)
+                checkNotNull(location) { "Invalid SMB location: $arg" }
+                runBlocking { SmbRepository.delete(location) }
+                Bundle.EMPTY
+            }
+            "rename" -> {
+                val e = extras!!
+                val from = SmbLocation.parse(e.getString("from")!!)
+                val to = SmbLocation.parse(e.getString("to")!!)
+                checkNotNull(from) { "Invalid SMB location: ${e.getString("from")}" }
+                checkNotNull(to) { "Invalid SMB location: ${e.getString("to")}" }
+                runBlocking { SmbRepository.rename(from, to) }
+                Bundle.EMPTY
+            }
+            else -> super.call(method, arg, extras)
+        }
+    }
+
     private companion object {
         const val TAG = "SmbProvider"
     }

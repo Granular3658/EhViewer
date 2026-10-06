@@ -14,7 +14,7 @@ plugins {
     alias(libs.plugins.baselineprofile)
 }
 
-val supportedAbis = arrayOf("arm64-v8a", "x86_64", "armeabi-v7a")
+val supportedAbis = arrayOf("arm64-v8a")
 
 android {
     splits {

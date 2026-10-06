@@ -222,3 +222,65 @@ pub fn smbWriteClose(mut env: JNIEnv, _: JClass, handle: jlong) -> jlong {
         Ok(smb::write_close(handle as u64)? as jlong)
     })
 }
+
+/// Creates a directory on the share.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbMkdir(
+    mut env: JNIEnv,
+    _: JClass,
+    host: JString,
+    port: jint,
+    share: JString,
+    sub: JString,
+    user: JString,
+    pass: JString,
+    domain: JString,
+) {
+    jni_throwing(&mut env, |env| {
+        let target = read_target(env, &host, port, &share, &sub, &user, &pass, &domain)?;
+        smb::mkdir(&target)?;
+        Ok(())
+    })
+}
+
+/// Deletes a file or (empty) directory on the share.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbDelete(
+    mut env: JNIEnv,
+    _: JClass,
+    host: JString,
+    port: jint,
+    share: JString,
+    sub: JString,
+    user: JString,
+    pass: JString,
+    domain: JString,
+) {
+    jni_throwing(&mut env, |env| {
+        let target = read_target(env, &host, port, &share, &sub, &user, &pass, &domain)?;
+        smb::delete(&target)?;
+        Ok(())
+    })
+}
+
+/// Renames `sub` to `toSub` within the same share.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbRename(
+    mut env: JNIEnv,
+    _: JClass,
+    host: JString,
+    port: jint,
+    share: JString,
+    sub: JString,
+    user: JString,
+    pass: JString,
+    domain: JString,
+    toSub: JString,
+) {
+    jni_throwing(&mut env, |env| {
+        let target = read_target(env, &host, port, &share, &sub, &user, &pass, &domain)?;
+        let to_sub = env.get_string(&toSub)?.to_string_lossy().into_owned();
+        smb::rename(&target, &to_sub)?;
+        Ok(())
+    })
+}

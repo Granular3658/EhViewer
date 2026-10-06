@@ -2,9 +2,12 @@ package com.hippo.ehviewer.smb
 
 import com.hippo.ehviewer.jni.smbClose
 import com.hippo.ehviewer.jni.smbCreate
+import com.hippo.ehviewer.jni.smbDelete
 import com.hippo.ehviewer.jni.smbInvalidate
 import com.hippo.ehviewer.jni.smbList
+import com.hippo.ehviewer.jni.smbMkdir
 import com.hippo.ehviewer.jni.smbOpen
+import com.hippo.ehviewer.jni.smbRename
 import com.hippo.ehviewer.jni.smbRead
 import com.hippo.ehviewer.jni.smbStat
 import com.hippo.ehviewer.jni.smbTest
@@ -84,6 +87,51 @@ object SmbRepository {
     fun writeClose(handle: Long): Long = smbWriteClose(handle)
 
     fun close(handle: Long) = smbClose(handle)
+
+    /** Creates a directory on the share. */
+    suspend fun mkdir(location: SmbLocation): Unit = withContext(Dispatchers.IO) {
+        withTarget(location) { credentials ->
+            smbMkdir(
+                location.host,
+                location.port,
+                location.share,
+                location.subPath,
+                credentials.user,
+                credentials.password,
+                credentials.domain,
+            )
+        }
+    }
+
+    /** Deletes a file or (empty) directory on the share. */
+    suspend fun delete(location: SmbLocation): Unit = withContext(Dispatchers.IO) {
+        withTarget(location) { credentials ->
+            smbDelete(
+                location.host,
+                location.port,
+                location.share,
+                location.subPath,
+                credentials.user,
+                credentials.password,
+                credentials.domain,
+            )
+        }
+    }
+
+    /** Renames `from` to `to` within the same share. */
+    suspend fun rename(from: SmbLocation, to: SmbLocation): Unit = withContext(Dispatchers.IO) {
+        val credentials = credentials(from)
+        smbRename(
+            from.host,
+            from.port,
+            from.share,
+            from.subPath,
+            credentials.user,
+            credentials.password,
+            credentials.domain,
+            to.subPath,
+        )
+    }
 
     fun invalidateSessions() = smbInvalidate()
 

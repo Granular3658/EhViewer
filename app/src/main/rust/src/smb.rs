@@ -295,6 +295,57 @@ pub fn write_close(handle: u64) -> Result<u64> {
     })
 }
 
+/// Create a directory on the share. Errors if it already exists, matching the
+/// `mustCreate` contract of the surrounding filesystem layer.
+pub fn mkdir(target: &Target) -> Result<()> {
+    runtime().block_on(async {
+        with_session!(target, |session| {
+            let path = &target.sub;
+            let Session { client, tree, .. } = session;
+            let conn = client.connection_mut();
+            timeout(OP_TIMEOUT, tree.create_directory(conn, path))
+                .await
+                .map_err(|_| anyhow!("Timed out creating directory {path:?}"))??;
+            Ok(())
+        })
+    })
+}
+
+/// Delete a file or (empty) directory. Tries the file form first, then the
+/// directory form, so the caller does not need to know the entry type.
+pub fn delete(target: &Target) -> Result<()> {
+    runtime().block_on(async {
+        with_session!(target, |session| {
+            let path = &target.sub;
+            let Session { client, tree, .. } = session;
+            let conn = client.connection_mut();
+            let as_file = timeout(OP_TIMEOUT, tree.delete_file(conn, path)).await;
+            if as_file.is_ok() {
+                return Ok(());
+            }
+            timeout(OP_TIMEOUT, tree.delete_directory(conn, path))
+                .await
+                .map_err(|_| anyhow!("Timed out deleting {path:?}"))??;
+            Ok(())
+        })
+    })
+}
+
+/// Rename/move a file within the same share. `to_sub` is the destination path
+/// relative to the share root, on the same host/share as `from`.
+pub fn rename(from: &Target, to_sub: &str) -> Result<()> {
+    runtime().block_on(async {
+        with_session!(from, |session| {
+            let Session { client, tree, .. } = session;
+            let conn = client.connection_mut();
+            timeout(OP_TIMEOUT, tree.rename(conn, &from.sub, to_sub))
+                .await
+                .map_err(|_| anyhow!("Timed out renaming {:?} -> {:?}", from.sub, to_sub))??;
+            Ok(())
+        })
+    })
+}
+
 /// Drop every cached session. Called when a location's credentials change, so
 /// the next call re-authenticates instead of reusing the old login.
 pub fn invalidate() {

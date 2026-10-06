@@ -870,11 +870,9 @@ val defaultDownloadLocation: Path
         when {
             chosen != null && chosen in set -> runCatching { Uri.parse(chosen).toOkioPath() }
                 .getOrNull()
-                ?.takeUnless { it.isSmb }
-            // New downloads must never target a read-only SMB location.
             set.isNotEmpty() -> set.asSequence().sorted().mapNotNull { uriStr ->
                 runCatching { Uri.parse(uriStr).toOkioPath() }.getOrNull()
-            }.firstOrNull { !it.isSmb }
+            }.firstOrNull()
             else -> null
         }
     } ?: downloadLocation
@@ -899,9 +897,9 @@ val allDownloadLocations: List<Path>
         return paths
     }
 
-/** Locations that can receive new downloads. SMB entries are read-only. */
+/** Locations that can receive new downloads, including writable SMB shares. */
 val writableDownloadLocations: List<Path>
-    get() = allDownloadLocations.filterNot { it.isSmb }
+    get() = allDownloadLocations
 
 /**
  * Resolved per-dirname and cached: the naive version performed a filesystem
@@ -910,7 +908,7 @@ val writableDownloadLocations: List<Path>
 val DownloadInfo.downloadDir: Path?
     get() = dirname?.let { name ->
         downloadDirCache[name] ?: run {
-            val resolved = (writableDownloadLocations + allDownloadLocations.filter { it.isSmb })
+            val resolved = writableDownloadLocations
                 .firstNotNullOfOrNull { loc -> (loc / name).takeIf { it.isDirectory } }
                 ?: (defaultDownloadLocation / name)
             downloadDirCache[name] = resolved
