@@ -58,4 +58,25 @@ external fun smbRead(
 
 external fun smbClose(handle: Long)
 
+/** Creates (truncating) the remote file and returns an opaque write handle. */
+external fun smbCreate(
+    host: String,
+    port: Int,
+    share: String,
+    sub: String,
+    user: String,
+    pass: String,
+    domain: String,
+): Long
+
+/** Writes [length] bytes from the direct buffer to the writer opened by [smbCreate]. */
+external fun smbWrite(
+    handle: Long,
+    buffer: java.nio.ByteBuffer,
+    length: Int,
+): Int
+
+/** Flushes and closes the writer, returning the total bytes written. */
+external fun smbWriteClose(handle: Long): Long
+
 external fun smbInvalidate()

@@ -92,39 +92,69 @@ class SmbProvider : ContentProvider() {
     }
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
-        require(mode == "r" || mode == "rt") { "SMB locations are read-only" }
         val (readSide, writeSide) = ParcelFileDescriptor.createPipe()
-        executor.execute {
-            var handle: SmbHandle? = null
-            try {
-                val opened = runBlocking { SmbRepository.open(location(uri)) }
-                handle = opened
-                ParcelFileDescriptor.AutoCloseOutputStream(writeSide).use { output ->
-                    val buffer = java.nio.ByteBuffer.allocateDirect(64 * 1024)
-                    var offset = 0L
-                    while (offset < opened.size) {
-                        val requested = minOf(buffer.capacity().toLong(), opened.size - offset).toInt()
-                        buffer.clear()
-                        val read = SmbRepository.read(opened.value, buffer, offset, 0, requested)
-                        if (read <= 0) break
-                        val bytes = ByteArray(read)
-                        buffer.position(0)
-                        buffer.get(bytes)
-                        output.write(bytes)
-                        offset += read
+        val location = location(uri)
+        if (mode == "r" || mode == "rt") {
+            executor.execute {
+                var handle: SmbHandle? = null
+                try {
+                    val opened = runBlocking { SmbRepository.open(location) }
+                    handle = opened
+                    ParcelFileDescriptor.AutoCloseOutputStream(writeSide).use { output ->
+                        val buffer = java.nio.ByteBuffer.allocateDirect(64 * 1024)
+                        var offset = 0L
+                        while (offset < opened.size) {
+                            val requested = minOf(buffer.capacity().toLong(), opened.size - offset).toInt()
+                            buffer.clear()
+                            val read = SmbRepository.read(opened.value, buffer, offset, 0, requested)
+                            if (read <= 0) break
+                            val bytes = ByteArray(read)
+                            buffer.position(0)
+                            buffer.get(bytes)
+                            output.write(bytes)
+                            offset += read
+                        }
                     }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "SMB stream failed: $uri", t)
+                } finally {
+                    handle?.let { smbHandle ->
+                        runCatching { SmbRepository.close(smbHandle.value) }
+                            .onFailure { Log.e(TAG, "Failed to close SMB handle: $uri", it) }
+                    }
+                    runCatching { writeSide.close() }
                 }
-            } catch (t: Throwable) {
-                Log.e(TAG, "SMB stream failed: $uri", t)
-            } finally {
-                handle?.let { smbHandle ->
-                    runCatching { SmbRepository.close(smbHandle.value) }
-                        .onFailure { Log.e(TAG, "Failed to close SMB handle: $uri", it) }
-                }
-                runCatching { writeSide.close() }
             }
+            return readSide
+        } else if (mode.contains('w', ignoreCase = true)) {
+            // Write mode: the caller writes into `writeSide`; we drain `readSide`
+            // and forward the bytes to the Rust SMB writer.
+            executor.execute {
+                var handle: SmbWriteHandle? = null
+                try {
+                    handle = runBlocking { SmbRepository.create(location) }
+                    ParcelFileDescriptor.AutoCloseInputStream(readSide).use { input ->
+                        val buffer = ByteArray(64 * 1024)
+                        var n: Int
+                        while (input.read(buffer).also { n = it } != -1) {
+                            if (n > 0) SmbRepository.write(handle.value, buffer.copyOf(n))
+                        }
+                    }
+                    runBlocking { SmbRepository.writeClose(handle.value) }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "SMB write failed: $uri", t)
+                } finally {
+                    handle?.let { smbHandle ->
+                        runCatching { runBlocking { SmbRepository.writeClose(smbHandle.value) } }
+                    }
+                    runCatching { readSide.close() }
+                    runCatching { writeSide.close() }
+                }
+            }
+            return writeSide
+        } else {
+            throw IOException("Unsupported SMB open mode: $mode")
         }
-        return readSide
     }
 
     override fun insert(uri: Uri, values: ContentValues?): Uri? = throw IOException("SMB locations are read-only")

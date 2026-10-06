@@ -13,6 +13,7 @@
 use anyhow::{Result, anyhow};
 use smb2::{ClientConfig, SmbClient};
 use smb2::client::stream::FileReader;
+use smb2::client::stream::FileWriter;
 use smb2::client::tree::Tree;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -74,10 +75,16 @@ fn sessions() -> &'static AsyncMutex<HashMap<(String, u16, String, String, Strin
 }
 
 type FileHandle = Arc<AsyncMutex<Option<FileReader>>>;
+type WriteHandle = Arc<AsyncMutex<Option<FileWriter>>>;
 
 fn handles() -> &'static Mutex<HashMap<u64, FileHandle>> {
     static HANDLES: OnceLock<Mutex<HashMap<u64, FileHandle>>> = OnceLock::new();
     HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn writers() -> &'static Mutex<HashMap<u64, WriteHandle>> {
+    static WRITERS: OnceLock<Mutex<HashMap<u64, WriteHandle>>> = OnceLock::new();
+    WRITERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 async fn connect(target: &Target) -> Result<Session> {
@@ -224,6 +231,66 @@ pub fn close(handle: u64) -> Result<()> {
         timeout(OP_TIMEOUT, reader.close())
             .await
             .map_err(|_| anyhow!("Timed out closing SMB handle {handle}"))?
+            .map_err(anyhow::Error::from)
+    })
+}
+
+/// Create (truncating) a remote file for writing and return its handle.
+/// The returned writer owns its own connection and tree handle, so it can be
+/// driven by `write`/`write_close` later without holding the session lock.
+pub fn create(target: &Target) -> Result<u64> {
+    runtime().block_on(async {
+        with_session!(target, |session| {
+            let Session { client, tree, .. } = session;
+            let writer = timeout(OP_TIMEOUT, client.create_file_writer(tree, &target.sub))
+                .await
+                .map_err(|_| anyhow!("Timed out creating {:?}", target.sub))??;
+            static NEXT: AtomicU64 = AtomicU64::new(1);
+            let handle = NEXT.fetch_add(1, Ordering::Relaxed);
+            writers()
+                .lock()
+                .unwrap()
+                .insert(handle, Arc::new(AsyncMutex::new(Some(writer))));
+            Ok(handle)
+        })
+    })
+}
+
+/// Push a chunk of bytes to a writer opened with `create`.
+pub fn write(handle: u64, data: Vec<u8>) -> Result<()> {
+    let writer = writers()
+        .lock()
+        .unwrap()
+        .get(&handle)
+        .cloned()
+        .ok_or_else(|| anyhow!("Invalid SMB write handle {handle}"))?;
+    runtime().block_on(async {
+        let mut guard = writer.lock().await;
+        let writer = guard
+            .as_mut()
+            .ok_or_else(|| anyhow!("SMB write handle {handle} is closed"))?;
+        timeout(OP_TIMEOUT, writer.write_chunk(&data))
+            .await
+            .map_err(|_| anyhow!("Timed out writing {} bytes", data.len()))?
+            .map_err(anyhow::Error::from)
+    })
+}
+
+/// Flush and close the writer, returning the total bytes written.
+pub fn write_close(handle: u64) -> Result<u64> {
+    let writer = writers().lock().unwrap().remove(&handle);
+    let Some(writer) = writer else {
+        return Ok(0);
+    };
+
+    runtime().block_on(async {
+        let mut guard = writer.lock().await;
+        let Some(writer) = guard.take() else {
+            return Ok(0);
+        };
+        timeout(OP_TIMEOUT, writer.finish())
+            .await
+            .map_err(|_| anyhow!("Timed out closing SMB write handle {handle}"))?
             .map_err(anyhow::Error::from)
     })
 }

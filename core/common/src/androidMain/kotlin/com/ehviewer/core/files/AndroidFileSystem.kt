@@ -14,6 +14,7 @@ import android.webkit.MimeTypeMap
 import androidx.core.database.getLongOrNull
 import kotlinx.io.asSink
 import kotlinx.io.asSource
+import okio.Buffer
 import okio.FileHandle
 import okio.FileMetadata
 import okio.FileNotFoundException
@@ -22,6 +23,7 @@ import okio.IOException
 import okio.Path
 import okio.Sink
 import okio.Source
+import okio.sink
 import okio.source
 
 class AndroidFileSystem(context: Context) : FileSystem() {
@@ -59,7 +61,19 @@ class AndroidFileSystem(context: Context) : FileSystem() {
 
     override fun copy(source: Path, target: Path) {
         if (target.isSmb) {
-            throw IOException("SMB locations are read-only: $target")
+            // Route the write through the SMB content provider's write pipe.
+            // The source is a local cache file, so read it via openFileDescriptor
+            // rather than this.source() (which only knows how to read SMB files).
+            source.inputStream().use { srcStream ->
+                sink(target).use { dst ->
+                    val src = srcStream.source()
+                    val buffer = Buffer()
+                    while (src.read(buffer, 8192) != -1L) {
+                        dst.write(buffer, buffer.size)
+                    }
+                }
+            }
+            return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             source.openFileDescriptor("r").use { src ->
@@ -233,7 +247,11 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     }
 
     override fun sink(file: Path, mustCreate: Boolean): Sink {
-        if (file.isSmb) throw IOException("SMB locations are read-only: $file")
+        if (file.isSmb) {
+            val stream = contentResolver.openOutputStream(file.toUri())
+                ?: throw FileNotFoundException("Failed to open SMB file for writing: $file")
+            return stream.sink()
+        }
         TODO("Not yet implemented")
     }
 

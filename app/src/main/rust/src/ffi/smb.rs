@@ -174,3 +174,51 @@ pub fn smbInvalidate(mut env: JNIEnv, _: JClass) {
         Ok(())
     })
 }
+
+/// Creates (truncating) the remote file and returns an opaque write handle.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbCreate(
+    mut env: JNIEnv,
+    _: JClass,
+    host: JString,
+    port: jint,
+    share: JString,
+    sub: JString,
+    user: JString,
+    pass: JString,
+    domain: JString,
+) -> jlong {
+    jni_throwing(&mut env, |env| {
+        let target = read_target(env, &host, port, &share, &sub, &user, &pass, &domain)?;
+        Ok(smb::create(&target)? as jlong)
+    })
+}
+
+/// Writes `len` bytes from the direct buffer into the writer.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbWrite(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    buffer: JByteBuffer,
+    len: jint,
+) -> jint {
+    jni_throwing(&mut env, |env| {
+        ensure!(len >= 0, "Negative SMB write length");
+        let capacity = env.get_direct_buffer_capacity(&buffer)? as usize;
+        let len = len as usize;
+        ensure!(len <= capacity, "Buffer too small: {len} > {capacity}");
+        let ptr = env.get_direct_buffer_address(&buffer)?;
+        let data = unsafe { std::slice::from_raw_parts(ptr, len).to_vec() };
+        smb::write(handle as u64, data)?;
+        Ok(len as jint)
+    })
+}
+
+/// Flushes and closes the writer, returning the total bytes written.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbWriteClose(mut env: JNIEnv, _: JClass, handle: jlong) -> jlong {
+    jni_throwing(&mut env, |_| {
+        Ok(smb::write_close(handle as u64)? as jlong)
+    })
+}

@@ -1,12 +1,15 @@
 package com.hippo.ehviewer.smb
 
 import com.hippo.ehviewer.jni.smbClose
+import com.hippo.ehviewer.jni.smbCreate
 import com.hippo.ehviewer.jni.smbInvalidate
 import com.hippo.ehviewer.jni.smbList
 import com.hippo.ehviewer.jni.smbOpen
 import com.hippo.ehviewer.jni.smbRead
 import com.hippo.ehviewer.jni.smbStat
 import com.hippo.ehviewer.jni.smbTest
+import com.hippo.ehviewer.jni.smbWrite
+import com.hippo.ehviewer.jni.smbWriteClose
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
@@ -53,6 +56,33 @@ object SmbRepository {
     fun read(handle: Long, buffer: ByteBuffer, fileOffset: Long, bufferOffset: Int, length: Int): Int =
         smbRead(handle, buffer, fileOffset, bufferOffset, length)
 
+    /** Creates (truncating) the remote file and returns an opaque write handle. */
+    suspend fun create(location: SmbLocation): SmbWriteHandle = withContext(Dispatchers.IO) {
+        withTarget(location) { credentials ->
+            val handle = smbCreate(
+                location.host,
+                location.port,
+                location.share,
+                location.subPath,
+                credentials.user,
+                credentials.password,
+                credentials.domain,
+            )
+            SmbWriteHandle(handle)
+        }
+    }
+
+    /** Writes the bytes to the writer opened by [create]. */
+    fun write(handle: Long, data: ByteArray) {
+        val buf = ByteBuffer.allocateDirect(data.size)
+        buf.put(data)
+        buf.flip()
+        smbWrite(handle, buf, data.size)
+    }
+
+    /** Flushes and closes the writer, returning the total bytes written. */
+    fun writeClose(handle: Long): Long = smbWriteClose(handle)
+
     fun close(handle: Long) = smbClose(handle)
 
     fun invalidateSessions() = smbInvalidate()
@@ -64,3 +94,5 @@ object SmbRepository {
 }
 
 data class SmbHandle(val value: Long, val size: Long)
+
+data class SmbWriteHandle(val value: Long)
