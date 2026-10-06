@@ -22,16 +22,21 @@ import okio.IOException
 import okio.Path
 import okio.Sink
 import okio.Source
+import okio.source
 
 class AndroidFileSystem(context: Context) : FileSystem() {
     private val contentResolver = context.contentResolver
     private val physicalFileSystem = SYSTEM
 
     override fun appendingSink(file: Path, mustExist: Boolean): Sink {
+        if (file.isSmb) throw IOException("SMB locations are read-only: $file")
         TODO("Not yet implemented")
     }
 
     override fun atomicMove(source: Path, target: Path) {
+        if (source.isSmb || target.isSmb) {
+            throw IOException("SMB locations are read-only: $source")
+        }
         if (source.isPhysicalFile()) {
             return physicalFileSystem.atomicMove(source, target)
         }
@@ -48,10 +53,14 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     }
 
     override fun canonicalize(path: Path): Path {
+        if (path.isSmb) return path
         TODO("Not yet implemented")
     }
 
     override fun copy(source: Path, target: Path) {
+        if (target.isSmb) {
+            throw IOException("SMB locations are read-only: $target")
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             source.openFileDescriptor("r").use { src ->
                 target.openFileDescriptor("wt").use { dst ->
@@ -72,6 +81,9 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     }
 
     override fun createDirectory(dir: Path, mustCreate: Boolean) {
+        if (dir.isSmb) {
+            throw IOException("SMB locations are read-only: $dir")
+        }
         if (dir.isPhysicalFile()) {
             return physicalFileSystem.createDirectory(dir, mustCreate)
         }
@@ -91,10 +103,14 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     }
 
     override fun createSymlink(source: Path, target: Path) {
+        if (source.isSmb || target.isSmb) throw IOException("SMB locations are read-only")
         TODO("Not yet implemented")
     }
 
     override fun delete(path: Path, mustExist: Boolean) {
+        if (path.isSmb) {
+            throw IOException("SMB locations are read-only: $path")
+        }
         if (path.isPhysicalFile()) {
             return physicalFileSystem.delete(path, mustExist)
         }
@@ -119,6 +135,9 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     }
 
     override fun deleteRecursively(fileOrDirectory: Path, mustExist: Boolean) {
+        if (fileOrDirectory.isSmb) {
+            throw IOException("SMB locations are read-only: $fileOrDirectory")
+        }
         if (fileOrDirectory.isPhysicalFile()) {
             if (metadataOrNull(fileOrDirectory)?.isDirectory == true) {
                 physicalFileSystem.deleteRecursively(fileOrDirectory, mustExist)
@@ -135,6 +154,16 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     override fun listOrNull(dir: Path): List<Path>? = list(dir, throwOnFailure = false)
 
     private fun list(dir: Path, throwOnFailure: Boolean): List<Path>? {
+        if (dir.isSmb) {
+            return runCatching {
+                contentResolver.query(dir.toUri(), arrayOf(Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c ->
+                    List(c.count) {
+                        c.moveToNext()
+                        dir / c.getString(0)
+                    }
+                }.orEmpty()
+            }.getOrElse { if (throwOnFailure) throw FileNotFoundException("Failed to list $dir") else null }
+        }
         if (dir.isPhysicalFile()) {
             return if (throwOnFailure) {
                 physicalFileSystem.list(dir)
@@ -167,7 +196,9 @@ class AndroidFileSystem(context: Context) : FileSystem() {
         }
 
         return runCatching {
-            val uri = path.toUri()
+            // SMB: ask the provider for the entry itself. The plain URI answers
+            // with the children of a directory, which is not metadata.
+            val uri = if (path.isSmb) path.toStatUri() else path.toUri()
             val isMediaUri = uri.authority == MediaStore.AUTHORITY
             val projection = if (isMediaUri) {
                 arrayOf(MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.DATE_MODIFIED)
@@ -192,18 +223,22 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     }
 
     override fun openReadOnly(file: Path): FileHandle {
+        if (file.isSmb) throw IOException("SMB locations do not expose seekable FileHandle: $file")
         TODO("Not yet implemented")
     }
 
     override fun openReadWrite(file: Path, mustCreate: Boolean, mustExist: Boolean): FileHandle {
+        if (file.isSmb) throw IOException("SMB locations are read-only: $file")
         TODO("Not yet implemented")
     }
 
     override fun sink(file: Path, mustCreate: Boolean): Sink {
+        if (file.isSmb) throw IOException("SMB locations are read-only: $file")
         TODO("Not yet implemented")
     }
 
     override fun source(file: Path): Source {
+        if (file.isSmb) return file.inputStream().source()
         TODO("Not yet implemented")
     }
 
@@ -212,6 +247,13 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     fun rawSource(file: Path) = file.inputStream().asSource()
 
     fun openFileDescriptor(path: Path, mode: String): ParcelFileDescriptor {
+        if (path.isSmb) {
+            if ('w' in mode || '+' in mode) {
+                throw IOException("SMB locations are read-only: $path")
+            }
+            return contentResolver.openFileDescriptor(path.toUri(), "r")
+                ?: throw FileNotFoundException("Failed to open SMB file: $path")
+        }
         if (path.isPhysicalFile()) {
             return ParcelFileDescriptor.open(path.toFile(), ParcelFileDescriptor.parseMode(mode))
         }

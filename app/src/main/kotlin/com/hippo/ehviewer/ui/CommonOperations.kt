@@ -39,6 +39,7 @@ import com.ehviewer.core.database.model.DownloadInfo
 import com.ehviewer.core.files.delete
 import com.ehviewer.core.files.exists
 import com.ehviewer.core.files.isDirectory
+import com.ehviewer.core.files.isSmb
 import com.ehviewer.core.files.write
 import com.ehviewer.core.i18n.R
 import com.ehviewer.core.model.BaseGalleryInfo
@@ -104,7 +105,7 @@ suspend fun keepNoMediaFileStatus(downloadDir: Path, mediaScan: Boolean = Settin
     keepNoMediaFileStatus(listOf(downloadDir), mediaScan)
 
 suspend fun keepNoMediaFileStatus(downloadDirs: List<Path> = allDownloadLocations, mediaScan: Boolean = Settings.mediaScan.value) {
-    downloadDirs.filter { it.isDirectory }.forEach { dir ->
+    downloadDirs.filter { !it.isSmb && it.isDirectory }.forEach { dir ->
         lck.withLock {
             if (mediaScan) {
                 removeNoMediaFile(dir)

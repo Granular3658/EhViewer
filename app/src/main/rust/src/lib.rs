@@ -4,6 +4,7 @@
 mod ffi;
 pub mod img;
 pub mod parser;
+pub mod smb;
 
 use serde::{Serialize, Serializer, ser::SerializeTuple};
 use std::fmt::{Debug, Display, Formatter};

@@ -37,6 +37,7 @@ import com.ehviewer.core.database.model.DownloadLabel
 import com.ehviewer.core.files.delete
 import com.ehviewer.core.files.find
 import com.ehviewer.core.files.isDirectory
+import com.ehviewer.core.files.isSmb
 import com.ehviewer.core.files.toOkioPath
 import com.ehviewer.core.files.toUri
 import com.ehviewer.core.model.BaseGalleryInfo
@@ -388,7 +389,9 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
             ensureDownload()
 
             if (deleteFiles) {
-                info.downloadDir?.delete()
+                if (info.downloadDir?.isSmb != true) {
+                    info.downloadDir?.delete()
+                }
                 info.tempDownloadDir?.delete()
                 EhDB.removeDownloadDirname(info.gid)
                 // The directory just got removed, drop its cached resolution
@@ -865,12 +868,17 @@ val defaultDownloadLocation: Path
         val set = downloadLocations.value
         val chosen = defaultDownloadLocationUri.value
         when {
-            chosen != null && chosen in set -> runCatching { Uri.parse(chosen).toOkioPath() }.getOrNull()
-            // minOrNull keeps the fallback deterministic: Set ordering is not guaranteed
-            set.isNotEmpty() -> set.minOrNull()?.let { runCatching { Uri.parse(it).toOkioPath() }.getOrNull() }
+            chosen != null && chosen in set -> runCatching { Uri.parse(chosen).toOkioPath() }
+                .getOrNull()
+                ?.takeUnless { it.isSmb }
+            // New downloads must never target a read-only SMB location.
+            set.isNotEmpty() -> set.asSequence().sorted().mapNotNull { uriStr ->
+                runCatching { Uri.parse(uriStr).toOkioPath() }.getOrNull()
+            }.firstOrNull { !it.isSmb }
             else -> null
         }
     } ?: downloadLocation
+
 
 /**
  * All configured download directories, in a deterministic (sorted) order.
@@ -891,6 +899,10 @@ val allDownloadLocations: List<Path>
         return paths
     }
 
+/** Locations that can receive new downloads. SMB entries are read-only. */
+val writableDownloadLocations: List<Path>
+    get() = allDownloadLocations.filterNot { it.isSmb }
+
 /**
  * Resolved per-dirname and cached: the naive version performed a filesystem
  * stat per list item per recomposition, on the main thread.
@@ -898,7 +910,8 @@ val allDownloadLocations: List<Path>
 val DownloadInfo.downloadDir: Path?
     get() = dirname?.let { name ->
         downloadDirCache[name] ?: run {
-            val resolved = allDownloadLocations.firstNotNullOfOrNull { loc -> (loc / name).takeIf { it.isDirectory } }
+            val resolved = (writableDownloadLocations + allDownloadLocations.filter { it.isSmb })
+                .firstNotNullOfOrNull { loc -> (loc / name).takeIf { it.isDirectory } }
                 ?: (defaultDownloadLocation / name)
             downloadDirCache[name] = resolved
             resolved

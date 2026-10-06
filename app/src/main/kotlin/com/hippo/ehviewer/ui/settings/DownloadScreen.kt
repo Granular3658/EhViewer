@@ -27,6 +27,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -38,6 +40,7 @@ import com.ehviewer.core.database.model.DownloadInfo
 import com.ehviewer.core.files.delete
 import com.ehviewer.core.files.find
 import com.ehviewer.core.files.isDirectory
+import com.ehviewer.core.files.isSmb
 import com.ehviewer.core.files.list
 import com.ehviewer.core.files.metadataOrNull
 import com.ehviewer.core.files.mkdirs
@@ -70,6 +73,9 @@ import com.hippo.ehviewer.spider.SpiderQueen.Companion.SPIDER_INFO_FILENAME
 import com.hippo.ehviewer.spider.readComicInfo
 import com.hippo.ehviewer.spider.readCompatFromPath
 import com.hippo.ehviewer.spider.speedLevelToSpeed
+import com.hippo.ehviewer.smb.SmbCredentialStore
+import com.hippo.ehviewer.smb.SmbLocation
+import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.keepNoMediaFileStatus
 import com.hippo.ehviewer.ui.main.NavigationIcon
@@ -107,7 +113,9 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
     ) { paddingValues ->
         Column(modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection).verticalScroll(rememberScrollState()).padding(paddingValues)) {
             val downloadLocationsState by Settings.downloadLocations.collectAsState()
+            val smbLocationsState by Settings.smbLocations.collectAsState()
             val defaultLocationUri by Settings.defaultDownloadLocationUri.collectAsState()
+            var showSmbDialog by remember { mutableStateOf(false) }
             val cannotGetDownloadLocation = stringResource(id = R.string.settings_download_cant_get_download_location)
             val defaultDownloadDirLabel = stringResource(id = R.string.settings_download_default_location)
             val extraLocationsLabel = stringResource(id = R.string.settings_download_extra_locations)
@@ -225,16 +233,22 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
             if (downloadLocationsState.isNotEmpty()) {
                 Preference(title = extraLocationsLabel) {}
                 downloadLocationsState.forEach { uriStr ->
-                    val isDefault = uriStr == defaultLocationUri
+                    val isSmb = uriStr in smbLocationsState
+                    val isDefault = !isSmb && uriStr == defaultLocationUri
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = Uri.parse(uriStr).displayPath ?: "",
+                            text = if (isSmb) uriStr else Uri.parse(uriStr).displayPath ?: "",
                             modifier = Modifier.weight(1f),
                         )
-                        if (isDefault) {
+                        if (isSmb) {
+                            Text(
+                                text = stringResource(R.string.settings_download_smb_read_only),
+                                modifier = Modifier.padding(end = 8.dp),
+                            )
+                        } else if (isDefault) {
                             Text(
                                 text = stringResource(id = R.string.settings_download_set_default_done),
                                 modifier = Modifier.padding(end = 8.dp),
@@ -267,8 +281,13 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                                             if (defaultLocationUri == uriStr) {
                                                 Settings.defaultDownloadLocationUri.value = remaining.minOrNull()
                                             }
-                                            // Only the removed location loses its permission
-                                            runCatching { contextOf<Context>().contentResolver.releasePersistableUriPermission(Uri.parse(uriStr), URI_FLAGS) }
+                                            if (isSmb) {
+                                                Settings.smbLocations.value = Settings.smbLocations.value - uriStr
+                                                SmbLocation.parse(uriStr)?.let(SmbCredentialStore::remove)
+                                            } else {
+                                                // Only the removed local location loses its permission
+                                                runCatching { contextOf<Context>().contentResolver.releasePersistableUriPermission(Uri.parse(uriStr), URI_FLAGS) }
+                                            }
                                             invalidateDownloadLocationCache()
                                         }
                                     }
@@ -284,6 +303,26 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
             // even after the last one has been removed
             Preference(title = addLocationLabel) {
                 extraDirLauncher.launch(null)
+            }
+            Preference(title = stringResource(R.string.settings_download_add_smb_location)) {
+                showSmbDialog = true
+            }
+            if (showSmbDialog) {
+                SmbLocationDialog(
+                    onDismiss = { showSmbDialog = false },
+                    showMessage = ::launchSnackbar,
+                    onSaved = { location ->
+                        val uriStr = location.uriString
+                        if (uriStr in Settings.downloadLocations.value) {
+                            launchSnackbar(string(R.string.settings_download_location_already_added))
+                        } else {
+                            Settings.downloadLocations.value = Settings.downloadLocations.value + uriStr
+                            Settings.smbLocations.value = Settings.smbLocations.value + uriStr
+                            invalidateDownloadLocationCache()
+                            showSmbDialog = false
+                        }
+                    },
+                )
             }
             val mediaScan = Settings.mediaScan.asMutableState()
             SwitchPreference(
@@ -397,7 +436,24 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     }.getOrNull()
                 }
                 runSuspendCatching {
-                    val result = allDownloadLocations.flatMap { it.list() }.parMapNotNull { getRestoreItem(it) }.also {
+                    // SMB locations are listed through the client directly: one
+                    // round trip already tells which entries are directories,
+                    // and an unreachable share must not abort the local scan.
+                    val candidates = allDownloadLocations.flatMap { location ->
+                        val smb = SmbLocation.parse(location)
+                        if (smb != null) {
+                            runCatching { SmbRepository.list(smb) }
+                                .onFailure { logcat(it) }
+                                .getOrDefault(emptyList())
+                                .filter { it.isDirectory }
+                                .map { location / it.name }
+                        } else {
+                            runCatching { location.list() }
+                                .onFailure { logcat(it) }
+                                .getOrDefault(emptyList())
+                        }
+                    }
+                    val result = candidates.parMapNotNull { getRestoreItem(it) }.also {
                         fillGalleryListByApi(it, EhUrl.referer)
                     }
                     if (result.isEmpty()) {
@@ -414,7 +470,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     }
                 }.onFailure {
                     logcat(it)
-                    launchSnackbar(restoreFailed)
+                    launchSnackbar("$restoreFailed: ${it.displayString()}")
                 }
             }
             WorkPreference(
@@ -427,7 +483,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     val gid = name.substringBefore('-').toLongOrNull() ?: return false
                     return name != DownloadManager.getDownloadInfo(gid)?.dirname
                 }
-                val list = allDownloadLocations.flatMap { it.list() }.filter(::isRedundant)
+                val list = allDownloadLocations.filterNot { it.isSmb }.flatMap { it.list() }.filter(::isRedundant)
                 if (list.isNotEmpty()) {
                     awaitConfirmationOrCancel(
                         confirmText = R.string.delete,

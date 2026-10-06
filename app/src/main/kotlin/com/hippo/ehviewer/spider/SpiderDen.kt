@@ -25,6 +25,7 @@ import com.ehviewer.core.files.delete
 import com.ehviewer.core.files.exists
 import com.ehviewer.core.files.find
 import com.ehviewer.core.files.isDirectory
+import com.ehviewer.core.files.isSmb
 import com.ehviewer.core.files.list
 import com.ehviewer.core.files.mkdirs
 import com.ehviewer.core.files.moveTo
@@ -45,6 +46,7 @@ import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.download.allDownloadLocations
 import com.hippo.ehviewer.download.defaultDownloadLocation
 import com.hippo.ehviewer.download.tempDownloadDir
+import com.hippo.ehviewer.download.writableDownloadLocations
 import com.hippo.ehviewer.image.PathSource
 import com.hippo.ehviewer.jni.archiveFdBatch
 import com.hippo.ehviewer.ktbuilder.diskCache
@@ -64,7 +66,15 @@ import splitties.init.appCtx
 class SpiderDen(val info: GalleryInfo) {
     private val gid = info.gid
     var downloadDir: Path? = null
-        private set
+        private set(value) {
+            // The listing is derived from the directory, so it has to be rebuilt
+            // when the directory is (re)assigned, e.g. when a read-only SMB
+            // gallery is switched to a writable location for downloading.
+            if (field != value) {
+                field = value
+                fileCache = null
+            }
+        }
 
     private var tempDownloadDir: Path? = null
     private val saveAsCbz = Settings.saveAsCbz.value
@@ -73,12 +83,18 @@ class SpiderDen(val info: GalleryInfo) {
     private val lock = ReentrantReadWriteLock()
 
     // Search in both directories to maintain compatibility
-    private val fileCache by lazy {
-        listOfNotNull(tempDownloadDir, downloadDir).map(Path::list).flatten().associateBy { it.name } as MutableMap
-    }
+    private var fileCache: MutableMap<String, Path>? = null
+
+    @Synchronized
+    private fun fileCache(): MutableMap<String, Path> = fileCache ?: listOfNotNull(tempDownloadDir, downloadDir)
+        .map(Path::list)
+        .flatten()
+        .associateBy { it.name }
+        .toMutableMap()
+        .also { fileCache = it }
 
     private val imageDir
-        get() = tempDownloadDir.takeIf { saveAsCbz } ?: downloadDir
+        get() = tempDownloadDir.takeIf { saveAsCbz } ?: downloadDir?.takeUnless { it.isSmb }
 
     constructor(info: GalleryInfo, dirname: String) : this(info) {
         downloadDir = allDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
@@ -93,8 +109,8 @@ class SpiderDen(val info: GalleryInfo) {
     suspend fun setMode(value: Int) {
         mode = value
         if (mode == SpiderQueen.MODE_DOWNLOAD) {
-            if (downloadDir == null) {
-                downloadDir = getGalleryDownloadDir(info).apply { mkdirs() }
+            if (downloadDir == null || downloadDir?.isSmb == true) {
+                downloadDir = getGalleryWritableDownloadDir(info).apply { mkdirs() }
             }
             if (saveAsCbz && tempDownloadDir == null) {
                 tempDownloadDir = info.tempDownloadDir!!.apply { mkdirs() }
@@ -109,7 +125,7 @@ class SpiderDen(val info: GalleryInfo) {
 
     private fun findImageFile(index: Int, temp: Boolean = false) = lock.read {
         val head = perFilename(index)
-        fileCache.entries.firstOrNull { (name) -> name.startsWith(head) && temp == name.endsWith(TEMP_SUFFIX) }?.value
+        fileCache().entries.firstOrNull { (name) -> name.startsWith(head) && temp == name.endsWith(TEMP_SUFFIX) }?.value
     }
 
     private fun containInDownloadDir(index: Int): Boolean = findImageFile(index) != null
@@ -147,7 +163,7 @@ class SpiderDen(val info: GalleryInfo) {
 
     private fun removeTempFile(index: Int) = findImageFile(index, temp = true)?.let { file ->
         file.delete()
-        lock.write { fileCache.remove(file.name) }
+        lock.write { fileCache().remove(file.name) }
     }
 
     fun removeIntermediateFiles(index: Int) {
@@ -161,7 +177,7 @@ class SpiderDen(val info: GalleryInfo) {
 
     private fun Path.findDownloadFileForIndex(index: Int, extension: String) = with(lock) {
         val name = perFilename(index, extension)
-        read { fileCache[name] } ?: resolve(name).also { write { fileCache[name] = it } }
+        read { fileCache()[name] } ?: resolve(name).also { write { fileCache()[name] = it } }
     }
 
     suspend fun makeHttpCallAndSaveImage(
@@ -186,11 +202,11 @@ class SpiderDen(val info: GalleryInfo) {
             fops(tempFile)
             val file = resolve(tempFile.name.removeSuffix(TEMP_SUFFIX))
             file.delete()
-            lock.write { fileCache.remove(file.name) }
+            lock.write { fileCache().remove(file.name) }
             tempFile moveTo file
             lock.write {
-                fileCache.remove(tempFile.name)
-                fileCache[file.name] = file
+                fileCache().remove(tempFile.name)
+                fileCache()[file.name] = file
             }
             return true
         }
@@ -275,7 +291,7 @@ class SpiderDen(val info: GalleryInfo) {
         }
     }
 
-    suspend fun archive() = saveAsCbz && downloadDir?.run {
+    suspend fun archive() = saveAsCbz && downloadDir?.takeUnless { it.isSmb }?.run {
         resolve(archiveName).let { file ->
             runCatching {
                 archiveTo(file)
@@ -288,7 +304,7 @@ class SpiderDen(val info: GalleryInfo) {
 
     // Postpone this to `SpiderQueen.stop` because files may still be in use by reader
     suspend fun postArchive(): Boolean {
-        val dir = downloadDir
+        val dir = downloadDir?.takeUnless { it.isSmb }
         val archived = saveAsCbz && dir?.find(archiveName) != null
         if (archived) {
             dir.list().parMap(concurrency = 10) {
@@ -302,7 +318,10 @@ class SpiderDen(val info: GalleryInfo) {
         return archived
     }
 
-    suspend fun exportAsCbz(file: Path) = downloadDir!!.find(archiveName)?.sendTo(file) ?: archiveTo(file)
+    suspend fun exportAsCbz(file: Path) {
+        check(downloadDir?.isSmb != true) { "Exporting an SMB location is not supported" }
+        downloadDir!!.find(archiveName)?.sendTo(file) ?: archiveTo(file)
+    }
 
     private suspend fun archiveTo(file: Path) = resourceScope {
         val comicInfo = closeable {
@@ -329,11 +348,11 @@ class SpiderDen(val info: GalleryInfo) {
     }
 
     suspend fun initDownloadDir() {
-        downloadDir = getGalleryDownloadDir(info).apply { mkdirs() }
+        downloadDir = getGalleryWritableDownloadDir(info).apply { mkdirs() }
     }
 
     suspend fun writeComicInfo(fetchMetadata: Boolean = true) {
-        downloadDir?.run {
+        downloadDir?.takeUnless { it.isSmb }?.run {
             resolve(COMIC_INFO_FILE).also {
                 if (info !is GalleryDetail && fetchMetadata) {
                     EhEngine.fillGalleryListByApi(listOf(info))
@@ -372,8 +391,24 @@ suspend fun GalleryInfo.downloadDirname(): String {
     return dirname
 }
 
+/**
+ * Where an existing gallery lives. Read-only SMB locations are included on
+ * purpose: reading has to find the files wherever they are, and skipping them
+ * here made the reader fall through to the (empty) local default directory and
+ * re-download everything from the network.
+ */
 suspend fun getGalleryDownloadDir(info: GalleryInfo): Path {
     val dirname = info.downloadDirname()
     return allDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
+        ?: (defaultDownloadLocation / dirname)
+}
+
+/**
+ * Where new downloads must be written. SMB locations are read-only, so they are
+ * never a download target, even when the same gallery also exists there.
+ */
+suspend fun getGalleryWritableDownloadDir(info: GalleryInfo): Path {
+    val dirname = info.downloadDirname()
+    return writableDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
         ?: (defaultDownloadLocation / dirname)
 }
