@@ -234,7 +234,8 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                 Preference(title = extraLocationsLabel) {}
                 downloadLocationsState.forEach { uriStr ->
                     val isSmb = uriStr in smbLocationsState
-                    val isDefault = !isSmb && uriStr == defaultLocationUri
+                    // SMB shares are writable now, so they can be picked as the default too
+                    val isDefault = uriStr == defaultLocationUri
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
@@ -243,12 +244,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                             text = if (isSmb) uriStr else Uri.parse(uriStr).displayPath ?: "",
                             modifier = Modifier.weight(1f),
                         )
-                        if (isSmb) {
-                            Text(
-                                text = stringResource(R.string.settings_download_smb_read_only),
-                                modifier = Modifier.padding(end = 8.dp),
-                            )
-                        } else if (isDefault) {
+                        if (isDefault) {
                             Text(
                                 text = stringResource(id = R.string.settings_download_set_default_done),
                                 modifier = Modifier.padding(end = 8.dp),
@@ -265,15 +261,16 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                                 Text(setDefaultLabel)
                             }
                         }
-                        // The default location anchors the whole set, so it has no remove
-                        // button at all: removing it would leave no configured location and
+                        // The last remaining location anchors the whole set and has no
+                        // remove button: dropping it would leave no configured location and
                         // silently fall back to the legacy single one, which then disappears
-                        // again as soon as a new location is added.
-                        if (!isDefault) {
+                        // again as soon as a new location is added. Any other location can go,
+                        // including the default one, which re-points the default elsewhere.
+                        if (downloadLocationsState.size > 1) {
                             TextButton(
                                 onClick = {
                                     launchIO {
-                                        if (isDefault || Settings.downloadLocations.value.size <= 1) {
+                                        if (Settings.downloadLocations.value.size <= 1) {
                                             launchSnackbar(cannotRemoveDefaultLabel)
                                         } else {
                                             val remaining = Settings.downloadLocations.value - uriStr

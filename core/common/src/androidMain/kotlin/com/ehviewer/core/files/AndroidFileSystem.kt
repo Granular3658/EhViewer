@@ -134,7 +134,13 @@ class AndroidFileSystem(context: Context) : FileSystem() {
 
     override fun delete(path: Path, mustExist: Boolean) {
         if (path.isSmb) {
-            throw IOException("SMB locations are read-only: $path")
+            val metadata = metadataOrNull(path)
+            if (metadata == null) {
+                if (mustExist) throw FileNotFoundException("$path does not exist")
+                return
+            }
+            contentResolver.call(path.toUri(), "delete", path.toString(), null)
+            return
         }
         if (path.isPhysicalFile()) {
             return physicalFileSystem.delete(path, mustExist)
@@ -286,10 +292,10 @@ class AndroidFileSystem(context: Context) : FileSystem() {
 
     fun openFileDescriptor(path: Path, mode: String): ParcelFileDescriptor {
         if (path.isSmb) {
-            if ('w' in mode || '+' in mode) {
-                throw IOException("SMB locations are read-only: $path")
-            }
-            return contentResolver.openFileDescriptor(path.toUri(), "r")
+            // The provider serves writes through a pipe, so any write-capable
+            // mode maps to "w" on its side.
+            val smbMode = if ('w' in mode || '+' in mode) "w" else "r"
+            return contentResolver.openFileDescriptor(path.toUri(), smbMode)
                 ?: throw FileNotFoundException("Failed to open SMB file: $path")
         }
         if (path.isPhysicalFile()) {

@@ -37,7 +37,6 @@ import com.ehviewer.core.database.model.DownloadLabel
 import com.ehviewer.core.files.delete
 import com.ehviewer.core.files.find
 import com.ehviewer.core.files.isDirectory
-import com.ehviewer.core.files.isSmb
 import com.ehviewer.core.files.toOkioPath
 import com.ehviewer.core.files.toUri
 import com.ehviewer.core.model.BaseGalleryInfo
@@ -389,9 +388,7 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
             ensureDownload()
 
             if (deleteFiles) {
-                if (info.downloadDir?.isSmb != true) {
-                    info.downloadDir?.delete()
-                }
+                info.downloadDir?.delete()
                 info.tempDownloadDir?.delete()
                 EhDB.removeDownloadDirname(info.gid)
                 // The directory just got removed, drop its cached resolution
