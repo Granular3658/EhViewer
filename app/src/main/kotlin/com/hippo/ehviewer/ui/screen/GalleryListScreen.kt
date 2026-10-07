@@ -482,9 +482,9 @@ fun AnimatedVisibilityScope.GalleryListScreen(
         searchFieldState = searchFieldState,
         suggestionProvider = {
             GalleryDetailUrlParser.parse(it, false)?.run {
-                listOf(GalleryDetailUrlSuggestion(gid, token))
+                [GalleryDetailUrlSuggestion(gid, token)]
             } ?: GalleryPageUrlParser.parse(it, false)?.run {
-                listOf(GalleryPageUrlSuggestion(gid, pToken, page))
+                [GalleryPageUrlSuggestion(gid, pToken, page)]
             }.orEmpty()
         },
         localSearch = false,
@@ -580,7 +580,7 @@ fun AnimatedVisibilityScope.GalleryListScreen(
         onExpandChanged = { fabExpanded = it },
         autoCancel = true,
     ) {
-        if (urlBuilder.mode in arrayOf(MODE_NORMAL, MODE_UPLOADER, MODE_TAG)) {
+        if (urlBuilder.mode in [MODE_NORMAL, MODE_UPLOADER, MODE_TAG]) {
             onClick(Icons.Default.Shuffle) {
                 urlBuilder.setRange(Random.nextInt(100))
                 data.refresh()

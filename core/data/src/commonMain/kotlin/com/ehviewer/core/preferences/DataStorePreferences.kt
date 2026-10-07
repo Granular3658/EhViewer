@@ -15,10 +15,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
-internal expect fun getDateStore(name: String?): DataStore<Preferences>
+internal expect fun getDataStore(name: String?): DataStore<Preferences>
 
 abstract class DataStorePreferences(private val dataStore: DataStore<Preferences>) {
-    constructor(name: String?) : this(getDateStore(name))
+    constructor(name: String?) : this(getDataStore(name))
 
     val data: Flow<Snapshot>
         get() = dataStore.data.map { Snapshot(it) }

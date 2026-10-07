@@ -7,12 +7,11 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStoreFile
 import splitties.init.appCtx
 
-internal actual fun getDateStore(name: String?): DataStore<Preferences> {
+internal actual fun getDataStore(name: String?): DataStore<Preferences> {
     val context = appCtx
     val actualName = name ?: "${context.packageName}_preferences"
     return PreferenceDataStoreFactory.create(
-        migrations = listOf(SharedPreferencesMigration(context = context, sharedPreferencesName = actualName)),
-    ) {
-        context.preferencesDataStoreFile(actualName)
-    }
+        migrations = [SharedPreferencesMigration(context = context, sharedPreferencesName = actualName)],
+        produceFile = { context.preferencesDataStoreFile(actualName) },
+    )
 }

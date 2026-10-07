@@ -107,14 +107,14 @@ object EhUrl {
             else -> URL_IMAGE_SEARCH_E
         }
 
-    fun getGalleryDetailUrl(gid: Long, token: String, index: Int = 0, allComment: Boolean = false) = ehUrl(listOf("g", "$gid", token)) {
+    fun getGalleryDetailUrl(gid: Long, token: String, index: Int = 0, allComment: Boolean = false) = ehUrl(["g", "$gid", token]) {
         if (index != 0) addQueryParameter("p", "$index")
         if (allComment) addQueryParameter("hc", "1")
     }.buildString()
 
-    fun getGalleryMultiPageViewerUrl(gid: Long, token: String) = ehUrl(listOf("mpv", "$gid", token)).buildString()
+    fun getGalleryMultiPageViewerUrl(gid: Long, token: String) = ehUrl(["mpv", "$gid", token]).buildString()
 
-    fun getPageUrl(gid: Long, index: Int, pToken: String, nl: String? = null) = ehUrl(listOf("s", pToken, "$gid-${index + 1}")) {
+    fun getPageUrl(gid: Long, index: Int, pToken: String, nl: String? = null) = ehUrl(["s", pToken, "$gid-${index + 1}"]) {
         addQueryParameterIfNotBlank("nl", nl)
     }.buildString()
 
@@ -143,7 +143,7 @@ object EhUrl {
 }
 
 inline fun ehUrl(path: String? = null, host: String = EhUrl.domain, builder: ParametersBuilder.() -> Unit) = ehUrl(
-    path = if (path.isNullOrBlank()) emptyList() else listOf(path),
+    path = if (path.isNullOrBlank()) [] else [path],
     host = host,
     parameters = Parameters.build(builder),
 )

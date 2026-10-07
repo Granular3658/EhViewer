@@ -46,11 +46,7 @@ object EhCookieStore : CookiesStorage {
         val ipbMemberId = eCookies?.get(KEY_IPB_MEMBER_ID)
         val ipbPassHash = eCookies?.get(KEY_IPB_PASS_HASH)
         val igneous = exCookies?.get(KEY_IGNEOUS)
-        return listOf(
-            KEY_IPB_MEMBER_ID to ipbMemberId,
-            KEY_IPB_PASS_HASH to ipbPassHash,
-            KEY_IGNEOUS to igneous,
-        )
+        return [KEY_IPB_MEMBER_ID to ipbMemberId, KEY_IPB_PASS_HASH to ipbPassHash, KEY_IGNEOUS to igneous]
     }
 
     fun isCloudflareBypassed() = manager.getCookies(urlE)?.containsKey("cf_clearance") == true
@@ -74,6 +70,6 @@ object EhCookieStore : CookiesStorage {
             if (checkTips) {
                 add(sTipsCookie)
             }
-        } ?: if (checkTips) listOf(sTipsCookie) else emptyList()
+        } ?: if (checkTips) [sTipsCookie] else []
     }
 }

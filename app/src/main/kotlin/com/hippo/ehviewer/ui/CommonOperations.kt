@@ -394,7 +394,7 @@ suspend fun showMoveDownloadLabel(info: GalleryInfo) {
     val selected = awaitSelectItem(labels, R.string.download_move_dialog_title)
     val downloadInfo = DownloadManager.getDownloadInfo(info.gid) ?: return
     val label = if (selected == 0) null else labels[selected]
-    DownloadManager.changeLabel(listOf(downloadInfo), label)
+    DownloadManager.changeLabel([downloadInfo], label)
 }
 
 context(_: DialogState)

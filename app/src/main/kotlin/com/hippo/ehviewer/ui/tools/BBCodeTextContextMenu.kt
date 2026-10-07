@@ -94,7 +94,7 @@ fun AnnotatedString.normalizeSpan(): AnnotatedString {
         val italic = filterMerged(SpanStyle(fontStyle = FontStyle.Italic)) { it.fontStyle == FontStyle.Italic }
         val underline = filterMerged(SpanStyle(textDecoration = TextDecoration.Underline)) { it.textDecoration == TextDecoration.Underline }
         val linethrough = filterMerged(SpanStyle(textDecoration = TextDecoration.LineThrough)) { it.textDecoration == TextDecoration.LineThrough }
-        listOf(bold, italic, underline, linethrough).flatten()
+        bold + italic + underline + linethrough
     }
     return AnnotatedString(text, spans)
 }

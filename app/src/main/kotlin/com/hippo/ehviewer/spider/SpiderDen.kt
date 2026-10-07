@@ -334,7 +334,7 @@ class SpiderDen(val info: GalleryInfo) {
         downloadDir?.run {
             resolve(COMIC_INFO_FILE).also {
                 if (info !is GalleryDetail && fetchMetadata) {
-                    EhEngine.fillGalleryListByApi(listOf(info))
+                    EhEngine.fillGalleryListByApi([info])
                 }
                 info.getComicInfo().apply {
                     writeComicInfo(this, it)

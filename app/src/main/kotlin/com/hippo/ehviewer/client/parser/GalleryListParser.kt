@@ -13,14 +13,14 @@ object GalleryListParser {
         throw ParseException("Can't parse gallery list", it)
     }
 
-    val emptyResult = GalleryListResult(null, null, arrayListOf())
+    val emptyResult = GalleryListResult(null, null, [])
 }
 
 @Serializable
 data class GalleryListResult(
     val prev: String?,
     val next: String?,
-    val galleryInfoList: ArrayList<BaseGalleryInfo>,
+    val galleryInfoList: MutableList<BaseGalleryInfo>,
 )
 
 private external fun parseGalleryInfoList(body: ByteBuffer, size: Int = body.limit()): Int

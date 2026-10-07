@@ -208,7 +208,7 @@ data class ListUrlBuilder(
         }.buildString()
         MODE_UPLOADER, MODE_TAG -> {
             val path = if (mode == MODE_UPLOADER) "uploader" else "tag"
-            ehUrl(listOf(path, requireNotNull(keyword))) {
+            ehUrl([path, requireNotNull(keyword)]) {
                 addQueryParameterIfNotBlank("prev", prev)
                 addQueryParameterIfNotBlank("next", next)
                 addQueryParameterIfNotBlank("seek", jumpTo)

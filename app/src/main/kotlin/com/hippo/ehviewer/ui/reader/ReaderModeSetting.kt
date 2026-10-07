@@ -58,7 +58,7 @@ private fun PagerSetting() = Column {
     SpinnerChoice(
         title = stringResource(id = R.string.pref_viewer_nav),
         entries = stringArrayResource(id = com.hippo.ehviewer.R.array.pager_nav),
-        values = listOf(0, 1, 2, 3, 4, 5),
+        values = [0, 1, 2, 3, 4, 5],
         field = pagerNav,
     )
     AnimatedVisibility(visible = pagerNav.value != 5) {
@@ -66,7 +66,7 @@ private fun PagerSetting() = Column {
             SpinnerChoice(
                 title = stringResource(id = R.string.pref_read_with_tapping_inverted),
                 entries = stringArrayResource(id = com.hippo.ehviewer.R.array.invert_tapping_mode),
-                values = listOf(0, 1, 2, 3),
+                values = [0, 1, 2, 3],
                 field = Settings.readerPagerNavInverted.asMutableState(),
             )
             SwitchChoice(
@@ -79,7 +79,7 @@ private fun PagerSetting() = Column {
     SpinnerChoice(
         title = stringResource(id = R.string.pref_image_scale_type),
         entries = stringArrayResource(id = com.hippo.ehviewer.R.array.image_scale_type),
-        values = listOf(1, 2, 3, 4, 5, 6),
+        values = [1, 2, 3, 4, 5, 6],
         field = scaleType,
     )
     AnimatedVisibility(visible = scaleType.value == 1) {
@@ -91,7 +91,7 @@ private fun PagerSetting() = Column {
     SpinnerChoice(
         title = stringResource(id = R.string.pref_zoom_start),
         entries = stringArrayResource(id = com.hippo.ehviewer.R.array.zoom_start),
-        values = listOf(1, 2, 3, 4),
+        values = [1, 2, 3, 4],
         field = Settings.zoomStart.asMutableState(),
     )
     SwitchChoice(
@@ -111,14 +111,14 @@ private fun WebtoonSetting() = Column {
     SpinnerChoice(
         title = stringResource(id = R.string.pref_viewer_nav),
         entries = stringArrayResource(id = com.hippo.ehviewer.R.array.webtoon_nav),
-        values = listOf(0, 1, 2, 3, 4, 5),
+        values = [0, 1, 2, 3, 4, 5],
         field = webtoonNav,
     )
     AnimatedVisibility(visible = webtoonNav.value != 5) {
         SpinnerChoice(
             title = stringResource(id = R.string.pref_read_with_tapping_inverted),
             entries = stringArrayResource(id = com.hippo.ehviewer.R.array.invert_tapping_mode),
-            values = listOf(0, 1, 2, 3),
+            values = [0, 1, 2, 3],
             field = Settings.readerWebtoonNavInverted.asMutableState(),
         )
     }
