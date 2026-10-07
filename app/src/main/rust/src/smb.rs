@@ -11,10 +11,10 @@
 //! rejected during session setup - see `docs` in the commit message.
 
 use anyhow::{Result, anyhow};
-use smb2::{ClientConfig, SmbClient};
 use smb2::client::stream::FileReader;
 use smb2::client::stream::FileWriter;
 use smb2::client::tree::Tree;
+use smb2::{ClientConfig, SmbClient};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -44,7 +44,13 @@ pub struct Target {
 
 impl Target {
     fn key(&self) -> (String, u16, String, String, String) {
-        (self.host.clone(), self.port, self.share.clone(), self.user.clone(), self.domain.clone())
+        (
+            self.host.clone(),
+            self.port,
+            self.share.clone(),
+            self.user.clone(),
+            self.domain.clone(),
+        )
     }
 
     fn addr(&self) -> String {
@@ -70,7 +76,8 @@ fn runtime() -> &'static Runtime {
 }
 
 fn sessions() -> &'static AsyncMutex<HashMap<(String, u16, String, String, String), Session>> {
-    static SESSIONS: OnceLock<AsyncMutex<HashMap<(String, u16, String, String, String), Session>>> = OnceLock::new();
+    static SESSIONS: OnceLock<AsyncMutex<HashMap<(String, u16, String, String, String), Session>>> =
+        OnceLock::new();
     SESSIONS.get_or_init(|| AsyncMutex::new(HashMap::new()))
 }
 
@@ -102,7 +109,11 @@ async fn connect(target: &Target) -> Result<Session> {
     };
     let mut client = SmbClient::connect(config).await?;
     let tree = client.connect_share(&target.share).await?;
-    Ok(Session { client, tree, last_used: Instant::now() })
+    Ok(Session {
+        client,
+        tree,
+        last_used: Instant::now(),
+    })
 }
 
 /// Borrow the cached session, connecting (or reconnecting) when it is missing
@@ -120,7 +131,9 @@ macro_rules! with_session {
             let session = connect(target).await?;
             guard.insert(key.clone(), session);
         }
-        let $session = guard.get_mut(&key).ok_or_else(|| anyhow!("Session vanished"))?;
+        let $session = guard
+            .get_mut(&key)
+            .ok_or_else(|| anyhow!("Session vanished"))?;
         $session.last_used = Instant::now();
         $body
     }};
@@ -138,13 +151,20 @@ pub fn list_dir(target: &Target) -> Result<Vec<Entry>> {
     runtime().block_on(async {
         with_session!(target, |session| {
             let path = &target.sub;
-            let entries = timeout(OP_TIMEOUT, session.client.list_directory(&mut session.tree, path))
-                .await
-                .map_err(|_| anyhow!("Timed out listing {path:?}"))??;
+            let entries = timeout(
+                OP_TIMEOUT,
+                session.client.list_directory(&mut session.tree, path),
+            )
+            .await
+            .map_err(|_| anyhow!("Timed out listing {path:?}"))??;
             Ok(entries
                 .into_iter()
                 .filter(|e| e.name != "." && e.name != "..")
-                .map(|e| Entry { name: e.name, is_directory: e.is_directory, size: e.size })
+                .map(|e| Entry {
+                    name: e.name,
+                    is_directory: e.is_directory,
+                    size: e.size,
+                })
                 .collect())
         })
     })
@@ -169,7 +189,11 @@ pub fn stat(target: &Target) -> Result<Stat> {
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
-            Ok(Stat { is_directory: info.is_directory, size: info.size, modified_millis })
+            Ok(Stat {
+                is_directory: info.is_directory,
+                size: info.size,
+                modified_millis,
+            })
         })
     })
 }

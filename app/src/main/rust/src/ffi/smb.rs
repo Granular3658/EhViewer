@@ -1,7 +1,7 @@
 #![cfg(feature = "android")]
 
 use super::jvm::jni_throwing;
-use crate::smb::{self, Target, DEFAULT_PORT};
+use crate::smb::{self, DEFAULT_PORT, Target};
 use anyhow::{Result, ensure};
 use jni::JNIEnv;
 use jni::objects::{JByteBuffer, JClass, JObject, JString};
@@ -100,7 +100,11 @@ pub fn smbStat(
         env.set_long_array_region(
             &array,
             0,
-            &[stat.is_directory as jlong, stat.size as jlong, stat.modified_millis],
+            &[
+                stat.is_directory as jlong,
+                stat.size as jlong,
+                stat.modified_millis,
+            ],
         )?;
         Ok(array.into_raw())
     })
@@ -142,7 +146,10 @@ pub fn smbRead(
     len: jint,
 ) -> jint {
     jni_throwing(&mut env, |env| {
-        ensure!(file_offset >= 0 && buffer_offset >= 0 && len >= 0, "Negative SMB read argument");
+        ensure!(
+            file_offset >= 0 && buffer_offset >= 0 && len >= 0,
+            "Negative SMB read argument"
+        );
         let data = smb::read(handle as u64, file_offset as u64, len as u64)?;
         let capacity = env.get_direct_buffer_capacity(&buffer)? as usize;
         let buffer_offset = buffer_offset as usize;
@@ -196,13 +203,7 @@ pub fn smbCreate(
 
 /// Writes `len` bytes from the direct buffer into the writer.
 #[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
-pub fn smbWrite(
-    mut env: JNIEnv,
-    _: JClass,
-    handle: jlong,
-    buffer: JByteBuffer,
-    len: jint,
-) -> jint {
+pub fn smbWrite(mut env: JNIEnv, _: JClass, handle: jlong, buffer: JByteBuffer, len: jint) -> jint {
     jni_throwing(&mut env, |env| {
         ensure!(len >= 0, "Negative SMB write length");
         let capacity = env.get_direct_buffer_capacity(&buffer)? as usize;
@@ -218,9 +219,7 @@ pub fn smbWrite(
 /// Flushes and closes the writer, returning the total bytes written.
 #[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
 pub fn smbWriteClose(mut env: JNIEnv, _: JClass, handle: jlong) -> jlong {
-    jni_throwing(&mut env, |_| {
-        Ok(smb::write_close(handle as u64)? as jlong)
-    })
+    jni_throwing(&mut env, |_| Ok(smb::write_close(handle as u64)? as jlong))
 }
 
 /// Creates a directory on the share.
