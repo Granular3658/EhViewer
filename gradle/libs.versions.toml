@@ -1,43 +1,43 @@
 [versions]
 aboutlibraries = "14.2.1"
 accompanist = "0.37.3"
-agp = "9.3.1"
+agp = "9.4.1"
 androidx-activity = "1.13.0"
 androidx-appcompat = "1.8.0"
 androidx-biometric = "1.4.0-alpha07"
 androidx-browser = "1.10.0"
-androidx-core = "1.19.0"
+androidx-core = "1.19.1"
 androidx-core-splashscreen = "1.2.0"
 androidx-datastore = "1.2.1"
 androidx-lifecycle = "2.11.0"
 androidx-paging = "3.5.1"
-androidx-room = "2.8.4"
-androidx-webkit = "1.17.0"
-androidx-work = "2.11.2"
+androidx-room = "2.8.5"
+androidx-webkit = "1.17.1"
+androidx-work = "2.12.0"
 arrow = "2.2.3"
-coil = "3.5.0"
-compose-bom = "2026.08.00"
-compose-multiplatform = "1.11.1"
+coil = "3.6.3"
+compose-bom = "2026.09.01"
+compose-multiplatform = "1.12.1"
 compose-destinations = "2.3.0"
 compose-preference = "2.2.0"
 java = "25"
-kotlin = "2.4.10"
+kotlin = "2.4.20"
 kotlinx-coroutines = "1.11.0"
 kotlinx-datetime = "0.8.0"
 kotlinx-io = "0.9.1"
 kotlinx-serialization = "1.11.0"
 ksp = "2.3.9"
-ktor = "3.5.2"
-moko-resources = "0.26.4"
+ktor = "3.6.0"
+moko-resources = "0.27.1"
 okhttp = "5.5.0"
-okio = "3.18.1"
+okio = "3.18.2"
 splitties = "3.0.0"
-spotless = "8.10.0"
+spotless = "8.10.3"
 telephoto = "0.19.0"
-xmlutil = "1.0.2"
+xmlutil = "1.0.2.1"
 junit = "1.3.0"
 uiautomator = "2.4.0"
-benchmark = "1.5.0-rc01"
+benchmark = "1.5.0"
 profileinstaller = "1.4.1"
 
 [libraries]
@@ -78,7 +78,7 @@ compose-bom = { module = "androidx.compose:compose-bom-alpha", version.ref = "co
 compose-foundation = { module = "androidx.compose.foundation:foundation" }
 compose-material-icons-extended = { module = "org.jetbrains.compose.material:material-icons-extended", version = "1.7.3" }
 compose-material3 = { module = "org.jetbrains.compose.material3:material3", version = "1.9.0" }
-compose-material3-adaptive = { module = "org.jetbrains.compose.material3.adaptive:adaptive", version = "1.2.0" }
+compose-material3-adaptive = { module = "org.jetbrains.compose.material3.adaptive:adaptive", version = "1.3.0" }
 compose-ui-backhandler = { module = "org.jetbrains.compose.ui:ui-backhandler", version.ref = "compose-multiplatform" }
 compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 compose-ui-tooling-preview = { module = "org.jetbrains.compose.ui:ui-tooling-preview", version.ref = "compose-multiplatform" }
@@ -89,11 +89,11 @@ compose-destinations-compiler = { module = "io.github.raamcosta.compose-destinat
 compose-preference = { module = "me.zhanghai.compose.preference:preference", version.ref = "compose-preference" }
 
 material-motion-core = "io.github.fornewid:material-motion-compose-core:2.0.1"
-material-kolor = "com.materialkolor:material-kolor:5.0.0"
+material-kolor = "com.materialkolor:material-kolor:5.0.1"
 
 desugar = "com.android.tools:desugar_jdk_libs:2.1.5"
 
-diff = "io.github.petertrr:kotlin-multiplatform-diff:1.3.0"
+diff = "io.github.petertrr:kotlin-multiplatform-diff:1.4.0"
 
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }

@@ -5,6 +5,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderColors
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.SliderDefaults.drawStopIndicator
+import androidx.compose.material3.rememberSliderState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -29,18 +30,18 @@ fun Slider(
     colors: SliderColors = SliderDefaults.colors(),
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
 ) {
+    val state = rememberSliderState(value.toFloat(), steps, valueRange.first.toFloat()..valueRange.last.toFloat())
     Slider(
-        value = value.toFloat(),
+        state = state,
         onValueChange = { onValueChange(it.fastRoundToInt()) },
         modifier = modifier,
         enabled = enabled,
         onValueChangeFinished = onValueChangeFinished,
         colors = colors,
         interactionSource = interactionSource,
-        steps = steps,
-        track = { sliderState ->
+        track = { state ->
             SliderDefaults.Track(
-                sliderState = sliderState,
+                sliderState = state,
                 trackCornerSize = Dp.Unspecified,
                 enabled = enabled,
                 colors = colors,
@@ -53,7 +54,6 @@ fun Slider(
                 },
             )
         },
-        valueRange = valueRange.first.toFloat()..valueRange.last.toFloat(),
     )
 }
 
