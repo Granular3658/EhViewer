@@ -4,13 +4,13 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.hippo.ehviewer.Settings
-import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import org.json.JSONObject
 
 /** Credentials are encrypted per SMB server/share before entering DataStore. */
 data class SmbCredentials(

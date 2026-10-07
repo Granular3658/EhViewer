@@ -7,26 +7,24 @@ import com.hippo.ehviewer.jni.smbInvalidate
 import com.hippo.ehviewer.jni.smbList
 import com.hippo.ehviewer.jni.smbMkdir
 import com.hippo.ehviewer.jni.smbOpen
-import com.hippo.ehviewer.jni.smbRename
 import com.hippo.ehviewer.jni.smbRead
+import com.hippo.ehviewer.jni.smbRename
 import com.hippo.ehviewer.jni.smbStat
 import com.hippo.ehviewer.jni.smbTest
 import com.hippo.ehviewer.jni.smbWrite
 import com.hippo.ehviewer.jni.smbWriteClose
+import java.nio.ByteBuffer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.nio.ByteBuffer
 
 /** Kotlin boundary for the Rust SMB client. All calls are blocking JNI calls. */
 object SmbRepository {
     data class Entry(val name: String, val isDirectory: Boolean, val size: Long)
     data class Stat(val isDirectory: Boolean, val size: Long, val modifiedMillis: Long)
 
-    private fun credentials(location: SmbLocation): SmbCredentials =
-        SmbCredentialStore.get(location) ?: SmbCredentials("", "", "")
+    private fun credentials(location: SmbLocation): SmbCredentials = SmbCredentialStore.get(location) ?: SmbCredentials("", "", "")
 
-    private inline fun <T> withTarget(location: SmbLocation, block: (SmbCredentials) -> T): T =
-        block(credentials(location))
+    private inline fun <T> withTarget(location: SmbLocation, block: (SmbCredentials) -> T): T = block(credentials(location))
 
     suspend fun test(location: SmbLocation, credentials: SmbCredentials): List<Entry> = withContext(Dispatchers.IO) {
         val raw = smbList(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain)
@@ -56,8 +54,7 @@ object SmbRepository {
         }
     }
 
-    fun read(handle: Long, buffer: ByteBuffer, fileOffset: Long, bufferOffset: Int, length: Int): Int =
-        smbRead(handle, buffer, fileOffset, bufferOffset, length)
+    fun read(handle: Long, buffer: ByteBuffer, fileOffset: Long, bufferOffset: Int, length: Int): Int = smbRead(handle, buffer, fileOffset, bufferOffset, length)
 
     /** Creates (truncating) the remote file and returns an opaque write handle. */
     suspend fun create(location: SmbLocation): SmbWriteHandle = withContext(Dispatchers.IO) {

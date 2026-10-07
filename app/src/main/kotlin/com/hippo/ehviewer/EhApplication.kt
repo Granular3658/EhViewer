@@ -60,8 +60,8 @@ import com.hippo.ehviewer.coil.MergeInterceptor
 import com.hippo.ehviewer.coil.QrCodeInterceptor
 import com.hippo.ehviewer.dailycheck.checkDawn
 import com.hippo.ehviewer.download.DownloadManager
-import com.hippo.ehviewer.download.downloadLocation
 import com.hippo.ehviewer.download.DownloadsFilterMode
+import com.hippo.ehviewer.download.downloadLocation
 import com.hippo.ehviewer.ktbuilder.diskCache
 import com.hippo.ehviewer.ktbuilder.imageLoader
 import com.hippo.ehviewer.ktor.Cronet

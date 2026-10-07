@@ -7,15 +7,15 @@ import android.database.MatrixCursor
 import android.net.Uri
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
-import android.provider.OpenableColumns
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import android.util.Log
-import kotlinx.coroutines.runBlocking
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.runBlocking
 
 /**
  * Private provider used to make a read-only SMB stream consumable by Coil and
@@ -71,25 +71,29 @@ class SmbProvider : ContentProvider() {
             ?: return row
         if (stat.isDirectory && !uri.isStatRequest()) {
             runCatching { runBlocking { SmbRepository.list(location) } }.getOrDefault(emptyList()).forEach { entry ->
-                row.addRow(columns.map { column ->
-                    when (column) {
-                        OpenableColumns.DISPLAY_NAME, DocumentsContract.Document.COLUMN_DISPLAY_NAME -> entry.name
-                        OpenableColumns.SIZE, DocumentsContract.Document.COLUMN_SIZE -> entry.size
-                        DocumentsContract.Document.COLUMN_MIME_TYPE -> if (entry.isDirectory) DocumentsContract.Document.MIME_TYPE_DIR else "application/octet-stream"
-                        else -> null
-                    }
-                }.map { it as Any? }.toTypedArray())
+                row.addRow(
+                    columns.map { column ->
+                        when (column) {
+                            OpenableColumns.DISPLAY_NAME, DocumentsContract.Document.COLUMN_DISPLAY_NAME -> entry.name
+                            OpenableColumns.SIZE, DocumentsContract.Document.COLUMN_SIZE -> entry.size
+                            DocumentsContract.Document.COLUMN_MIME_TYPE -> if (entry.isDirectory) DocumentsContract.Document.MIME_TYPE_DIR else "application/octet-stream"
+                            else -> null
+                        }
+                    }.map { it as Any? }.toTypedArray(),
+                )
             }
         } else {
-            row.addRow(columns.map { column ->
-                when (column) {
-                    OpenableColumns.DISPLAY_NAME, DocumentsContract.Document.COLUMN_DISPLAY_NAME -> location.subPath.substringAfterLast('/').ifEmpty { location.share }
-                    OpenableColumns.SIZE, DocumentsContract.Document.COLUMN_SIZE -> stat.size
-                    DocumentsContract.Document.COLUMN_MIME_TYPE -> if (stat.isDirectory) DocumentsContract.Document.MIME_TYPE_DIR else getType(uri)
-                    DocumentsContract.Document.COLUMN_LAST_MODIFIED -> stat.modifiedMillis
-                    else -> null
-                }
-            }.map { it as Any? }.toTypedArray())
+            row.addRow(
+                columns.map { column ->
+                    when (column) {
+                        OpenableColumns.DISPLAY_NAME, DocumentsContract.Document.COLUMN_DISPLAY_NAME -> location.subPath.substringAfterLast('/').ifEmpty { location.share }
+                        OpenableColumns.SIZE, DocumentsContract.Document.COLUMN_SIZE -> stat.size
+                        DocumentsContract.Document.COLUMN_MIME_TYPE -> if (stat.isDirectory) DocumentsContract.Document.MIME_TYPE_DIR else getType(uri)
+                        DocumentsContract.Document.COLUMN_LAST_MODIFIED -> stat.modifiedMillis
+                        else -> null
+                    }
+                }.map { it as Any? }.toTypedArray(),
+            )
         }
         return row
     }
@@ -190,31 +194,29 @@ class SmbProvider : ContentProvider() {
      * take the location as `arg`; `rename` takes `from`/`to` in [extras] (the
      * same share, so only the destination sub-path differs).
      */
-    override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
-        return when (method) {
-            "mkdir" -> {
-                val location = SmbLocation.parse(arg!!)
-                checkNotNull(location) { "Invalid SMB location: $arg" }
-                runBlocking { SmbRepository.mkdir(location) }
-                Bundle.EMPTY
-            }
-            "delete" -> {
-                val location = SmbLocation.parse(arg!!)
-                checkNotNull(location) { "Invalid SMB location: $arg" }
-                runBlocking { SmbRepository.delete(location) }
-                Bundle.EMPTY
-            }
-            "rename" -> {
-                val e = extras!!
-                val from = SmbLocation.parse(e.getString("from")!!)
-                val to = SmbLocation.parse(e.getString("to")!!)
-                checkNotNull(from) { "Invalid SMB location: ${e.getString("from")}" }
-                checkNotNull(to) { "Invalid SMB location: ${e.getString("to")}" }
-                runBlocking { SmbRepository.rename(from, to) }
-                Bundle.EMPTY
-            }
-            else -> super.call(method, arg, extras)
+    override fun call(method: String, arg: String?, extras: Bundle?): Bundle? = when (method) {
+        "mkdir" -> {
+            val location = SmbLocation.parse(arg!!)
+            checkNotNull(location) { "Invalid SMB location: $arg" }
+            runBlocking { SmbRepository.mkdir(location) }
+            Bundle.EMPTY
         }
+        "delete" -> {
+            val location = SmbLocation.parse(arg!!)
+            checkNotNull(location) { "Invalid SMB location: $arg" }
+            runBlocking { SmbRepository.delete(location) }
+            Bundle.EMPTY
+        }
+        "rename" -> {
+            val e = extras!!
+            val from = SmbLocation.parse(e.getString("from")!!)
+            val to = SmbLocation.parse(e.getString("to")!!)
+            checkNotNull(from) { "Invalid SMB location: ${e.getString("from")}" }
+            checkNotNull(to) { "Invalid SMB location: ${e.getString("to")}" }
+            runBlocking { SmbRepository.rename(from, to) }
+            Bundle.EMPTY
+        }
+        else -> super.call(method, arg, extras)
     }
 
     private companion object {

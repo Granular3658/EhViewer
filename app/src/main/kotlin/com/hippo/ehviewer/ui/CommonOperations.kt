@@ -101,8 +101,7 @@ private fun ensureNoMediaFile(downloadDir: Path) {
 
 private val lck = Mutex()
 
-suspend fun keepNoMediaFileStatus(downloadDir: Path, mediaScan: Boolean = Settings.mediaScan.value) =
-    keepNoMediaFileStatus(listOf(downloadDir), mediaScan)
+suspend fun keepNoMediaFileStatus(downloadDir: Path, mediaScan: Boolean = Settings.mediaScan.value) = keepNoMediaFileStatus(listOf(downloadDir), mediaScan)
 
 suspend fun keepNoMediaFileStatus(downloadDirs: List<Path> = allDownloadLocations, mediaScan: Boolean = Settings.mediaScan.value) {
     downloadDirs.filter { !it.isSmb && it.isDirectory }.forEach { dir ->

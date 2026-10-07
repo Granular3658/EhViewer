@@ -24,8 +24,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.ehviewer.core.i18n.R
-import com.hippo.ehviewer.smb.SmbCredentials
 import com.hippo.ehviewer.smb.SmbCredentialStore
+import com.hippo.ehviewer.smb.SmbCredentials
 import com.hippo.ehviewer.smb.SmbLocation
 import com.hippo.ehviewer.smb.SmbRepository
 import kotlinx.coroutines.launch
@@ -94,7 +94,10 @@ fun SmbLocationDialog(
             ) {
                 OutlinedTextField(
                     value = path,
-                    onValueChange = { path = it; onEdit() },
+                    onValueChange = {
+                        path = it
+                        onEdit()
+                    },
                     label = { Text(stringResource(R.string.settings_download_smb_path)) },
                     placeholder = { Text(stringResource(R.string.settings_download_smb_path_hint)) },
                     prefix = {
@@ -108,14 +111,20 @@ fun SmbLocationDialog(
                 )
                 OutlinedTextField(
                     value = username,
-                    onValueChange = { username = it; onEdit() },
+                    onValueChange = {
+                        username = it
+                        onEdit()
+                    },
                     label = { Text(stringResource(R.string.settings_download_smb_username)) },
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                     singleLine = true,
                 )
                 OutlinedTextField(
                     value = password,
-                    onValueChange = { password = it; onEdit() },
+                    onValueChange = {
+                        password = it
+                        onEdit()
+                    },
                     label = { Text(stringResource(R.string.settings_download_smb_password)) },
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                     singleLine = true,

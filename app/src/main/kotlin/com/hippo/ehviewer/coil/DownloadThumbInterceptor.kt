@@ -1,5 +1,6 @@
 package com.hippo.ehviewer.coil
 
+import android.util.Log
 import coil3.Extras
 import coil3.getExtra
 import coil3.intercept.Interceptor
@@ -7,7 +8,6 @@ import coil3.request.ImageRequest
 import coil3.request.ImageResult
 import coil3.request.SuccessResult
 import com.ehviewer.core.database.model.DownloadInfo
-import android.util.Log
 import com.ehviewer.core.files.delete
 import com.ehviewer.core.files.isDirectory
 import com.ehviewer.core.files.isFile
@@ -73,4 +73,3 @@ object DownloadThumbInterceptor : Interceptor {
 }
 
 private const val TAG = "DownloadThumbInterceptor"
-
