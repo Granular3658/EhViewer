@@ -12,7 +12,10 @@ import android.provider.DocumentsContract
 import android.util.Log
 import kotlinx.coroutines.runBlocking
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Private provider used to make a read-only SMB stream consumable by Coil and
@@ -128,7 +131,16 @@ class SmbProvider : ContentProvider() {
             return readSide
         } else if (mode.contains('w', ignoreCase = true)) {
             // Write mode: the caller writes into `writeSide`; we drain `readSide`
-            // and forward the bytes to the Rust SMB writer.
+            // on a worker thread and forward the bytes to the Rust SMB writer.
+            // That forwarding is asynchronous, so a caller that closes the
+            // descriptor normally returns *before* the bytes are flushed to the
+            // server. Wrap the descriptor so closing it blocks until the SMB
+            // write has truly finished — otherwise an immediate read (hash
+            // check), rename, or decode would see an empty file or hit
+            // STATUS_SHARING_VIOLATION, since the underlying SMB handle is opened
+            // with exclusive share access until it is closed.
+            val finished = CountDownLatch(1)
+            val failure = AtomicReference<Throwable?>(null)
             executor.execute {
                 var handle: SmbWriteHandle? = null
                 try {
@@ -142,6 +154,7 @@ class SmbProvider : ContentProvider() {
                     }
                     runBlocking { SmbRepository.writeClose(handle.value) }
                 } catch (t: Throwable) {
+                    failure.set(t)
                     Log.e(TAG, "SMB write failed: $uri", t)
                 } finally {
                     handle?.let { smbHandle ->
@@ -149,9 +162,19 @@ class SmbProvider : ContentProvider() {
                     }
                     runCatching { readSide.close() }
                     runCatching { writeSide.close() }
+                    finished.countDown()
                 }
             }
-            return writeSide
+            return object : ParcelFileDescriptor(writeSide) {
+                override fun close() {
+                    try {
+                        super.close()
+                    } finally {
+                        finished.await(120, TimeUnit.SECONDS)
+                        failure.get()?.let { throw IOException("SMB write failed: $uri", it) }
+                    }
+                }
+            }
         } else {
             throw IOException("Unsupported SMB open mode: $mode")
         }
