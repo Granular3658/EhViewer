@@ -27,6 +27,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -38,6 +40,7 @@ import com.ehviewer.core.database.model.DownloadInfo
 import com.ehviewer.core.files.delete
 import com.ehviewer.core.files.find
 import com.ehviewer.core.files.isDirectory
+import com.ehviewer.core.files.isSmb
 import com.ehviewer.core.files.list
 import com.ehviewer.core.files.metadataOrNull
 import com.ehviewer.core.files.mkdirs
@@ -53,16 +56,19 @@ import com.ehviewer.core.util.logcat
 import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.asMutableState
-import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.client.EhEngine.fillGalleryListByApi
 import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.parser.GalleryDetailUrlParser
 import com.hippo.ehviewer.client.parser.ParserUtils
+import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.download.allDownloadLocations
 import com.hippo.ehviewer.download.downloadDir
 import com.hippo.ehviewer.download.downloadLocation
 import com.hippo.ehviewer.download.invalidateDownloadLocationCache
+import com.hippo.ehviewer.smb.SmbCredentialStore
+import com.hippo.ehviewer.smb.SmbLocation
+import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.spider.COMIC_INFO_FILE
 import com.hippo.ehviewer.spider.MIN_SPEED_LEVEL
 import com.hippo.ehviewer.spider.SpiderDen
@@ -107,7 +113,9 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
     ) { paddingValues ->
         Column(modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection).verticalScroll(rememberScrollState()).padding(paddingValues)) {
             val downloadLocationsState by Settings.downloadLocations.collectAsState()
+            val smbLocationsState by Settings.smbLocations.collectAsState()
             val defaultLocationUri by Settings.defaultDownloadLocationUri.collectAsState()
+            var showSmbDialog by remember { mutableStateOf(false) }
             val cannotGetDownloadLocation = stringResource(id = R.string.settings_download_cant_get_download_location)
             val defaultDownloadDirLabel = stringResource(id = R.string.settings_download_default_location)
             val extraLocationsLabel = stringResource(id = R.string.settings_download_extra_locations)
@@ -225,13 +233,15 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
             if (downloadLocationsState.isNotEmpty()) {
                 Preference(title = extraLocationsLabel) {}
                 downloadLocationsState.forEach { uriStr ->
+                    val isSmb = uriStr in smbLocationsState
+                    // SMB shares are writable now, so they can be picked as the default too
                     val isDefault = uriStr == defaultLocationUri
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = Uri.parse(uriStr).displayPath ?: "",
+                            text = if (isSmb) uriStr else Uri.parse(uriStr).displayPath ?: "",
                             modifier = Modifier.weight(1f),
                         )
                         if (isDefault) {
@@ -251,15 +261,16 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                                 Text(setDefaultLabel)
                             }
                         }
-                        // The default location anchors the whole set, so it has no remove
-                        // button at all: removing it would leave no configured location and
+                        // The last remaining location anchors the whole set and has no
+                        // remove button: dropping it would leave no configured location and
                         // silently fall back to the legacy single one, which then disappears
-                        // again as soon as a new location is added.
-                        if (!isDefault) {
+                        // again as soon as a new location is added. Any other location can go,
+                        // including the default one, which re-points the default elsewhere.
+                        if (downloadLocationsState.size > 1) {
                             TextButton(
                                 onClick = {
                                     launchIO {
-                                        if (isDefault || Settings.downloadLocations.value.size <= 1) {
+                                        if (Settings.downloadLocations.value.size <= 1) {
                                             launchSnackbar(cannotRemoveDefaultLabel)
                                         } else {
                                             val remaining = Settings.downloadLocations.value - uriStr
@@ -267,8 +278,13 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                                             if (defaultLocationUri == uriStr) {
                                                 Settings.defaultDownloadLocationUri.value = remaining.minOrNull()
                                             }
-                                            // Only the removed location loses its permission
-                                            runCatching { contextOf<Context>().contentResolver.releasePersistableUriPermission(Uri.parse(uriStr), URI_FLAGS) }
+                                            if (isSmb) {
+                                                Settings.smbLocations.value = Settings.smbLocations.value - uriStr
+                                                SmbLocation.parse(uriStr)?.let(SmbCredentialStore::remove)
+                                            } else {
+                                                // Only the removed local location loses its permission
+                                                runCatching { contextOf<Context>().contentResolver.releasePersistableUriPermission(Uri.parse(uriStr), URI_FLAGS) }
+                                            }
                                             invalidateDownloadLocationCache()
                                         }
                                     }
@@ -284,6 +300,26 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
             // even after the last one has been removed
             Preference(title = addLocationLabel) {
                 extraDirLauncher.launch(null)
+            }
+            Preference(title = stringResource(R.string.settings_download_add_smb_location)) {
+                showSmbDialog = true
+            }
+            if (showSmbDialog) {
+                SmbLocationDialog(
+                    onDismiss = { showSmbDialog = false },
+                    showMessage = ::launchSnackbar,
+                    onSaved = { location ->
+                        val uriStr = location.uriString
+                        if (uriStr in Settings.downloadLocations.value) {
+                            launchSnackbar(string(R.string.settings_download_location_already_added))
+                        } else {
+                            Settings.downloadLocations.value = Settings.downloadLocations.value + uriStr
+                            Settings.smbLocations.value = Settings.smbLocations.value + uriStr
+                            invalidateDownloadLocationCache()
+                            showSmbDialog = false
+                        }
+                    },
+                )
             }
             val mediaScan = Settings.mediaScan.asMutableState()
             SwitchPreference(
@@ -397,7 +433,24 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     }.getOrNull()
                 }
                 runSuspendCatching {
-                    val result = allDownloadLocations.flatMap { it.list() }.parMapNotNull { getRestoreItem(it) }.also {
+                    // SMB locations are listed through the client directly: one
+                    // round trip already tells which entries are directories,
+                    // and an unreachable share must not abort the local scan.
+                    val candidates = allDownloadLocations.flatMap { location ->
+                        val smb = SmbLocation.parse(location)
+                        if (smb != null) {
+                            runCatching { SmbRepository.list(smb) }
+                                .onFailure { logcat(it) }
+                                .getOrDefault(emptyList())
+                                .filter { it.isDirectory }
+                                .map { location / it.name }
+                        } else {
+                            runCatching { location.list() }
+                                .onFailure { logcat(it) }
+                                .getOrDefault(emptyList())
+                        }
+                    }
+                    val result = candidates.parMapNotNull { getRestoreItem(it) }.also {
                         fillGalleryListByApi(it, EhUrl.referer)
                     }
                     if (result.isEmpty()) {
@@ -414,7 +467,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     }
                 }.onFailure {
                     logcat(it)
-                    launchSnackbar(restoreFailed)
+                    launchSnackbar("$restoreFailed: ${it.displayString()}")
                 }
             }
             WorkPreference(
@@ -427,7 +480,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     val gid = name.substringBefore('-').toLongOrNull() ?: return false
                     return name != DownloadManager.getDownloadInfo(gid)?.dirname
                 }
-                val list = allDownloadLocations.flatMap { it.list() }.filter(::isRedundant)
+                val list = allDownloadLocations.filterNot { it.isSmb }.flatMap { it.list() }.filter(::isRedundant)
                 if (list.isNotEmpty()) {
                     awaitConfirmationOrCancel(
                         confirmText = R.string.delete,
