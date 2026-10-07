@@ -33,7 +33,10 @@ fun Slider(
     val state = rememberSliderState(value.toFloat(), steps, valueRange.first.toFloat()..valueRange.last.toFloat())
     Slider(
         state = state,
-        onValueChange = { onValueChange(it.fastRoundToInt()) },
+        onValueChange = {
+            onValueChange(it.fastRoundToInt())
+            state.value = it
+        },
         modifier = modifier,
         enabled = enabled,
         onValueChangeFinished = onValueChangeFinished,
