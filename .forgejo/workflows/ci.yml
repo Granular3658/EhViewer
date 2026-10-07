@@ -26,7 +26,7 @@ jobs:
       - name: Setup Rust
         uses: https://github.com/dtolnay/rust-toolchain@stable
         with:
-          toolchain: nightly-2026-08-22
+          toolchain: nightly-2026-10-07
           targets: aarch64-linux-android, thumbv7neon-linux-androideabi
 
       - name: Rust Cache
@@ -75,7 +75,7 @@ jobs:
       - name: Setup Rust
         uses: https://github.com/dtolnay/rust-toolchain@stable
         with:
-          toolchain: nightly-2026-08-22
+          toolchain: nightly-2026-10-07
           targets: aarch64-linux-android, thumbv7neon-linux-androideabi
 
       - name: Rust Cache

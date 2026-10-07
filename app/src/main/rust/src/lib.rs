@@ -1,5 +1,4 @@
 #![feature(f16)]
-#![feature(never_type)]
 
 mod ffi;
 pub mod img;
