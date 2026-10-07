@@ -6,7 +6,6 @@ import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -20,6 +19,8 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.ehviewer.core.ui.component.IntSliderState
+import com.ehviewer.core.ui.component.RollingNumber
+import com.ehviewer.core.ui.component.RollingNumberPlaceholder
 import com.ehviewer.core.ui.component.Slider
 import com.ehviewer.core.ui.component.defaultMaxTickCount
 import com.ehviewer.core.ui.util.HapticFeedbackType
@@ -41,7 +42,7 @@ fun ChapterNavigator(
         modifier = Modifier.padding(horizontal = horizontalPadding).clip(CircleShape).background(containerColor).padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text = "${slider.value}")
+        RollingNumber(slider.value, length = "$totalPages".length)
         val maxTickCount = defaultMaxTickCount()
         val interactionSource = remember { MutableInteractionSource() }
         if (slider.state.steps < maxTickCount) {
@@ -60,6 +61,6 @@ fun ChapterNavigator(
             maxTickCount = maxTickCount,
             interactionSource = interactionSource,
         )
-        Text(text = "$totalPages")
+        RollingNumberPlaceholder(totalPages)
     }
 }

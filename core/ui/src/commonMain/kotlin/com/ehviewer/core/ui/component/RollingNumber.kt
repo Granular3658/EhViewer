@@ -13,6 +13,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -23,11 +24,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.toSize
 import kotlin.math.PI
@@ -55,14 +58,16 @@ fun rememberTextStyleNumberMaxSize(textStyle: TextStyle): DpSize {
 fun RollingNumberPlaceholder(number: Int, style: TextStyle = LocalTextStyle.current) {
     val styleNoSpacing = style.copy(letterSpacing = TextUnit.Unspecified)
     val size = rememberTextStyleNumberMaxSize(style)
-    Row(horizontalArrangement = Arrangement.Center) {
-        "$number".forEach { char ->
-            Text(
-                text = "$char",
-                style = styleNoSpacing,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.size(size),
-            )
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Row(horizontalArrangement = Arrangement.Center) {
+            "$number".forEach { char ->
+                Text(
+                    text = "$char",
+                    style = styleNoSpacing,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.size(size),
+                )
+            }
         }
     }
 }
@@ -138,69 +143,71 @@ fun RollingNumber(
     val transition = updateTransition(string)
     val styleNoSpacing = style.merge(color = textColor).copy(letterSpacing = TextUnit.Unspecified)
     val size = rememberTextStyleNumberMaxSize(style)
-    LazyRow(
-        modifier = modifier.clipToBounds().layout { measurable, constraints ->
-            val placeable = measurable.measure(constraints.copy(maxHeight = Int.MAX_VALUE))
-            layout(width = placeable.width, height = size.height.roundToPx()) {
-                placeable.place(0, 0)
-            }
-        },
-        reverseLayout = true,
-        horizontalArrangement = Arrangement.Center,
-    ) {
-        val max = with(transition) { max(currentState.length, targetState.length) }
-        items(max, key = { it }) { reversed ->
-            val rotate by transition.animateOffset { str ->
-                val len = str.length
-                val absent = max - len
-                val where = max - reversed - 1
-                val v = if (where < absent) null else str[where - absent].digitToInt()
-                conceptSpaceToIntermediate(v)
-            }
-            if (reversed != 0 && reversed % 3 == 0 && separator) {
-                Text(
-                    text = ",",
-                    modifier = Modifier.size(size),
-                    style = styleNoSpacing,
-                    textAlign = TextAlign.Center,
-                )
-            }
-            Column(
-                modifier = Modifier.animateItem().offset {
-                    val number = intermediateToNumberOffset(rotate)
-                    numberOffsetToUIOffset(size.height.roundToPx(), number)
-                },
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                repeat(10) { i ->
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        LazyRow(
+            modifier = modifier.clipToBounds().layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints.copy(maxHeight = Int.MAX_VALUE))
+                layout(width = placeable.width, height = size.height.roundToPx()) {
+                    placeable.place(0, 0)
+                }
+            },
+            reverseLayout = true,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            val max = with(transition) { max(currentState.length, targetState.length) }
+            items(max, key = { it }) { reversed ->
+                val rotate by transition.animateOffset { str ->
+                    val len = str.length
+                    val absent = max - len
+                    val where = max - reversed - 1
+                    val v = if (where < absent) null else str[where - absent].digitToInt()
+                    conceptSpaceToIntermediate(v)
+                }
+                if (reversed != 0 && reversed % 3 == 0 && separator) {
                     Text(
-                        text = "$i",
-                        modifier = Modifier.size(size),
-                        style = styleNoSpacing,
-                        textAlign = TextAlign.Center,
-                    )
-                    Text(
-                        text = "",
+                        text = ",",
                         modifier = Modifier.size(size),
                         style = styleNoSpacing,
                         textAlign = TextAlign.Center,
                     )
                 }
+                Column(
+                    modifier = Modifier.animateItem().offset {
+                        val number = intermediateToNumberOffset(rotate)
+                        numberOffsetToUIOffset(size.height.roundToPx(), number)
+                    },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    repeat(10) { i ->
+                        Text(
+                            text = "$i",
+                            modifier = Modifier.size(size),
+                            style = styleNoSpacing,
+                            textAlign = TextAlign.Center,
+                        )
+                        Text(
+                            text = "",
+                            modifier = Modifier.size(size),
+                            style = styleNoSpacing,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
             }
-        }
-        if (isNegative) {
-            item(key = -1) {
-                Text(
-                    text = "-",
-                    modifier = Modifier.size(size).animateItem(),
-                    style = styleNoSpacing,
-                    textAlign = TextAlign.Center,
-                )
+            if (isNegative) {
+                item(key = -1) {
+                    Text(
+                        text = "-",
+                        modifier = Modifier.size(size).animateItem(),
+                        style = styleNoSpacing,
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
-        }
-        if (length != null) {
-            items(length - max - if (isNegative) 1 else 0) {
-                Spacer(Modifier.size(size))
+            if (length != null) {
+                items(length - max - if (isNegative) 1 else 0) {
+                    Spacer(Modifier.size(size))
+                }
             }
         }
     }
