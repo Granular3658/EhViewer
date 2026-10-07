@@ -75,6 +75,7 @@ fn runtime() -> &'static Runtime {
     })
 }
 
+#[allow(clippy::type_complexity)]
 fn sessions() -> &'static AsyncMutex<HashMap<(String, u16, String, String, String), Session>> {
     static SESSIONS: OnceLock<AsyncMutex<HashMap<(String, u16, String, String, String), Session>>> =
         OnceLock::new();

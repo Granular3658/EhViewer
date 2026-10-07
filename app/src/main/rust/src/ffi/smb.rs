@@ -8,6 +8,7 @@ use jni::objects::{JByteBuffer, JClass, JObject, JString};
 use jni::sys::{jint, jlong, jlongArray, jobjectArray};
 use jni_fn::jni_fn;
 
+#[allow(clippy::too_many_arguments)]
 fn read_target(
     env: &mut JNIEnv,
     host: &JString,
@@ -151,7 +152,7 @@ pub fn smbRead(
             "Negative SMB read argument"
         );
         let data = smb::read(handle as u64, file_offset as u64, len as u64)?;
-        let capacity = env.get_direct_buffer_capacity(&buffer)? as usize;
+        let capacity = env.get_direct_buffer_capacity(&buffer)?;
         let buffer_offset = buffer_offset as usize;
         ensure!(
             buffer_offset + data.len() <= capacity,
@@ -206,7 +207,7 @@ pub fn smbCreate(
 pub fn smbWrite(mut env: JNIEnv, _: JClass, handle: jlong, buffer: JByteBuffer, len: jint) -> jint {
     jni_throwing(&mut env, |env| {
         ensure!(len >= 0, "Negative SMB write length");
-        let capacity = env.get_direct_buffer_capacity(&buffer)? as usize;
+        let capacity = env.get_direct_buffer_capacity(&buffer)?;
         let len = len as usize;
         ensure!(len <= capacity, "Buffer too small: {len} > {capacity}");
         let ptr = env.get_direct_buffer_address(&buffer)?;
