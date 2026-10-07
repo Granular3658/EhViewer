@@ -19,7 +19,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -60,9 +59,10 @@ fun SmbLocationDialog(
     var testedCredentials by remember { mutableStateOf<SmbCredentials?>(null) }
     var testMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
     val invalidMessage = stringResource(R.string.settings_download_smb_invalid)
     val testingMessage = stringResource(R.string.settings_download_smb_testing)
+    val testSuccessMessage = stringResource(R.string.settings_download_smb_test_success)
+    val testFailedMessage = stringResource(R.string.settings_download_smb_test_failed)
 
     fun onEdit() {
         testedLocation = null
@@ -145,12 +145,12 @@ fun SmbLocationDialog(
                                     .onSuccess { entries ->
                                         testedLocation = location
                                         testedCredentials = credentials
-                                        testMessage = context.getString(R.string.settings_download_smb_test_success, entries.size)
+                                        testMessage = testSuccessMessage.format(entries.size.toString())
                                     }
                                     .onFailure { error ->
                                         testedLocation = null
                                         testedCredentials = null
-                                        testMessage = context.getString(R.string.settings_download_smb_test_failed, error.message ?: error::class.simpleName.orEmpty())
+                                        testMessage = testFailedMessage.format(error.message ?: error::class.simpleName.orEmpty())
                                     }
                                 testing = false
                             }
