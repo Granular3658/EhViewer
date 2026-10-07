@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import com.ehviewer.core.ui.component.IntSliderState
 import com.ehviewer.core.ui.component.Slider
 import com.ehviewer.core.ui.component.defaultMaxTickCount
 import com.ehviewer.core.ui.util.HapticFeedbackType
@@ -29,7 +30,7 @@ import com.ehviewer.core.ui.util.rememberHapticFeedback
 @Composable
 fun ChapterNavigator(
     isRtl: Boolean,
-    currentPage: Int,
+    slider: IntSliderState,
     totalPages: Int,
     onSliderValueChange: (Int) -> Unit,
     containerColor: Color,
@@ -40,14 +41,13 @@ fun ChapterNavigator(
         modifier = Modifier.padding(horizontal = horizontalPadding).clip(CircleShape).background(containerColor).padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text = "$currentPage")
-        val steps = totalPages - 2
+        Text(text = "${slider.value}")
         val maxTickCount = defaultMaxTickCount()
         val interactionSource = remember { MutableInteractionSource() }
-        if (steps < maxTickCount) {
+        if (slider.state.steps < maxTickCount) {
             val sliderDragged by interactionSource.collectIsDraggedAsState()
             val hapticFeedback = rememberHapticFeedback()
-            LaunchedEffect(currentPage) {
+            LaunchedEffect(slider.value) {
                 if (sliderDragged) {
                     hapticFeedback.performHapticFeedback(HapticFeedbackType.MOVE)
                 }
@@ -55,9 +55,7 @@ fun ChapterNavigator(
         }
         Slider(
             modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-            value = currentPage,
-            valueRange = 1..totalPages,
-            steps = steps,
+            state = slider,
             onValueChange = onSliderValueChange,
             maxTickCount = maxTickCount,
             interactionSource = interactionSource,

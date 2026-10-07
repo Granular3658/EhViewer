@@ -21,39 +21,21 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.MutableIntState
-import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.ehviewer.core.ui.component.IntSliderState
 import com.ehviewer.core.ui.component.Slider
 
 @Composable
 fun IntSliderPreference(
-    state: MutableState<Int>,
+    state: IntSliderState,
     title: @Composable () -> Unit,
     modifier: Modifier = Modifier,
-    valueRange: IntRange = 0..1,
-    valueSteps: Int = 0,
-    sliderState: MutableIntState = remember { mutableIntStateOf(state.value) },
     enabled: Boolean = true,
     icon: @Composable (() -> Unit)? = null,
     summary: @Composable (() -> Unit)? = null,
     valueText: @Composable (() -> Unit)? = null,
 ) {
-    var value by state
-    var sliderValue by sliderState
-    var lastValue by remember { mutableIntStateOf(value) }
-    SideEffect {
-        if (value != lastValue) {
-            sliderValue = value
-            lastValue = value
-        }
-    }
     Preference(
         title = title,
         modifier = modifier,
@@ -64,13 +46,10 @@ fun IntSliderPreference(
                 summary?.invoke()
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Slider(
-                        value = sliderValue,
-                        onValueChange = { sliderValue = it },
+                        state = state,
+                        onValueChange = { state.value = it },
                         modifier = Modifier.weight(1f),
                         enabled = enabled,
-                        valueRange = valueRange,
-                        steps = valueSteps,
-                        onValueChangeFinished = { value = sliderValue },
                     )
                     if (valueText != null) {
                         val theme = LocalPreferenceTheme.current

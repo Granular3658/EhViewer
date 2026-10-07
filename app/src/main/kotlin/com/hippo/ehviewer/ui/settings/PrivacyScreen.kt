@@ -9,6 +9,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
@@ -17,6 +18,7 @@ import com.ehviewer.core.util.launch
 import com.hippo.ehviewer.EhApplication.Companion.searchDatabase
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.asMutableState
+import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.isAuthenticationSupported
 import com.hippo.ehviewer.ui.main.NavigationIcon
@@ -48,17 +50,17 @@ fun AnimatedVisibilityScope.PrivacyScreen(navigator: DestinationsNavigator) = Sc
                 enabled = isAuthenticationSupported(),
             )
             AnimatedVisibility(visible = security.value) {
-                val securityDelay = Settings.securityDelay.asMutableState()
-                val summary = if (securityDelay.value == 0) {
+                val delay by Settings.securityDelay.collectAsState()
+                val summary = if (delay == 0) {
                     stringResource(id = R.string.settings_privacy_require_unlock_delay_summary_immediately)
                 } else {
-                    stringResource(id = R.string.settings_privacy_require_unlock_delay_summary, securityDelay.value)
+                    stringResource(id = R.string.settings_privacy_require_unlock_delay_summary, delay)
                 }
                 IntSliderPreference(
                     maxValue = 30,
                     title = stringResource(id = R.string.settings_privacy_require_unlock_delay),
                     summary = summary,
-                    state = securityDelay,
+                    pref = Settings.securityDelay,
                     enabled = isAuthenticationSupported(),
                 )
             }

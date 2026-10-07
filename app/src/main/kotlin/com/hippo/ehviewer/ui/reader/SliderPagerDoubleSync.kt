@@ -6,11 +6,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import com.ehviewer.core.ui.component.IntSliderState
 import com.hippo.ehviewer.gallery.PageLoader
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.drop
@@ -23,12 +23,11 @@ class SliderPagerDoubleSync(
     private val pageLoader: PageLoader,
 ) {
     private var sliderFollowPager by mutableStateOf(true)
-    var sliderValue by mutableIntStateOf(pageLoader.startPage + 1)
-        private set
+    val slider = IntSliderState(pageLoader.startPage + 1, 1..pageLoader.size)
 
     fun sliderScrollTo(index: Int) {
         sliderFollowPager = false
-        sliderValue = index.coerceIn(1, pageLoader.size)
+        slider.value = index
     }
 
     fun reset() {
@@ -50,7 +49,7 @@ class SliderPagerDoubleSync(
     @Composable
     fun Sync(webtoon: Boolean, onPageSelected: () -> Unit) {
         val currentIndexFlow = remember(webtoon) {
-            val initialIndex = sliderValue - 1
+            val initialIndex = slider.value - 1
             sliderFollowPager = if (webtoon) {
                 lazyListState.firstVisibleItemIndex == initialIndex
             } else {
@@ -61,14 +60,14 @@ class SliderPagerDoubleSync(
         if (sliderFollowPager) {
             LaunchedEffect(currentIndexFlow) {
                 currentIndexFlow.drop(1).collect { index ->
-                    sliderValue = index + 1
+                    slider.value = index + 1
                     pageLoader.startPage = index
                     onPageSelected()
                 }
             }
         } else {
             LaunchedEffect(webtoon) {
-                snapshotFlow { sliderValue - 1 }.collectLatest { index ->
+                snapshotFlow { slider.value - 1 }.collectLatest { index ->
                     if (webtoon) {
                         lazyListState.scrollToItem(index)
                     } else {

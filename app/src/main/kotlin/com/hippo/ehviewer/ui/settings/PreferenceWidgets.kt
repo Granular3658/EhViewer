@@ -21,7 +21,9 @@ import androidx.compose.ui.res.integerArrayResource
 import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import com.ehviewer.core.preferences.PrefDelegate
 import com.ehviewer.core.ui.component.RollingNumber
+import com.ehviewer.core.ui.component.rememberIntPrefSliderState
 import com.hippo.ehviewer.ui.openBrowser
 import com.hippo.ehviewer.util.ProgressDialog
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
@@ -71,19 +73,16 @@ fun SwitchPreference(title: String, summary: String? = null, state: MutableState
 }
 
 @Composable
-fun IntSliderPreference(maxValue: Int, minValue: Int = 0, step: Int = maxValue - minValue - 1, title: String, summary: String? = null, state: MutableState<Int>, enabled: Boolean = true, display: (Int) -> Int = { it }) {
-    val sliderState = remember { mutableIntStateOf(state.value) }
+fun IntSliderPreference(maxValue: Int, minValue: Int = 0, step: Int = maxValue - minValue - 1, title: String, summary: String? = null, pref: PrefDelegate<Int>, enabled: Boolean = true, display: (Int) -> Int = { it }) {
+    val state = rememberIntPrefSliderState(pref, minValue..maxValue, step)
     IntSliderPreference(
         state = state,
         title = { Text(title) },
-        valueRange = minValue..maxValue,
-        valueSteps = step,
-        sliderState = sliderState,
         enabled = enabled,
         summary = summary?.let { { Text(it) } },
         valueText = {
             RollingNumber(
-                number = display(sliderState.intValue),
+                number = display(state.value),
                 color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.bodyLarge,
                 length = 5,

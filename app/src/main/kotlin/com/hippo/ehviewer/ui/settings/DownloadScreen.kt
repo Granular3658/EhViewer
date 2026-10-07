@@ -195,7 +195,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                 maxValue = 10,
                 minValue = MIN_SPEED_LEVEL,
                 title = stringResource(id = R.string.settings_download_timeout_speed),
-                state = Settings.timeoutSpeed.asMutableState(),
+                pref = Settings.timeoutSpeed,
                 display = ::speedLevelToSpeed,
             )
             val preloadImage = Settings.preloadImage.asMutableState()

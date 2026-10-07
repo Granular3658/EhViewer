@@ -5,6 +5,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderColors
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.SliderDefaults.drawStopIndicator
+import androidx.compose.material3.SliderState
 import androidx.compose.material3.rememberSliderState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -16,30 +17,41 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.util.fastRoundToInt
+import com.ehviewer.core.preferences.PrefDelegate
+
+class IntSliderState(val state: SliderState) {
+    constructor(value: Int, range: IntRange, steps: Int = range.last - range.first - 1) : this(SliderState(value.toFloat(), steps, range.first.toFloat()..range.last.toFloat()))
+    var value: Int
+        get() = state.value.fastRoundToInt()
+        set(value) {
+            state.value = value.toFloat()
+        }
+}
+
+@Composable
+fun rememberIntSliderState(value: Int, range: IntRange, steps: Int = range.last - range.first - 1): IntSliderState {
+    val state = rememberSliderState(value.toFloat(), steps, range.first.toFloat()..range.last.toFloat())
+    return remember(range, steps) { IntSliderState(state) }
+}
+
+@Composable
+fun rememberIntPrefSliderState(value: PrefDelegate<Int>, range: IntRange, steps: Int = range.last - range.first - 1) = rememberIntSliderState(value.value, range, steps).also { value.value = it.value }
 
 @Composable
 fun Slider(
-    value: Int,
+    state: IntSliderState,
     onValueChange: (Int) -> Unit,
-    valueRange: IntRange,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    steps: Int = valueRange.last - valueRange.first - 1,
     maxTickCount: Int = defaultMaxTickCount(),
-    onValueChangeFinished: (() -> Unit)? = null,
     colors: SliderColors = SliderDefaults.colors(),
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
 ) {
-    val state = rememberSliderState(value.toFloat(), steps, valueRange.first.toFloat()..valueRange.last.toFloat())
     Slider(
-        state = state,
-        onValueChange = {
-            onValueChange(it.fastRoundToInt())
-            state.value = it
-        },
+        state = state.state,
+        onValueChange = { onValueChange(it.fastRoundToInt()) },
         modifier = modifier,
         enabled = enabled,
-        onValueChangeFinished = onValueChangeFinished,
         colors = colors,
         interactionSource = interactionSource,
         track = { state ->
@@ -48,7 +60,7 @@ fun Slider(
                 trackCornerSize = Dp.Unspecified,
                 enabled = enabled,
                 colors = colors,
-                drawTick = if (steps < maxTickCount) {
+                drawTick = if (state.steps < maxTickCount) {
                     { offset, color ->
                         drawStopIndicator(offset = offset, color = color, size = SliderDefaults.TickSize)
                     }

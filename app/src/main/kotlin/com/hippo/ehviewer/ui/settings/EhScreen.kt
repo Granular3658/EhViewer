@@ -193,7 +193,7 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
                         minValue = 20,
                         step = 7,
                         title = stringResource(id = R.string.list_tile_thumb_size),
-                        state = Settings.listThumbSize.asMutableState(),
+                        pref = Settings.listThumbSize,
                     )
                     SimpleMenuPreferenceInt(
                         title = stringResource(id = R.string.settings_eh_detail_size),
@@ -207,7 +207,7 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
                 maxValue = 10,
                 minValue = 1,
                 title = stringResource(id = R.string.settings_eh_thumb_columns),
-                state = Settings.thumbColumns.asMutableState(),
+                pref = Settings.thumbColumns,
             )
             SwitchPreference(
                 title = stringResource(id = R.string.settings_eh_show_gallery_pages),
@@ -235,7 +235,7 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
                     minValue = -101,
                     title = stringResource(id = R.string.settings_eh_show_gallery_comment_threshold),
                     summary = stringResource(id = R.string.settings_eh_show_gallery_comment_threshold_summary),
-                    state = Settings.commentThreshold.asMutableState(),
+                    pref = Settings.commentThreshold,
                 )
             }
             if (EhTagDatabase.translatable) {

@@ -10,10 +10,6 @@ import androidx.compose.material.icons.filled.Brightness5
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
@@ -23,6 +19,8 @@ import androidx.core.graphics.green
 import androidx.core.graphics.red
 import com.ehviewer.core.i18n.R
 import com.ehviewer.core.ui.component.RollingNumber
+import com.ehviewer.core.ui.component.rememberIntPrefSliderState
+import com.ehviewer.core.ui.component.rememberIntSliderState
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.asMutableState
 
@@ -34,12 +32,11 @@ fun ColorFilterSetting() = Column(modifier = Modifier.verticalScroll(rememberScr
         field = customBrightness,
     )
     AnimatedVisibility(visible = customBrightness.value) {
-        val brightness = Settings.customBrightnessValue.asMutableState()
+        val brightness = rememberIntPrefSliderState(Settings.customBrightnessValue, -75..100)
         SliderChoice(
             startSlot = { Icon(imageVector = Icons.Default.Brightness5, contentDescription = null) },
             endSlot = { RollingNumber(number = brightness.value, length = 3) },
-            range = -75..100,
-            field = brightness,
+            state = brightness,
         )
     }
     val colorFilter = Settings.colorFilter.asMutableState()
@@ -48,40 +45,32 @@ fun ColorFilterSetting() = Column(modifier = Modifier.verticalScroll(rememberScr
         field = colorFilter,
     )
     AnimatedVisibility(visible = colorFilter.value) {
-        var color by Settings.colorFilterValue.asMutableState()
-        val rf = remember { mutableIntStateOf(color.red) }
-        val r by rf
-        val gf = remember { mutableIntStateOf(color.green) }
-        val g by gf
-        val bf = remember { mutableIntStateOf(color.blue) }
-        val b by bf
-        val af = remember { mutableIntStateOf(color.alpha) }
-        val a by af
-        color = (a shl 24) or (r shl 16) or (g shl 8) or (b)
+        var color by Settings.colorFilterValue
+        val r = rememberIntSliderState(color.red, 0..255)
+        val g = rememberIntSliderState(color.green, 0..255)
+        val b = rememberIntSliderState(color.blue, 0..255)
+        val a = rememberIntSliderState(color.alpha, 0..255)
+        color = (a.value shl 24) or (r.value shl 16) or (g.value shl 8) or (b.value)
         Column {
             SliderChoice(
                 startSlot = { Text(text = "R") },
-                endSlot = { RollingNumber(number = r, length = 3) },
-                range = 0..255,
-                field = rf,
+                endSlot = { RollingNumber(number = r.value, length = 3) },
+                state = r,
             )
             SliderChoice(
                 startSlot = { Text(text = "G") },
-                endSlot = { RollingNumber(number = g, length = 3) },
-                range = 0..255,
-                field = gf,
+                endSlot = { RollingNumber(number = g.value, length = 3) },
+                state = g,
             )
             SliderChoice(
                 startSlot = { Text(text = "B") },
-                endSlot = { RollingNumber(number = b, length = 3) },
-                range = 0..255,
-                field = bf,
+                endSlot = { RollingNumber(number = b.value, length = 3) },
+                state = b,
             )
             SliderChoice(
                 startSlot = { Text(text = "A") },
-                endSlot = { RollingNumber(number = a, length = 3) },
-                range = 0..255,
-                field = af,
+                endSlot = { RollingNumber(number = a.value, length = 3) },
+                state = a,
             )
         }
     }

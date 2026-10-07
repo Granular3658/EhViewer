@@ -63,6 +63,7 @@ import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.merge
@@ -214,7 +215,7 @@ fun AnimatedVisibilityScope.AdvancedScreen(navigator: DestinationsNavigator) = S
                     step = 3,
                     title = stringResource(id = R.string.settings_advanced_hardware_bitmap_threshold),
                     summary = stringResource(id = R.string.settings_advanced_hardware_bitmap_threshold_summary),
-                    state = Settings.hardwareBitmapThreshold.asMutableState(),
+                    pref = Settings.hardwareBitmapThreshold,
                 )
             }
             SwitchPreference(
@@ -289,7 +290,7 @@ fun AnimatedVisibilityScope.AdvancedScreen(navigator: DestinationsNavigator) = S
                             EhDB.putLocalFavorites(result.galleryInfoList)
                             launchSnackbar(string(R.string.settings_advanced_backup_favorite_start, status))
                             if (result.next != null) {
-                                delay(Settings.downloadDelay.value.toLong())
+                                delay(Settings.downloadDelay.value.milliseconds)
                                 favListUrlBuilder.setIndex(result.next, true)
                                 doBackup()
                             }

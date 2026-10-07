@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.BottomSheetDefaults
@@ -93,6 +92,7 @@ import eu.kanade.tachiyomi.ui.reader.ReaderContentOverlay
 import eu.kanade.tachiyomi.ui.reader.ReaderPageSheetMeta
 import eu.kanade.tachiyomi.ui.reader.setting.ReadingModeType
 import kotlin.coroutines.resume
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.merge
@@ -215,9 +215,9 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
             uiController.showTransientSystemBarsBySwipe = false
         }
     }
-    val lazyListState = rememberLazyListState(LazyLayoutCacheWindow(SCROLL_FRACTION, SCROLL_FRACTION), pageLoader.startPage)
+    val lazyListState = rememberLazyListState(pageLoader.startPage)
     val pagerState = rememberPagerState(pageLoader.startPage) { pageLoader.size }
-    val syncState = rememberSliderPagerDoubleSyncState(lazyListState, pagerState, pageLoader)
+    val sync = rememberSliderPagerDoubleSyncState(lazyListState, pagerState, pageLoader)
     var appbarVisible by remember { mutableStateOf(false) }
     val isWebtoon by rememberUpdatedState(ReadingModeType.isWebtoon(readingMode))
     val focusRequester = remember { FocusRequester() }
@@ -232,7 +232,7 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
         LaunchedEffect(Unit) {
             focusRequester.requestFocus()
         }
-        syncState.Sync(isWebtoon) { appbarVisible = false }
+        sync.Sync(isWebtoon) { appbarVisible = false }
         val bgColor by collectBackgroundColorAsState()
         val isDarkTheme = isSystemInDarkTheme()
         LaunchedEffect(isDarkTheme) {
@@ -293,10 +293,10 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
                 onNavigationModeChange = { showNavigationOverlay = true },
                 onSelectPage = onSelectPage,
                 onMenuRegionClick = { appbarVisible = !appbarVisible },
-                modifier = Modifier.background(bgColor).pointerInput(syncState) {
+                modifier = Modifier.background(bgColor).pointerInput(sync) {
                     awaitEachGesture {
                         waitForUpOrCancellation()
-                        syncState.reset()
+                        sync.reset()
                         showNavigationOverlay = false
                     }
                 }.fillMaxSize().windowInsetsPadding(insets),
@@ -324,7 +324,7 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
         )
         if (brightness) {
             LaunchedEffect(Unit) {
-                Settings.customBrightnessValue.valueFlow().sample(100)
+                Settings.customBrightnessValue.valueFlow().sample(100.milliseconds)
                     .onCompletion { activity.setCustomBrightnessValue(0) }
                     .collect { activity.setCustomBrightnessValue(it) }
             }
@@ -333,7 +333,7 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
         if (showPageNumber && !appbarVisible) {
             CompositionLocalProvider(LocalTextStyle provides MaterialTheme.typography.bodySmall) {
                 PageIndicatorText(
-                    currentPage = syncState.sliderValue,
+                    currentPage = sync.slider.value,
                     totalPages = pageLoader.size,
                     modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
                 )
@@ -344,9 +344,9 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
             title = pageLoader.title,
             isRtl = readingMode == ReadingModeType.RIGHT_TO_LEFT,
             showSeekBar = showSeekbar,
-            currentPage = syncState.sliderValue,
+            slider = sync.slider,
             totalPages = pageLoader.size,
-            onSliderValueChange = syncState::sliderScrollTo,
+            onSliderValueChange = sync::sliderScrollTo,
             onClickSettings = {
                 launch {
                     dialog { cont ->

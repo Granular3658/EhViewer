@@ -25,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.ehviewer.core.ui.component.IntSliderState
 import com.ehviewer.core.ui.component.Slider
 
 @Composable
@@ -84,20 +85,17 @@ fun SwitchChoice(title: String, field: MutableState<Boolean>) {
 fun SliderChoice(
     startSlot: @Composable () -> Unit,
     endSlot: @Composable () -> Unit,
-    range: IntRange,
-    field: MutableState<Int>,
+    state: IntSliderState,
 ) {
-    var value by field
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         startSlot()
         Slider(
-            value = value,
-            onValueChange = { value = it },
+            state = state,
+            onValueChange = { state.value = it },
             modifier = Modifier.weight(1f).padding(8.dp),
-            valueRange = range,
         )
         endSlot()
     }

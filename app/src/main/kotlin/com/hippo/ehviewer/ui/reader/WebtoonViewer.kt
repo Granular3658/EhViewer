@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -81,6 +82,7 @@ fun WebtoonViewer(
         state = lazyListState,
         contentPadding = PaddingValues(horizontal = sidePadding),
         verticalArrangement = Arrangement.spacedBy(if (withGaps) 15.dp else 0.dp),
+        cacheWindow = LazyLayoutCacheWindow(SCROLL_FRACTION, SCROLL_FRACTION),
     ) {
         items(items, key = { it.index }) { page ->
             PagerItem(

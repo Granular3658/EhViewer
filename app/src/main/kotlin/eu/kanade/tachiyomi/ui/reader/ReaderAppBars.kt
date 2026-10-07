@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.ehviewer.core.ui.component.IntSliderState
 import com.hippo.ehviewer.ui.main.NavigationIcon
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 
@@ -35,7 +36,7 @@ fun BoxScope.ReaderAppBars(
     title: String,
     isRtl: Boolean,
     showSeekBar: Boolean,
-    currentPage: Int,
+    slider: IntSliderState,
     totalPages: Int,
     onSliderValueChange: (Int) -> Unit,
     onClickSettings: () -> Unit,
@@ -65,7 +66,7 @@ fun BoxScope.ReaderAppBars(
             if (showSeekBar && totalPages > 1) {
                 ChapterNavigator(
                     isRtl = isRtl,
-                    currentPage = currentPage,
+                    slider = slider,
                     totalPages = totalPages,
                     onSliderValueChange = onSliderValueChange,
                     containerColor = backgroundColor,

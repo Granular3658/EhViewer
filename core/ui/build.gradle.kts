@@ -7,6 +7,7 @@ kotlin {
         commonMain {
             dependencies {
                 api(projects.core.common)
+                api(projects.core.data)
                 api(libs.compose.material3)
                 api(libs.compose.material.icons.extended)
                 api(libs.compose.material3.adaptive)
