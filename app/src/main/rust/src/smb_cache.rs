@@ -73,12 +73,11 @@ fn touch(lru: &mut Vec<u64>, id: u64) {
 fn evict() {
     let mut guard = cache().lock().unwrap();
     while guard.total > MAX_BYTES {
-        let victim = guard.lru.iter().copied().find(|&id| {
-            guard
-                .by_id
-                .get(&id)
-                .is_some_and(|e| e.pins == 0)
-        });
+        let victim = guard
+            .lru
+            .iter()
+            .copied()
+            .find(|&id| guard.by_id.get(&id).is_some_and(|e| e.pins == 0));
         let Some(id) = victim else { break };
         if let Some(entry) = guard.by_id.remove(&id) {
             guard.by_key.remove(&entry.key);
@@ -126,7 +125,10 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
                 entry.pins += 1;
             }
             touch(&mut guard.lru, id);
-            let entry = guard.by_id.get(&id).ok_or_else(|| anyhow!("lost cache entry"))?;
+            let entry = guard
+                .by_id
+                .get(&id)
+                .ok_or_else(|| anyhow!("lost cache entry"))?;
             let fd = dup_fd(&entry.mem)?;
             return Ok((fd, size, id));
         }
@@ -152,8 +154,7 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
         if ptr == libc::MAP_FAILED {
             return Err(anyhow!("mmap ashmem region failed"));
         }
-        let slice =
-            unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, size as usize) };
+        let slice = unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, size as usize) };
         let mut offset: u64 = 0;
         let chunk = 1024 * 1024u64;
         while offset < size {
@@ -203,7 +204,10 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
     evict();
 
     let guard = cache().lock().unwrap();
-    let entry = guard.by_id.get(&id).ok_or_else(|| anyhow!("lost cache entry"))?;
+    let entry = guard
+        .by_id
+        .get(&id)
+        .ok_or_else(|| anyhow!("lost cache entry"))?;
     let mem_ref: &SharedMemory = &entry.mem;
     let fd = dup_fd(mem_ref)?;
     Ok((fd, size, id))

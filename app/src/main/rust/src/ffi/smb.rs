@@ -308,7 +308,8 @@ pub fn smbOpenAshmem(
     let mut out = [-1i64, 0, 0];
     #[cfg(feature = "android-26")]
     {
-        if let Ok(target) = read_target(&mut env, &host, port, &share, &sub, &user, &pass, &domain) {
+        if let Ok(target) = read_target(&mut env, &host, port, &share, &sub, &user, &pass, &domain)
+        {
             if let Ok((fd, size, key)) = crate::smb_cache::open_ashmem(&target) {
                 out = [fd as i64, size as i64, key as i64];
             }
