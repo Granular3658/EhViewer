@@ -124,10 +124,11 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
         if let Some(&id) = guard.by_key.get(&key) {
             if let Some(entry) = guard.by_id.get_mut(&id) {
                 entry.pins += 1;
-                touch(&mut guard.lru, id);
-                let fd = dup_fd(&entry.mem)?;
-                return Ok((fd, size, id));
             }
+            touch(&mut guard.lru, id);
+            let entry = guard.by_id.get(&id).ok_or_else(|| anyhow!("lost cache entry"))?;
+            let fd = dup_fd(&entry.mem)?;
+            return Ok((fd, size, id));
         }
     }
 
@@ -195,8 +196,8 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
     // reference: bump the pin so the LRU cannot evict it under us.
     if let Some(entry) = guard.by_id.get_mut(&id) {
         entry.pins += 1;
-        touch(&mut guard.lru, id);
     }
+    touch(&mut guard.lru, id);
     drop(guard);
 
     evict();
