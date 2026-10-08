@@ -167,7 +167,7 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
             offset += bytes.len() as u64;
         }
         unsafe { munmap(ptr, size as libc::size_t) };
-        mem.set_prot(PROT_READ as i32)?;
+        mem.set_prot(PROT_READ)?;
         Ok(mem)
     })();
     // The remote handle must be closed regardless of success or failure.

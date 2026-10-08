@@ -309,10 +309,9 @@ pub fn smbOpenAshmem(
     #[cfg(feature = "android-26")]
     {
         if let Ok(target) = read_target(&mut env, &host, port, &share, &sub, &user, &pass, &domain)
+            && let Ok((fd, size, key)) = crate::smb_cache::open_ashmem(&target)
         {
-            if let Ok((fd, size, key)) = crate::smb_cache::open_ashmem(&target) {
-                out = [fd as i64, size as i64, key as i64];
-            }
+            out = [fd as i64, size as i64, key as i64];
         }
     }
     let _ = env.set_long_array_region(&array, 0, &out);
