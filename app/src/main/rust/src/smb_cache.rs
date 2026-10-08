@@ -61,11 +61,11 @@ fn cache() -> &'static Mutex<Cache> {
 /// history of pages you have already scrolled past.
 const MAX_BYTES: u64 = 256 * 1024 * 1024;
 
-fn touch(cache: &mut Cache, id: u64) {
-    if let Some(pos) = cache.lru.iter().position(|&x| x == id) {
-        cache.lru.remove(pos);
+fn touch(lru: &mut Vec<u64>, id: u64) {
+    if let Some(pos) = lru.iter().position(|&x| x == id) {
+        lru.remove(pos);
     }
-    cache.lru.push(id);
+    lru.push(id);
 }
 
 /// Evict the oldest entries whose `pins == 0` until `total` is within `MAX_BYTES`.
@@ -124,7 +124,7 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
         if let Some(&id) = guard.by_key.get(&key) {
             if let Some(entry) = guard.by_id.get_mut(&id) {
                 entry.pins += 1;
-                touch(&mut guard, id);
+                touch(&mut guard.lru, id);
                 let fd = dup_fd(&entry.mem)?;
                 return Ok((fd, size, id));
             }
@@ -195,7 +195,7 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
     // reference: bump the pin so the LRU cannot evict it under us.
     if let Some(entry) = guard.by_id.get_mut(&id) {
         entry.pins += 1;
-        touch(&mut guard, id);
+        touch(&mut guard.lru, id);
     }
     drop(guard);
 
