@@ -3,7 +3,6 @@ package com.hippo.ehviewer.coil
 import coil3.ImageLoader
 import coil3.asImage
 import coil3.decode.ByteBufferMetadata
-import coil3.decode.ContentMetadata
 import coil3.decode.DecodeResult
 import coil3.decode.DecodeUtils
 import coil3.decode.Decoder
@@ -36,13 +35,40 @@ private fun ImageSource.toByteBufferOrNull(): ByteBuffer? {
     if (fileSystem === FileSystem.SYSTEM) {
         val file = fileOrNull()
         if (file != null) {
-            return file.toFile().inputStream().mapReadOnly()
+            return runCatching {
+                file.toFile().inputStream().mapReadOnly()
+            }.getOrElse {
+                file.toFile().inputStream().readDirectBuffer()
+            }
         }
     }
     return when (val metadata = metadata) {
-        is ContentMetadata -> metadata.assetFileDescriptor.createInputStream().mapReadOnly()
-        is ByteBufferMetadata -> metadata.byteBuffer
-        else -> null
+        // Reuse Coil's already-open source. ContentProvider-backed sources can
+        // be pipes, so opening ContentMetadata's file descriptor a second time
+        // races the first reader and can produce a truncated WebP.
+        is ByteBufferMetadata -> metadata.byteBuffer.toDirectBuffer()
+        else -> source().readByteArray().toDirectBuffer()
+    }
+}
+
+private fun ByteArray.toDirectBuffer(): ByteBuffer = ByteBuffer.allocateDirect(size).apply {
+    put(this@toDirectBuffer)
+    flip()
+}
+
+private fun ByteBuffer.toDirectBuffer(): ByteBuffer = duplicate().let { source ->
+    ByteBuffer.allocateDirect(source.remaining()).apply {
+        put(source)
+        flip()
+    }
+}
+
+private fun java.io.InputStream.readDirectBuffer(): ByteBuffer = use {
+    readBytes().let { bytes ->
+        ByteBuffer.allocateDirect(bytes.size).apply {
+            put(bytes)
+            flip()
+        }
     }
 }
 

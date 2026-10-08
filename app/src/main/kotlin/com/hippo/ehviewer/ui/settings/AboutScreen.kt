@@ -29,7 +29,7 @@ import com.hippo.ehviewer.BuildConfig
 import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.asMutableState
-import com.hippo.ehviewer.download.downloadLocation
+import com.hippo.ehviewer.download.defaultDownloadLocation
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.destinations.LicenseScreenDestination
 import com.hippo.ehviewer.ui.main.NavigationIcon
@@ -140,7 +140,7 @@ suspend fun showNewVersion(release: Release) {
     }
     if (Settings.backupBeforeUpdate.value) {
         val time = ReadableTime.getFilenamableTime()
-        EhDB.exportDB(downloadLocation / "$time.db")
+        EhDB.exportDB(defaultDownloadLocation / "$time.db")
     }
     // TODO: Download in the background and show progress in notification
     val path = AppConfig.tempDir / "update.apk"

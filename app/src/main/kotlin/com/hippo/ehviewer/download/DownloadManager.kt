@@ -35,6 +35,7 @@ import com.ehviewer.core.database.model.DownloadInfo
 import com.ehviewer.core.database.model.DownloadLabel
 import com.ehviewer.core.files.delete
 import com.ehviewer.core.files.find
+import com.ehviewer.core.files.isDirectory
 import com.ehviewer.core.files.toOkioPath
 import com.ehviewer.core.files.toUri
 import com.ehviewer.core.model.BaseGalleryInfo
@@ -57,6 +58,7 @@ import com.hippo.ehviewer.spider.toSimpleTags
 import com.hippo.ehviewer.util.AppConfig
 import com.hippo.ehviewer.util.insertWith
 import com.hippo.ehviewer.util.runAssertingNotMainThread
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -389,6 +391,8 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
                 info.downloadDir?.delete()
                 info.tempDownloadDir?.delete()
                 EhDB.removeDownloadDirname(info.gid)
+                // The directory just got removed, drop its cached resolution
+                info.dirname?.let { downloadDirCache.remove(it) }
             }
         }
     }
@@ -839,6 +843,73 @@ var downloadLocation: Path
         }
     }
 
-val DownloadInfo.downloadDir get() = dirname?.let { downloadLocation / it }
+private val locationPathCache = ConcurrentHashMap<Set<String>, List<Path>>()
+private val downloadDirCache = ConcurrentHashMap<String, Path>()
+
+/**
+ * Must be called whenever the configured locations change or a download
+ * directory is created/removed, as both invalidate the cached resolutions.
+ */
+fun invalidateDownloadLocationCache() {
+    locationPathCache.clear()
+    downloadDirCache.clear()
+}
+
+/**
+ * The directory new downloads are written to. Equals the user-selected default
+ * location, or the first configured location, or the legacy single location.
+ * Never throws: a corrupted stored URI falls back to the legacy location.
+ */
+val defaultDownloadLocation: Path
+    get() = with(Settings) {
+        val set = downloadLocations.value
+        val chosen = defaultDownloadLocationUri.value
+        when {
+            chosen != null && chosen in set -> runCatching { Uri.parse(chosen).toOkioPath() }
+                .getOrNull()
+            set.isNotEmpty() -> set.asSequence().sorted().mapNotNull { uriStr ->
+                runCatching { Uri.parse(uriStr).toOkioPath() }.getOrNull()
+            }.firstOrNull()
+            else -> null
+        }
+    } ?: downloadLocation
+
+/**
+ * All configured download directories, in a deterministic (sorted) order.
+ * Falls back to the legacy single [downloadLocation] when no multi-location
+ * set has been configured yet. Results are cached per configured URI set.
+ */
+val allDownloadLocations: List<Path>
+    get() {
+        val set = Settings.downloadLocations.value
+        locationPathCache[set]?.let { return it }
+        val paths = if (set.isEmpty()) {
+            downloadLocation.takeIf { it.toString().isNotEmpty() }?.let { listOf(it) } ?: emptyList()
+        } else {
+            set.mapNotNull { uriStr -> runCatching { Uri.parse(uriStr).toOkioPath() }.getOrNull() }
+                .sortedBy { it.toString() }
+        }
+        locationPathCache[set] = paths
+        return paths
+    }
+
+/** Locations that can receive new downloads, including writable SMB shares. */
+val writableDownloadLocations: List<Path>
+    get() = allDownloadLocations
+
+/**
+ * Resolved per-dirname and cached: the naive version performed a filesystem
+ * stat per list item per recomposition, on the main thread.
+ */
+val DownloadInfo.downloadDir: Path?
+    get() = dirname?.let { name ->
+        downloadDirCache[name] ?: run {
+            val resolved = writableDownloadLocations
+                .firstNotNullOfOrNull { loc -> (loc / name).takeIf { it.isDirectory } }
+                ?: (defaultDownloadLocation / name)
+            downloadDirCache[name] = resolved
+            resolved
+        }
+    }
 val DownloadInfo.archiveFile get() = downloadDir?.run { find("$gid.cbz") ?: find("$gid.zip") }
 val GalleryInfo.tempDownloadDir get() = AppConfig.externalTempPersistDir?.let { it / "$gid" }

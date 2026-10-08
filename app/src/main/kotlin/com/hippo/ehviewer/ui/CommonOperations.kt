@@ -39,6 +39,7 @@ import com.ehviewer.core.database.model.DownloadInfo
 import com.ehviewer.core.files.delete
 import com.ehviewer.core.files.exists
 import com.ehviewer.core.files.isDirectory
+import com.ehviewer.core.files.isSmb
 import com.ehviewer.core.files.write
 import com.ehviewer.core.i18n.R
 import com.ehviewer.core.model.BaseGalleryInfo
@@ -58,8 +59,8 @@ import com.hippo.ehviewer.client.EhUtils
 import com.hippo.ehviewer.client.exception.EhException
 import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.download.DownloadService
+import com.hippo.ehviewer.download.allDownloadLocations
 import com.hippo.ehviewer.download.downloadDir
-import com.hippo.ehviewer.download.downloadLocation
 import com.hippo.ehviewer.download.tempDownloadDir
 import com.hippo.ehviewer.ui.destinations.ReaderScreenDestination
 import com.hippo.ehviewer.ui.reader.ReaderScreenArgs
@@ -100,13 +101,15 @@ private fun ensureNoMediaFile(downloadDir: Path) {
 
 private val lck = Mutex()
 
-suspend fun keepNoMediaFileStatus(downloadDir: Path = downloadLocation, mediaScan: Boolean = Settings.mediaScan.value) {
-    if (downloadDir.isDirectory) {
+suspend fun keepNoMediaFileStatus(downloadDir: Path, mediaScan: Boolean = Settings.mediaScan.value) = keepNoMediaFileStatus(listOf(downloadDir), mediaScan)
+
+suspend fun keepNoMediaFileStatus(downloadDirs: List<Path> = allDownloadLocations, mediaScan: Boolean = Settings.mediaScan.value) {
+    downloadDirs.filter { !it.isSmb && it.isDirectory }.forEach { dir ->
         lck.withLock {
             if (mediaScan) {
-                removeNoMediaFile(downloadDir)
+                removeNoMediaFile(dir)
             } else {
-                ensureNoMediaFile(downloadDir)
+                ensureNoMediaFile(dir)
             }
         }
     }

@@ -101,6 +101,17 @@ object Settings : DataStorePreferences(null) {
     val saveAsCbz = boolPref("save_as_cbz", false)
     val archiveMetadata = boolPref("archive_metadata", true)
 
+    // Multiple download locations. The "_2" suffix distinguishes this multi-location
+    // set from the pre-existing single-location prefs (downloadScheme/Path/...).
+    val downloadLocations = stringSetPref("download_locations_2", emptySet())
+
+    // SMB locations are a subset of downloadLocations; credentials are stored
+    // separately and encrypted by SmbCredentialStore.
+    val smbLocations = stringSetPref("smb_locations", emptySet())
+    val smbCredentials = stringPref("smb_credentials_v1", "{}")
+    val defaultDownloadLocationUri = stringOrNullPref("default_download_location")
+    val showDownloadSource = boolPref("show_download_source", false)
+
     // Privacy
     val security = boolPref("require_unlock", false)
     val securityDelay = intPref("require_unlock_delay", 0)

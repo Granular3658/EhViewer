@@ -5,12 +5,16 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
 import android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -18,10 +22,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -33,6 +40,7 @@ import com.ehviewer.core.database.model.DownloadInfo
 import com.ehviewer.core.files.delete
 import com.ehviewer.core.files.find
 import com.ehviewer.core.files.isDirectory
+import com.ehviewer.core.files.isSmb
 import com.ehviewer.core.files.list
 import com.ehviewer.core.files.metadataOrNull
 import com.ehviewer.core.files.mkdirs
@@ -52,9 +60,15 @@ import com.hippo.ehviewer.client.EhEngine.fillGalleryListByApi
 import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.parser.GalleryDetailUrlParser
 import com.hippo.ehviewer.client.parser.ParserUtils
+import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.download.DownloadManager
+import com.hippo.ehviewer.download.allDownloadLocations
 import com.hippo.ehviewer.download.downloadDir
 import com.hippo.ehviewer.download.downloadLocation
+import com.hippo.ehviewer.download.invalidateDownloadLocationCache
+import com.hippo.ehviewer.smb.SmbCredentialStore
+import com.hippo.ehviewer.smb.SmbLocation
+import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.spider.COMIC_INFO_FILE
 import com.hippo.ehviewer.spider.MIN_SPEED_LEVEL
 import com.hippo.ehviewer.spider.SpiderDen
@@ -98,30 +112,62 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
         },
     ) { paddingValues ->
         Column(modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection).verticalScroll(rememberScrollState()).padding(paddingValues)) {
-            var downloadLocationState by ::downloadLocation.observed
+            val downloadLocationsState by Settings.downloadLocations.collectAsState()
+            val smbLocationsState by Settings.smbLocations.collectAsState()
+            val defaultLocationUri by Settings.defaultDownloadLocationUri.collectAsState()
+            var showSmbDialog by remember { mutableStateOf(false) }
             val cannotGetDownloadLocation = stringResource(id = R.string.settings_download_cant_get_download_location)
-            val selectDownloadDirLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
-                treeUri?.run {
-                    launchIO {
-                        contextOf<Context>().contentResolver.runCatching {
-                            persistedUriPermissions.forEach {
-                                releasePersistableUriPermission(it.uri, URI_FLAGS)
-                            }
-                            takePersistableUriPermission(treeUri, URI_FLAGS)
-                            val path = DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri)).toOkioPath()
-                            check(path.isDirectory) { "$path is not a directory" }
-                            keepNoMediaFileStatus(path) // Check if the directory is writable
-                            downloadLocationState = path
-                        }.onFailure {
-                            logcat(it)
-                            launchSnackbar(cannotGetDownloadLocation)
-                        }
+            val defaultDownloadDirLabel = stringResource(id = R.string.settings_download_default_location)
+            val extraLocationsLabel = stringResource(id = R.string.settings_download_extra_locations)
+            val addLocationLabel = stringResource(id = R.string.settings_download_add_location)
+            val removeLocationLabel = stringResource(id = R.string.settings_download_remove_location)
+            val setDefaultLabel = stringResource(id = R.string.settings_download_set_default)
+            val alreadyAddedLabel = stringResource(id = R.string.settings_download_location_already_added)
+            val cannotRemoveDefaultLabel = stringResource(id = R.string.settings_download_cannot_remove_default)
+
+            suspend fun onLocationPicked(treeUri: Uri, setAsDefault: Boolean) {
+                contextOf<Context>().contentResolver.runCatching {
+                    // Only take the new permission. Releasing the existing ones here would
+                    // revoke access to every other configured location: permissions are
+                    // released explicitly when a location is removed instead.
+                    takePersistableUriPermission(treeUri, URI_FLAGS)
+                    val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+                    val path = docUri.toOkioPath()
+                    check(path.isDirectory) { "$path is not a directory" }
+                    keepNoMediaFileStatus(path)
+                    val current = Settings.downloadLocations.value
+                    // Different tree URIs can resolve to the same directory
+                    if (current.any { runCatching { Uri.parse(it).toOkioPath() }.getOrNull() == path }) {
+                        launchSnackbar(alreadyAddedLabel)
+                        return@runCatching
                     }
+                    val uriStr = docUri.toString()
+                    Settings.downloadLocations.value = current + uriStr
+                    // The first location (or an explicit pick) becomes the default, so the
+                    // default never depends on the iteration order of the underlying Set
+                    if (setAsDefault || Settings.defaultDownloadLocationUri.value == null) {
+                        Settings.defaultDownloadLocationUri.value = uriStr
+                        downloadLocation = path
+                    }
+                    invalidateDownloadLocationCache()
+                }.onFailure {
+                    logcat(it)
+                    launchSnackbar(cannotGetDownloadLocation)
                 }
             }
+
+            val defaultDirLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
+                treeUri?.let { launchIO { onLocationPicked(it, true) } }
+            }
+            val extraDirLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
+                treeUri?.let { launchIO { onLocationPicked(it, false) } }
+            }
+
+            val defaultSummary = defaultLocationUri?.let { Uri.parse(it).displayPath }
+                ?: downloadLocation.toUri().displayPath
             Preference(
-                title = stringResource(id = R.string.settings_download_download_location),
-                summary = downloadLocationState.toUri().displayPath,
+                title = defaultDownloadDirLabel,
+                summary = defaultSummary,
             ) {
                 launchIO {
                     val defaultDownloadDir = AppConfig.defaultDownloadDir
@@ -129,20 +175,23 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                         val path = defaultDownloadDir.toOkioPath()
                         awaitConfirmationOrCancel(
                             confirmText = R.string.pick_new_download_location,
-                            dismissText = if (downloadLocationState != path) {
+                            dismissText = if (downloadLocation != path) {
                                 R.string.reset_download_location
                             } else {
                                 android.R.string.cancel
                             },
                             title = R.string.waring,
                             onCancelButtonClick = {
-                                if (downloadLocationState != path) {
+                                // Resetting only makes sense for the legacy single location.
+                                // With locations configured it would revoke every granted
+                                // permission without changing anything effective.
+                                if (downloadLocationsState.isEmpty() && downloadLocation != path) {
                                     contextOf<Context>().contentResolver.run {
                                         persistedUriPermissions.forEach {
                                             releasePersistableUriPermission(it.uri, URI_FLAGS)
                                         }
                                     }
-                                    downloadLocationState = path
+                                    downloadLocation = path
                                 }
                             },
                         ) {
@@ -150,7 +199,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                         }
                     }
                     try {
-                        selectDownloadDirLauncher.launch(null)
+                        defaultDirLauncher.launch(null)
                     } catch (_: ActivityNotFoundException) {
                         // Best effort for devices without DocumentsUI
                         if (!isAtLeastQ && requestPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
@@ -158,8 +207,12 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                                 val path = Environment.getExternalStorageDirectory().toOkioPath() / AppConfig.APP_DIRNAME
                                 path.mkdirs()
                                 check(path.isDirectory) { "$path is not a directory" }
-                                keepNoMediaFileStatus(path) // Check if the directory is writable
-                                downloadLocationState = path
+                                keepNoMediaFileStatus(path)
+                                val uriStr = path.toUri().toString()
+                                Settings.downloadLocations.value = Settings.downloadLocations.value + uriStr
+                                Settings.defaultDownloadLocationUri.value = uriStr
+                                downloadLocation = path
+                                invalidateDownloadLocationCache()
                                 return@launchIO
                             }.onFailure {
                                 logcat(it)
@@ -168,6 +221,105 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                         launchSnackbar(cannotGetDownloadLocation)
                     }
                 }
+            }
+
+            val showSource = Settings.showDownloadSource.asMutableState()
+            SwitchPreference(
+                title = stringResource(id = R.string.settings_download_show_source),
+                summary = stringResource(id = R.string.settings_download_show_source_summary),
+                state = showSource,
+            )
+
+            if (downloadLocationsState.isNotEmpty()) {
+                Preference(title = extraLocationsLabel) {}
+                downloadLocationsState.forEach { uriStr ->
+                    val isSmb = uriStr in smbLocationsState
+                    // SMB shares are writable now, so they can be picked as the default too
+                    val isDefault = uriStr == defaultLocationUri
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = if (isSmb) uriStr else Uri.parse(uriStr).displayPath ?: "",
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (isDefault) {
+                            Text(
+                                text = stringResource(id = R.string.settings_download_set_default_done),
+                                modifier = Modifier.padding(end = 8.dp),
+                            )
+                        } else {
+                            TextButton(
+                                onClick = {
+                                    launchIO {
+                                        Settings.defaultDownloadLocationUri.value = uriStr
+                                        invalidateDownloadLocationCache()
+                                    }
+                                },
+                            ) {
+                                Text(setDefaultLabel)
+                            }
+                        }
+                        // The last remaining location anchors the whole set and has no
+                        // remove button: dropping it would leave no configured location and
+                        // silently fall back to the legacy single one, which then disappears
+                        // again as soon as a new location is added. Any other location can go,
+                        // including the default one, which re-points the default elsewhere.
+                        if (downloadLocationsState.size > 1) {
+                            TextButton(
+                                onClick = {
+                                    launchIO {
+                                        if (Settings.downloadLocations.value.size <= 1) {
+                                            launchSnackbar(cannotRemoveDefaultLabel)
+                                        } else {
+                                            val remaining = Settings.downloadLocations.value - uriStr
+                                            Settings.downloadLocations.value = remaining
+                                            if (defaultLocationUri == uriStr) {
+                                                Settings.defaultDownloadLocationUri.value = remaining.minOrNull()
+                                            }
+                                            if (isSmb) {
+                                                Settings.smbLocations.value = Settings.smbLocations.value - uriStr
+                                                SmbLocation.parse(uriStr)?.let(SmbCredentialStore::remove)
+                                            } else {
+                                                // Only the removed local location loses its permission
+                                                runCatching { contextOf<Context>().contentResolver.releasePersistableUriPermission(Uri.parse(uriStr), URI_FLAGS) }
+                                            }
+                                            invalidateDownloadLocationCache()
+                                        }
+                                    }
+                                },
+                            ) {
+                                Text(removeLocationLabel)
+                            }
+                        }
+                    }
+                }
+            }
+            // Keep this outside the block above so a location can always be added back,
+            // even after the last one has been removed
+            Preference(title = addLocationLabel) {
+                extraDirLauncher.launch(null)
+            }
+            Preference(title = stringResource(R.string.settings_download_add_smb_location)) {
+                showSmbDialog = true
+            }
+            if (showSmbDialog) {
+                SmbLocationDialog(
+                    onDismiss = { showSmbDialog = false },
+                    showMessage = ::launchSnackbar,
+                    onSaved = { location ->
+                        val uriStr = location.uriString
+                        if (uriStr in Settings.downloadLocations.value) {
+                            launchSnackbar(string(R.string.settings_download_location_already_added))
+                        } else {
+                            Settings.downloadLocations.value = Settings.downloadLocations.value + uriStr
+                            Settings.smbLocations.value = Settings.smbLocations.value + uriStr
+                            invalidateDownloadLocationCache()
+                            showSmbDialog = false
+                        }
+                    },
+                )
             }
             val mediaScan = Settings.mediaScan.asMutableState()
             SwitchPreference(
@@ -281,7 +433,24 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     }.getOrNull()
                 }
                 runSuspendCatching {
-                    val result = downloadLocation.list().parMapNotNull { getRestoreItem(it) }.also {
+                    // SMB locations are listed through the client directly: one
+                    // round trip already tells which entries are directories,
+                    // and an unreachable share must not abort the local scan.
+                    val candidates = allDownloadLocations.flatMap { location ->
+                        val smb = SmbLocation.parse(location)
+                        if (smb != null) {
+                            runCatching { SmbRepository.list(smb) }
+                                .onFailure { logcat(it) }
+                                .getOrDefault(emptyList())
+                                .filter { it.isDirectory }
+                                .map { location / it.name }
+                        } else {
+                            runCatching { location.list() }
+                                .onFailure { logcat(it) }
+                                .getOrDefault(emptyList())
+                        }
+                    }
+                    val result = candidates.parMapNotNull { getRestoreItem(it) }.also {
                         fillGalleryListByApi(it, EhUrl.referer)
                     }
                     if (result.isEmpty()) {
@@ -298,7 +467,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     }
                 }.onFailure {
                     logcat(it)
-                    launchSnackbar(restoreFailed)
+                    launchSnackbar("$restoreFailed: ${it.displayString()}")
                 }
             }
             WorkPreference(
@@ -311,7 +480,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     val gid = name.substringBefore('-').toLongOrNull() ?: return false
                     return name != DownloadManager.getDownloadInfo(gid)?.dirname
                 }
-                val list = downloadLocation.list().filter(::isRedundant)
+                val list = allDownloadLocations.filterNot { it.isSmb }.flatMap { it.list() }.filter(::isRedundant)
                 if (list.isNotEmpty()) {
                     awaitConfirmationOrCancel(
                         confirmText = R.string.delete,

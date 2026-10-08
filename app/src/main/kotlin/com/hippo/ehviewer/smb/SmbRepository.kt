@@ -1,0 +1,153 @@
+package com.hippo.ehviewer.smb
+
+import com.hippo.ehviewer.jni.smbClose
+import com.hippo.ehviewer.jni.smbCreate
+import com.hippo.ehviewer.jni.smbDelete
+import com.hippo.ehviewer.jni.smbInvalidate
+import com.hippo.ehviewer.jni.smbList
+import com.hippo.ehviewer.jni.smbMkdir
+import com.hippo.ehviewer.jni.smbOpen
+import com.hippo.ehviewer.jni.smbRead
+import com.hippo.ehviewer.jni.smbRename
+import com.hippo.ehviewer.jni.smbStat
+import com.hippo.ehviewer.jni.smbTest
+import com.hippo.ehviewer.jni.smbWrite
+import com.hippo.ehviewer.jni.smbWriteClose
+import java.nio.ByteBuffer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+/** Kotlin boundary for the Rust SMB client. All calls are blocking JNI calls. */
+object SmbRepository {
+    data class Entry(val name: String, val isDirectory: Boolean, val size: Long)
+    data class Stat(val isDirectory: Boolean, val size: Long, val modifiedMillis: Long)
+
+    private fun credentials(location: SmbLocation): SmbCredentials = SmbCredentialStore.get(location) ?: SmbCredentials("", "", "")
+
+    private inline fun <T> withTarget(location: SmbLocation, block: (SmbCredentials) -> T): T = block(credentials(location))
+
+    suspend fun test(location: SmbLocation, credentials: SmbCredentials): List<Entry> = withContext(Dispatchers.IO) {
+        val raw = smbList(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain)
+        parseEntries(raw)
+    }
+
+    suspend fun list(location: SmbLocation): List<Entry> = withContext(Dispatchers.IO) {
+        withTarget(location) { credentials ->
+            parseEntries(smbList(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain))
+        }
+    }
+
+    suspend fun stat(location: SmbLocation): Stat = withContext(Dispatchers.IO) {
+        withTarget(location) { credentials ->
+            val raw = smbStat(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain)
+            require(raw.size >= 3) { "Invalid SMB stat result" }
+            Stat(raw[0] != 0L, raw[1], raw[2])
+        }
+    }
+
+    /** Opens a remote file for the ContentProvider and returns an opaque handle + size. */
+    suspend fun open(location: SmbLocation): SmbHandle = withContext(Dispatchers.IO) {
+        withTarget(location) { credentials ->
+            val raw = smbOpen(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain)
+            require(raw.size >= 2) { "Invalid SMB open result" }
+            SmbHandle(raw[0], raw[1])
+        }
+    }
+
+    fun read(handle: Long, buffer: ByteBuffer, fileOffset: Long, bufferOffset: Int, length: Int): Int = smbRead(handle, buffer, fileOffset, bufferOffset, length)
+
+    /** Creates (truncating) the remote file and returns an opaque write handle. */
+    suspend fun create(location: SmbLocation): SmbWriteHandle = withContext(Dispatchers.IO) {
+        withTarget(location) { credentials ->
+            val handle = smbCreate(
+                location.host,
+                location.port,
+                location.share,
+                location.subPath,
+                credentials.user,
+                credentials.password,
+                credentials.domain,
+            )
+            SmbWriteHandle(handle)
+        }
+    }
+
+    /** Writes the bytes to the writer opened by [create]. */
+    fun write(handle: Long, data: ByteArray) {
+        val buf = ByteBuffer.allocateDirect(data.size)
+        buf.put(data)
+        buf.flip()
+        smbWrite(handle, buf, data.size)
+    }
+
+    /** Flushes and closes the writer, returning the total bytes written. */
+    fun writeClose(handle: Long): Long = smbWriteClose(handle)
+
+    fun close(handle: Long) = smbClose(handle)
+
+    /** Creates a directory on the share. */
+    suspend fun mkdir(location: SmbLocation): Unit = withContext(Dispatchers.IO) {
+        withTarget(location) { credentials ->
+            smbMkdir(
+                location.host,
+                location.port,
+                location.share,
+                location.subPath,
+                credentials.user,
+                credentials.password,
+                credentials.domain,
+            )
+        }
+    }
+
+    /** Deletes a file or (empty) directory on the share. */
+    suspend fun delete(location: SmbLocation): Unit = withContext(Dispatchers.IO) {
+        withTarget(location) { credentials ->
+            smbDelete(
+                location.host,
+                location.port,
+                location.share,
+                location.subPath,
+                credentials.user,
+                credentials.password,
+                credentials.domain,
+            )
+        }
+    }
+
+    /** Renames `from` to `to` within the same share. */
+    suspend fun rename(from: SmbLocation, to: SmbLocation): Unit = withContext(Dispatchers.IO) {
+        val credentials = credentials(from)
+        smbRename(
+            from.host,
+            from.port,
+            from.share,
+            from.subPath,
+            credentials.user,
+            credentials.password,
+            credentials.domain,
+            to.subPath,
+        )
+    }
+
+    fun invalidateSessions() = smbInvalidate()
+
+    private fun parseEntries(raw: Array<String>): List<Entry> = raw.mapNotNull { encoded ->
+        // Wire format from the Rust marshaller: "<flag>:<len>:<name>", where flag
+        // is '1' for a directory / '0' for a file and len is the UTF-8 BYTE length
+        // of the name. Splitting on the first two colons keeps names that contain
+        // ':' (or start with digits) intact; the length is validated against the
+        // re-encoded name so a corrupt payload is dropped rather than mis-parsed.
+        val parts = encoded.split(':', limit = 3)
+        if (parts.size != 3) return@mapNotNull null
+        val (flag, lenPart, name) = parts
+        if (flag !in listOf("0", "1")) return@mapNotNull null
+        val length = lenPart.toIntOrNull() ?: return@mapNotNull null
+        if (name.encodeToByteArray().size != length) return@mapNotNull null
+        Entry(name, flag == "1", 0L)
+    }
+}
+
+data class SmbHandle(val value: Long, val size: Long)
+
+data class SmbWriteHandle(val value: Long)
