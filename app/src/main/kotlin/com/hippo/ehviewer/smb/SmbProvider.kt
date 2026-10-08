@@ -99,9 +99,26 @@ class SmbProvider : ContentProvider() {
     }
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
-        val (readSide, writeSide) = ParcelFileDescriptor.createPipe()
         val location = location(uri)
         if (mode == "r" || mode == "rt") {
+            // Prefer the in-memory (ashmem) cache: it yields a real, mmap-able
+            // file descriptor, so the decode layer avoids both the one-shot pipe
+            // (which cannot be mmap'd) and per-image direct buffers (which used to
+            // OOM). Falls back to the pipe below when unsupported or on failure.
+            val ashmem = runCatching { runBlocking { SmbRepository.openAshmem(location) } }.getOrNull()
+            if (ashmem != null) {
+                val base = ParcelFileDescriptor.adoptFd(ashmem.fd)
+                return object : ParcelFileDescriptor(base) {
+                    override fun close() {
+                        try {
+                            super.close()
+                        } finally {
+                            runCatching { SmbRepository.releaseAshmem(ashmem.key) }
+                        }
+                    }
+                }
+            }
+            val (readSide, writeSide) = ParcelFileDescriptor.createPipe()
             executor.execute {
                 var handle: SmbHandle? = null
                 try {

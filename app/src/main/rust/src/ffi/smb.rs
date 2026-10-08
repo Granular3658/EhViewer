@@ -284,3 +284,46 @@ pub fn smbRename(
         Ok(())
     })
 }
+
+/// Returns `[fd, size, key]` for an in-memory (ashmem) cache of the file, or
+/// `[-1, 0, 0]` when the platform/build cannot provide one (the caller falls
+/// back to the streaming pipe). The descriptor must be released with
+/// `smbReleaseAshmem(key)` once it is no longer needed.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbOpenAshmem(
+    mut env: JNIEnv,
+    _: JClass,
+    host: JString,
+    port: jint,
+    share: JString,
+    sub: JString,
+    user: JString,
+    pass: JString,
+    domain: JString,
+) -> jlongArray {
+    let array = match env.new_long_array(3) {
+        Ok(a) => a,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let mut out = [-1i64, 0, 0];
+    #[cfg(feature = "android-26")]
+    {
+        if let Ok(target) = read_target(&mut env, &host, port, &share, &sub, &user, &pass, &domain) {
+            if let Ok((fd, size, key)) = crate::smb_cache::open_ashmem(&target) {
+                out = [fd as i64, size as i64, key as i64];
+            }
+        }
+    }
+    let _ = env.set_long_array_region(&array, 0, &out);
+    array.into_raw()
+}
+
+/// Release a reference obtained from `smbOpenAshmem`.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbReleaseAshmem(mut env: JNIEnv, _: JClass, key: jlong) {
+    let _ = &mut env;
+    #[cfg(feature = "android-26")]
+    {
+        crate::smb_cache::release_ashmem(key as u64);
+    }
+}

@@ -111,3 +111,21 @@ external fun smbRename(
 )
 
 external fun smbInvalidate()
+
+/**
+ * Returns `[fd, size, key]` for an in-memory (ashmem) cache of the file, or
+ * `[-1, 0, 0]` if unsupported. The descriptor must be released with
+ * [smbReleaseAshmem] once consumed.
+ */
+external fun smbOpenAshmem(
+    host: String,
+    port: Int,
+    share: String,
+    sub: String,
+    user: String,
+    pass: String,
+    domain: String,
+): LongArray
+
+/** Release a reference obtained from [smbOpenAshmem]. */
+external fun smbReleaseAshmem(key: Long)

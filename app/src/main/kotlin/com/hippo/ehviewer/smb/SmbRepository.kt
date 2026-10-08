@@ -7,7 +7,9 @@ import com.hippo.ehviewer.jni.smbInvalidate
 import com.hippo.ehviewer.jni.smbList
 import com.hippo.ehviewer.jni.smbMkdir
 import com.hippo.ehviewer.jni.smbOpen
+import com.hippo.ehviewer.jni.smbOpenAshmem
 import com.hippo.ehviewer.jni.smbRead
+import com.hippo.ehviewer.jni.smbReleaseAshmem
 import com.hippo.ehviewer.jni.smbRename
 import com.hippo.ehviewer.jni.smbStat
 import com.hippo.ehviewer.jni.smbTest
@@ -53,6 +55,31 @@ object SmbRepository {
             SmbHandle(raw[0], raw[1])
         }
     }
+
+    /**
+     * Open a remote file through the in-memory (ashmem) cache, returning a real
+     * file descriptor that the decode layer can `mmap` like a local file. Returns
+     * `null` when the platform/build does not support it, so the caller can fall
+     * back to the streaming pipe. The returned [SmbAshmemHandle.key] must be
+     * passed to [releaseAshmem] once the descriptor is consumed.
+     */
+    suspend fun openAshmem(location: SmbLocation): SmbAshmemHandle? = withContext(Dispatchers.IO) {
+        withTarget(location) { credentials ->
+            val raw = smbOpenAshmem(
+                location.host,
+                location.port,
+                location.share,
+                location.subPath,
+                credentials.user,
+                credentials.password,
+                credentials.domain,
+            )
+            if (raw.size >= 3 && raw[0] >= 0) SmbAshmemHandle(raw[0].toInt(), raw[1], raw[2]) else null
+        }
+    }
+
+    /** Release a reference obtained from [openAshmem]. */
+    fun releaseAshmem(key: Long) = smbReleaseAshmem(key)
 
     fun read(handle: Long, buffer: ByteBuffer, fileOffset: Long, bufferOffset: Int, length: Int): Int = smbRead(handle, buffer, fileOffset, bufferOffset, length)
 
@@ -139,5 +166,7 @@ object SmbRepository {
 }
 
 data class SmbHandle(val value: Long, val size: Long)
+
+data class SmbAshmemHandle(val fd: Int, val size: Long, val key: Long)
 
 data class SmbWriteHandle(val value: Long)

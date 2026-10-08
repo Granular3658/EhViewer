@@ -70,6 +70,11 @@ class Image private constructor(image: CoilImage, private val src: ImageSource) 
 
     val intrinsicSize = with(image) { IntSize(width, height) }
     val allocationSize = image.size
+    // Extra bytes held alive for the page (e.g. the animated WebP source buffer
+    // that libwebp reads lazily). Counted by the page cache so it actually
+    // evicts pages instead of growing without bound.
+    var sourceBufferSize = 0L
+        private set
     val hasQrCode = when (image) {
         is BitmapImageWithExtraInfo -> image.hasQrCode
         else -> false
@@ -145,6 +150,9 @@ class Image private constructor(image: CoilImage, private val src: ImageSource) 
             }
             return Image(image, src).apply {
                 if (innerImage is BitmapImage) src.close()
+                (innerImage as? DrawableImage)?.drawable?.let { d ->
+                    if (d is AnimatedWebPDrawable) sourceBufferSize = d.sourceSize.toLong()
+                }
             }
         }
     }
