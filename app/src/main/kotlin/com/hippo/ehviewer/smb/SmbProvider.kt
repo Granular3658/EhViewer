@@ -151,6 +151,7 @@ class SmbProvider : ContentProvider() {
             }
             return readSide
         } else if (mode.contains('w', ignoreCase = true)) {
+            val (readSide, writeSide) = ParcelFileDescriptor.createPipe()
             // Write mode: the caller writes into `writeSide`; we drain `readSide`
             // on a worker thread and forward the bytes to the Rust SMB writer.
             // That forwarding is asynchronous, so a caller that closes the

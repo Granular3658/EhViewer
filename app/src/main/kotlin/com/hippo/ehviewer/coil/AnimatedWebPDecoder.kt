@@ -45,7 +45,7 @@ private fun ImageSource.toByteBufferOrNull(): ByteBuffer? {
         // file descriptor (SMB uses an in-memory ashmem region), so a zero-copy
         // mmap is always correct and OOM-safe. Pipes cannot be mmap'd and report
         // a zero length, which we reject so the caller can fall back.
-        is ContentMetadata -> metadata.assetFileDescriptor.createInputStream().channel.mapReadOnly()
+        is ContentMetadata -> metadata.assetFileDescriptor.createInputStream().mapReadOnly()
         is ByteBufferMetadata -> metadata.byteBuffer
         else -> null
     }

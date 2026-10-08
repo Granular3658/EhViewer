@@ -17,7 +17,7 @@
 
 use crate::smb::{self, Target};
 use anyhow::{Result, anyhow, ensure};
-use libc::{c_void, MAP_SHARED, PROT_READ, PROT_WRITE, mmap, munmap};
+use libc::{MAP_SHARED, PROT_READ, PROT_WRITE, mmap, munmap};
 use ndk::shared_memory::SharedMemory;
 use std::collections::HashMap;
 use std::os::unix::io::AsRawFd;
@@ -65,7 +65,7 @@ fn touch(cache: &mut Cache, id: u64) {
     if let Some(pos) = cache.lru.iter().position(|&x| x == id) {
         cache.lru.remove(pos);
     }
-    cache.lru.push_back(id);
+    cache.lru.push(id);
 }
 
 /// Evict the oldest entries whose `pins == 0` until `total` is within `MAX_BYTES`.
@@ -187,7 +187,7 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
             },
         );
         guard.by_key.insert(key.clone(), id);
-        guard.lru.push_back(id);
+        guard.lru.push(id);
         guard.total = guard.total.saturating_add(size);
         id
     };
@@ -203,7 +203,8 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
 
     let guard = cache().lock().unwrap();
     let entry = guard.by_id.get(&id).ok_or_else(|| anyhow!("lost cache entry"))?;
-    let fd = dup_fd(entry.mem)?;
+    let mem_ref: &SharedMemory = &entry.mem;
+    let fd = dup_fd(mem_ref)?;
     Ok((fd, size, id))
 }
 
