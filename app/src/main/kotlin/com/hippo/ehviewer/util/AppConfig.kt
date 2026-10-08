@@ -39,13 +39,11 @@ object AppConfig {
     private const val CRASH = "crash"
     private const val TAG_TRANSLATIONS = "tag-translations"
 
-    private val abi = Build.SUPPORTED_ABIS[0].takeIf {
-        it in setOf("arm64-v8a", "x86_64", "armeabi-v7a")
-    } ?: "universal"
+    private val abi = Build.SUPPORTED_ABIS[0].takeIf { it in ["arm64-v8a", "x86_64", "armeabi-v7a"] } ?: "universal"
 
     val isBenchmark = "nonMinified" in BuildConfig.BUILD_TYPE || "benchmark" in BuildConfig.BUILD_TYPE
 
-    fun matchVariant(name: String) = name.contains(BuildConfig.FLAVOR) && name.contains(abi)
+    fun matchVariant(name: String) = abi in name
 
     val commitTime = ParserUtils.formatDate(BuildConfig.COMMIT_TIME * 1000)
 

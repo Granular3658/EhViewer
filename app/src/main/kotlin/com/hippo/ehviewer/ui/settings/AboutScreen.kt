@@ -36,7 +36,7 @@ import com.hippo.ehviewer.ui.main.NavigationIcon
 import com.hippo.ehviewer.ui.tools.DialogState
 import com.hippo.ehviewer.ui.tools.awaitConfirmationOrCancel
 import com.hippo.ehviewer.updater.AppUpdater
-import com.hippo.ehviewer.updater.Release
+import com.hippo.ehviewer.updater.EhRelease
 import com.hippo.ehviewer.util.AppConfig
 import com.hippo.ehviewer.util.ReadableTime
 import com.hippo.ehviewer.util.displayString
@@ -49,7 +49,7 @@ import moe.tarsin.navigate
 import moe.tarsin.snackbar
 import moe.tarsin.string
 
-const val REPO_URL = BuildConfig.REPO_URL
+const val REPO_URL = "https://codeberg.org/${BuildConfig.REPO_NAME}"
 const val RELEASE_URL = "$REPO_URL/releases"
 
 @Composable
@@ -124,7 +124,7 @@ fun AnimatedVisibilityScope.AboutScreen(navigator: DestinationsNavigator) = Scre
 }
 
 context(_: Context, _: DialogState)
-suspend fun showNewVersion(release: Release) {
+suspend fun showNewVersion(release: EhRelease) {
     awaitConfirmationOrCancel(
         confirmText = R.string.download,
         title = R.string.new_version_available,

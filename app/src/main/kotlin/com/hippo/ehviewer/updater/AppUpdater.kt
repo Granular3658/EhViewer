@@ -6,12 +6,9 @@ import com.hippo.ehviewer.EhApplication.Companion.ktorClient
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.executeAndParseAs
 import com.hippo.ehviewer.spider.timeoutBySpeed
-import com.hippo.ehviewer.ui.settings.RELEASE_URL
-import com.hippo.ehviewer.ui.settings.REPO_URL
 import com.hippo.ehviewer.util.copyTo
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.accept
-import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
@@ -23,17 +20,18 @@ import kotlin.time.Instant
 import kotlinx.io.asSource
 import moe.tarsin.coroutines.runSuspendCatching
 import okio.Path
-import tachiyomi.data.release.GithubArtifacts
-import tachiyomi.data.release.GithubCommitComparison
-import tachiyomi.data.release.GithubRelease
-import tachiyomi.data.release.GithubRepo
-import tachiyomi.data.release.GithubWorkflowRuns
+import tachiyomi.data.release.Artifacts
+import tachiyomi.data.release.CommitComparison
+import tachiyomi.data.release.Release
+import tachiyomi.data.release.Repository
+import tachiyomi.data.release.WorkflowRuns
+import tachiyomi.data.release.downloadLink
 
-private const val API_URL = "$REPO_URL/actions/runs"
-const val LATEST_RELEASE_URL = "$RELEASE_URL/latest"
+const val API_URL = "https://codeberg.org/api/v1/repos/${BuildConfig.REPO_NAME}"
+const val LATEST_RELEASE_URL = "$API_URL/releases/latest"
 
 object AppUpdater {
-    suspend fun checkForUpdate(forceCheck: Boolean = false): Release? {
+    suspend fun checkForUpdate(forceCheck: Boolean = false): EhRelease? {
         val now = Clock.System.now()
         val last = Instant.fromEpochSeconds(Settings.lastUpdateTime)
         val interval = Settings.updateIntervalDays.value
@@ -41,31 +39,30 @@ object AppUpdater {
             Settings.lastUpdateTime = now.epochSeconds
             if (Settings.useCIUpdateChannel.value) {
                 val curSha = BuildConfig.COMMIT_SHA
-                val branch = ghStatement(API_URL).executeAndParseAs<GithubRepo>().defaultBranch
-                val workflowRunsUrl = "$API_URL/actions/workflows/ci.yml/runs?branch=$branch&event=push&status=success&per_page=1"
-                val workflowRun = ghStatement(workflowRunsUrl).executeAndParseAs<GithubWorkflowRuns>().workflowRuns[0]
-                val shortSha = workflowRun.headSha.take(7)
+                val branch = statement(API_URL).executeAndParseAs<Repository>().defaultBranch
+                val run = statement("$API_URL/actions/runs?event=push&status=success&ref=refs/heads/$branch").executeAndParseAs<WorkflowRuns>().workflowRuns[0]
+                val shortSha = run.headSha.take(7)
                 if (shortSha != curSha) {
-                    val artifacts = ghStatement(workflowRun.artifactsUrl).executeAndParseAs<GithubArtifacts>()
-                    val archiveUrl = artifacts.getDownloadLink()
+                    val artifacts = statement("$API_URL/actions/runs/${run.id}/artifacts").executeAndParseAs<Artifacts>()
+                    val archiveUrl = artifacts.downloadLink
                     val changelog = runSuspendCatching {
                         val commitComparisonUrl = "$API_URL/compare/$curSha...$shortSha"
-                        val result = ghStatement(commitComparisonUrl).executeAndParseAs<GithubCommitComparison>()
+                        val result = statement(commitComparisonUrl).executeAndParseAs<CommitComparison>()
                         // TODO: Prettier format, Markdown?
                         result.commits.joinToString("\n") { commit ->
                             "${commit.commit.message.takeWhile { it != '\n' }} (@${commit.commit.author.name})"
                         }
-                    }.getOrDefault(workflowRun.title)
-                    return Release(shortSha, changelog, archiveUrl)
+                    }.getOrDefault(run.title)
+                    return EhRelease(shortSha, changelog, archiveUrl)
                 }
             } else {
                 val curVersion = BuildConfig.RAW_VERSION_NAME
-                val release = ghStatement(LATEST_RELEASE_URL).executeAndParseAs<GithubRelease>()
+                val release = statement(LATEST_RELEASE_URL).executeAndParseAs<Release>()
                 val latestVersion = release.version
                 val description = release.info
                 val downloadUrl = release.getDownloadLink()
                 if (latestVersion != curVersion) {
-                    return Release(latestVersion, description, downloadUrl)
+                    return EhRelease(latestVersion, description, downloadUrl)
                 }
             }
         }
@@ -77,7 +74,7 @@ object AppUpdater {
         timeoutBySpeed(
             url,
             {
-                ghStatement(url) {
+                statement(url) {
                     // https://docs.github.com/en/rest/releases/assets?apiVersion=2022-11-28#get-a-release-asset
                     if (!isZip) accept(ContentType.Application.OctetStream)
                     it()
@@ -100,22 +97,14 @@ object AppUpdater {
     }
 }
 
-private suspend inline fun ghStatement(
+suspend inline fun statement(
     url: String,
     builder: HttpRequestBuilder.() -> Unit = {},
 ) = ktorClient.prepareGet(url) {
-    bearerAuth(GithubTokenParts.joinToString("_"))
     apply(builder)
 }
 
-private val GithubTokenParts = arrayOf(
-    "github",
-    "pat",
-    "11A4H2ACI0iGDuL1O6wPYW",
-    "OTFg8xaCNUwR1NHaJE1AT3LoYPfz6bouI7E7ReLf8GjIRFHCL5UsHL9EnWP",
-)
-
-data class Release(
+data class EhRelease(
     val version: String,
     val changelog: String,
     val downloadLink: String,

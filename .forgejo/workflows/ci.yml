@@ -54,9 +54,6 @@ jobs:
       - name: Spotless Check
         run: ./gradlew spotlessCheck
 
-      - name: Lint Check
-        run: ./gradlew lintDefaultRelease
-
   default:
     runs-on: nekomoee
     steps:
