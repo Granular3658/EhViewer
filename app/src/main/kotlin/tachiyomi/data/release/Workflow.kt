@@ -15,7 +15,7 @@ data class WorkflowRuns(@SerialName("workflow_runs") val workflowRuns: List<Work
 data class WorkflowRun(
     @SerialName("commit_sha") val headSha: String,
     @SerialName("title") val title: String,
-    @SerialName("id") val id: String,
+    @SerialName("id") val id: Int,
 )
 
 typealias Artifacts = List<Artifact>
