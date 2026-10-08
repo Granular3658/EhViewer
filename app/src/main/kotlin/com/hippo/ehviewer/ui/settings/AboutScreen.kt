@@ -49,8 +49,8 @@ import moe.tarsin.navigate
 import moe.tarsin.snackbar
 import moe.tarsin.string
 
-private const val REPO_URL = "https://github.com/${BuildConfig.REPO_NAME}"
-private const val RELEASE_URL = "$REPO_URL/releases"
+const val REPO_URL = BuildConfig.REPO_URL
+const val RELEASE_URL = "$REPO_URL/releases"
 
 @Composable
 @Stable

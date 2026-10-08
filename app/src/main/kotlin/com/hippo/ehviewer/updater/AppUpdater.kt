@@ -6,6 +6,8 @@ import com.hippo.ehviewer.EhApplication.Companion.ktorClient
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.executeAndParseAs
 import com.hippo.ehviewer.spider.timeoutBySpeed
+import com.hippo.ehviewer.ui.settings.RELEASE_URL
+import com.hippo.ehviewer.ui.settings.REPO_URL
 import com.hippo.ehviewer.util.copyTo
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.accept
@@ -27,8 +29,8 @@ import tachiyomi.data.release.GithubRelease
 import tachiyomi.data.release.GithubRepo
 import tachiyomi.data.release.GithubWorkflowRuns
 
-private const val API_URL = "https://api.github.com/repos/${BuildConfig.REPO_NAME}"
-private const val LATEST_RELEASE_URL = "$API_URL/releases/latest"
+private const val API_URL = "$REPO_URL/actions/runs"
+const val LATEST_RELEASE_URL = "$RELEASE_URL/latest"
 
 object AppUpdater {
     suspend fun checkForUpdate(forceCheck: Boolean = false): Release? {

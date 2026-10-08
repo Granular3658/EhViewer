@@ -47,10 +47,9 @@ android {
         commandLine = "git log -1 --format=%ct".split(' ')
     }.standardOutput.asText.get().trim()
 
-    val repoName = providers.exec {
+    val repoUrl = providers.exec {
         commandLine = "git remote get-url origin".split(' ')
-    }.standardOutput.asText.get().trim().removePrefix("https://github.com/").removePrefix("git@github.com:")
-        .removeSuffix(".git")
+    }.standardOutput.asText.get().trim().removeSuffix(".git")
 
     val snapshot = !hasProperty("release")
 
@@ -66,7 +65,7 @@ android {
         buildConfigField("String", "RAW_VERSION_NAME", "\"$versionName\"")
         buildConfigField("String", "COMMIT_SHA", "\"$commitSha\"")
         buildConfigField("long", "COMMIT_TIME", commitTime)
-        buildConfigField("String", "REPO_NAME", "\"$repoName\"")
+        buildConfigField("String", "REPO_URL", "\"$repoUrl\"")
         ndk {
             if (isRelease) {
                 abiFilters.addAll(supportedAbis)
