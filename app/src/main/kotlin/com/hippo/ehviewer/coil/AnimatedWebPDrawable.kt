@@ -143,8 +143,11 @@ class AnimatedWebPDrawable(
     override fun isRunning() = decodeJob != null
 
     override fun start() {
-        if (disposed) logcat("WebPDiag") { "AnimatedWebPDrawable#$drawableId start() DISPOSED (use-after-dispose)" }
-        else logcat("WebPDiag") { "AnimatedWebPDrawable#$drawableId start()" }
+        if (disposed) {
+            logcat("WebPDiag") { "AnimatedWebPDrawable#$drawableId start() DISPOSED (use-after-dispose)" }
+        } else {
+            logcat("WebPDiag") { "AnimatedWebPDrawable#$drawableId start()" }
+        }
         if (decodeJob == null) {
             decodeJob = decodeNextFrame(true)
         }

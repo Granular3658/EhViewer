@@ -46,6 +46,7 @@ import coil3.compose.SubcomposeAsyncImage
 import coil3.compose.SubcomposeAsyncImageContent
 import com.ehviewer.core.i18n.R
 import com.ehviewer.core.ui.util.thenIf
+import com.ehviewer.core.util.logcat
 import com.ehviewer.core.util.unreachable
 import com.google.accompanist.drawablepainter.DrawablePainter
 import com.hippo.ehviewer.Settings
@@ -57,7 +58,6 @@ import com.hippo.ehviewer.gallery.progressObserved
 import com.hippo.ehviewer.gallery.statusObserved
 import com.hippo.ehviewer.image.Image
 import com.hippo.ehviewer.util.AdsPlaceholderFile
-import com.ehviewer.core.util.logcat
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.drop
 
