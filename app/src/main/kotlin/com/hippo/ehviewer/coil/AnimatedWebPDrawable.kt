@@ -31,6 +31,7 @@ class AnimatedWebPDrawable(
     val sourceSize: Int = source.capacity()
 
     private val drawableId = System.identityHashCode(this)
+
     @Volatile var disposed = false
         private set
     val isDisposed: Boolean get() = disposed

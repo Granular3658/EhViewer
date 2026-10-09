@@ -19,6 +19,7 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import okio.FileSystem
+import okio.Okio
 
 class AnimatedWebPDecoder(
     private val source: ByteBuffer,
@@ -31,20 +32,45 @@ class AnimatedWebPDecoder(
             result: SourceFetchResult,
             options: Options,
             imageLoader: ImageLoader,
-        ) = if (DecodeUtils.isAnimatedWebP(result.source.source())) {
-            logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: animated webp detected, mapping source (metadata=${result.source.metadata})" }
-            val mapped = result.source.toByteBufferOrNull()
-            if (mapped == null) {
-                logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: toByteBufferOrNull NULL -> falls back to static decoder (first frame only!)" }
-                null
-            } else {
+        ): Decoder? {
+            val src = result.source.source()
+            // Fast path: cheap peek on the source stream. Reliable on most
+            // devices and avoids an extra mmap for genuinely static images.
+            if (DecodeUtils.isAnimatedWebP(src)) {
+                logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: source pre-check isAnimated=true, mapping (meta=${result.source.metadata})" }
+                val mapped = result.source.toByteBufferOrNull()
+                if (mapped == null) {
+                    logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: toByteBufferOrNull NULL -> static fallback" }
+                    return null
+                }
                 val (buffer, release) = mapped
-                logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: mmap OK size=${buffer.capacity()}" }
-                AnimatedWebPDecoder(buffer, release)
+                logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: mmap OK size=${buffer.capacity()} isAnimated=true" }
+                return AnimatedWebPDecoder(buffer, release)
             }
-        } else {
-            logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: isAnimatedWebP=false -> skip (static decoder will handle)" }
-            null
+            // The pre-check read the fd-backed source and found no animation.
+            // On some devices the ashmem fd reports size 0 to fstat, so the
+            // Source reads as empty even though the bytes are valid. Re-verify
+            // against the explicitly sized mmap buffer (the exact bytes the
+            // decoder would use) before giving up on the animated path.
+            val readable = src.peek().request(12)
+            if (!readable) {
+                val mapped = result.source.toByteBufferOrNull() ?: run {
+                    logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: pre-check false + source unreadable, toByteBufferOrNull NULL -> static" }
+                    return null
+                }
+                val (buffer, release) = mapped
+                val buffered = Okio.buffer(Okio.source(buffer.asReadOnlyBuffer()))
+                return if (DecodeUtils.isAnimatedWebP(buffered)) {
+                    logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: PRE-CHECK FALSE but mmap buffer IS animated! size=${buffer.capacity()} (fd-source detection was unreliable)" }
+                    AnimatedWebPDecoder(buffer, release)
+                } else {
+                    logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: truly not animated (mmap) size=${buffer.capacity()} -> static" }
+                    release?.invoke()
+                    null
+                }
+            }
+            logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: isAnimatedWebP=false on readable source -> static" }
+            return null
         }
     }
 }
@@ -82,7 +108,10 @@ private fun ImageSource.toByteBufferOrNull(): Pair<ByteBuffer, (() -> Unit)?>? {
                 null
             }
         }
-        is ByteBufferMetadata -> { logcat("WebPDiag") { "toByteBufferOrNull: ByteBufferMetadata" }; metadata.byteBuffer to null }
+        is ByteBufferMetadata -> {
+            logcat("WebPDiag") { "toByteBufferOrNull: ByteBufferMetadata" }
+            metadata.byteBuffer to null
+        }
         else -> null
     }
 }

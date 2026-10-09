@@ -72,12 +72,12 @@ class Image private constructor(image: CoilImage, private val src: ImageSource) 
         get() = ((innerImage as? DrawableImage)?.drawable as? AnimatedWebPDrawable)?.isDisposed ?: false
 
     fun pin() = refcnt.updateAndFetch { if (it != 0) it + 1 else 0 }.also { new ->
-        if (new == 0) logcat("WebPDiag") { "Image#$diagId pin() REFUSED (already disposed) animated=${isAnimatedDrawable}" }
+        if (new == 0) logcat("WebPDiag") { "Image#$diagId pin() REFUSED (already disposed) animated=$isAnimatedDrawable" }
     } != 0
 
     fun unpin() = (refcnt.decrementAndFetch() == 0).also { zero ->
         if (zero) {
-            logcat("WebPDiag") { "Image#$diagId unpin -> refcnt 0, recycling animated=${isAnimatedDrawable}" }
+            logcat("WebPDiag") { "Image#$diagId unpin -> refcnt 0, recycling animated=$isAnimatedDrawable" }
             recycle()
         }
     }
