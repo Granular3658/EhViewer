@@ -42,6 +42,7 @@ import com.hippo.ehviewer.BuildConfig
 import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.asMutableState
+import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.client.EhEngine
 import com.hippo.ehviewer.client.data.FavListUrlBuilder
 import com.hippo.ehviewer.collectAsState
@@ -173,6 +174,13 @@ fun AnimatedVisibilityScope.AdvancedScreen(navigator: DestinationsNavigator) = S
                 entryValueRes = com.hippo.ehviewer.R.array.read_cache_size_entry_values,
                 state = Settings.readCacheSize.asMutableState(),
             )
+            SimpleMenuPreferenceInt(
+                title = stringResource(id = R.string.settings_advanced_smb_cache_size),
+                summary = stringResource(id = R.string.settings_advanced_smb_cache_size_summary),
+                entry = com.hippo.ehviewer.R.array.smb_cache_size_entries,
+                entryValueRes = com.hippo.ehviewer.R.array.smb_cache_size_entry_values,
+                state = Settings.smbCacheSize.asMutableState(),
+            )
             var currentLanguage by remember { mutableStateOf(getAppLanguage()) }
             val languages = remember { getLanguages() }
             DropdownListPreference(
@@ -205,6 +213,11 @@ fun AnimatedVisibilityScope.AdvancedScreen(navigator: DestinationsNavigator) = S
                         Settings.enableQuic.changesFlow(),
                     ).collectLatest {
                         showRestartDialog()
+                    }
+                }
+                LaunchedEffect(Unit) {
+                    Settings.smbCacheSize.changesFlow().collect {
+                        runCatching { SmbRepository.setCacheLimitMb(Settings.smbCacheSize.value) }
                     }
                 }
             }

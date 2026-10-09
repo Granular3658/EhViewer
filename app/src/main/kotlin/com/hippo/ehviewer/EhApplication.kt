@@ -20,6 +20,7 @@ import android.app.Application
 import android.content.Context
 import android.os.StrictMode
 import androidx.appcompat.app.AppCompatDelegate
+import com.hippo.ehviewer.smb.SmbRepository
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.compose.runtime.Composer
 import androidx.compose.runtime.tooling.ComposeStackTraceMode
@@ -113,6 +114,10 @@ class EhApplication : Application(), SingletonImageLoader.Factory {
         CrashHandler.install()
         super.onCreate()
         System.loadLibrary("ehviewer")
+        // Push the SMB in-memory (ashmem) cache cap into the Rust LRU. The symbol
+        // only exists in builds with ashmem support, so swallow a missing-link
+        // error the same way the provider's fallback path does.
+        runCatching { SmbRepository.setCacheLimitMb(Settings.smbCacheSize.value) }
         launch {
             FavouriteStatusRouter.collect { info ->
                 detailCache[info.gid]?.apply {

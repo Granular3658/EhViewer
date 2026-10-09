@@ -57,10 +57,18 @@ fn cache() -> &'static Mutex<Cache> {
     })
 }
 
-/// Cap on the unpinned (evictable) tail. The reader's page cache bounds how many
-/// regions are simultaneously pinned, so this only needs to bound the leftover
-/// history of pages you have already scrolled past.
-const MAX_BYTES: u64 = 256 * 1024 * 1024;
+/// Cap on the unpinned (evictable) tail, in bytes. Configurable at runtime via
+/// [`set_cache_limit_mb`] so the user can trade RAM for cache hits. The reader's
+/// page cache bounds how many regions are simultaneously pinned, so this only
+/// needs to bound the leftover history of pages you have already scrolled past.
+static MAX_BYTES: AtomicU64 = AtomicU64::new(256 * 1024 * 1024);
+
+/// Set the evictable cap in mebibytes. Called once at startup (and on change)
+/// from Kotlin with the user's SMB memory-cache preference.
+pub fn set_cache_limit_mb(mb: u64) {
+    let bytes = mb.saturating_mul(1024 * 1024);
+    MAX_BYTES.store(bytes, Ordering::Relaxed);
+}
 
 fn touch(lru: &mut Vec<u64>, id: u64) {
     if let Some(pos) = lru.iter().position(|&x| x == id) {
@@ -72,8 +80,9 @@ fn touch(lru: &mut Vec<u64>, id: u64) {
 /// Evict the oldest entries whose `pins == 0` until `total` is within `MAX_BYTES`.
 /// Pinned entries are always skipped, so this never reclaims a live mapping.
 fn evict() {
+    let cap = MAX_BYTES.load(Ordering::Relaxed);
     let mut guard = cache().lock().unwrap();
-    while guard.total > MAX_BYTES {
+    while guard.total > cap {
         let victim = guard
             .lru
             .iter()
