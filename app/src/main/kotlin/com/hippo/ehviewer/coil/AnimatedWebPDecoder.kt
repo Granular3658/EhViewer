@@ -30,10 +30,32 @@ class AnimatedWebPDecoder(
             result: SourceFetchResult,
             options: Options,
             imageLoader: ImageLoader,
-        ) = if (DecodeUtils.isAnimatedWebP(result.source.source())) {
-            result.source.toByteBufferOrNull()?.let { (buffer, release) -> AnimatedWebPDecoder(buffer, release) }
-        } else {
-            null
+        ): Decoder? {
+            val src = result.source.source()
+            // Cheap pre-check on the fd-backed source. Reliable on most devices
+            // and avoids an extra mmap for genuinely static images. On some
+            // kernels an ashmem fd's read() is unreliable (its st_size is
+            // reported as 0, so the stream looks empty), so a false negative
+            // here is possible even though the bytes are valid.
+            if (DecodeUtils.isAnimatedWebP(src)) {
+                val mapped = result.source.toByteBufferOrNull() ?: return null
+                val (buffer, release) = mapped
+                return AnimatedWebPDecoder(buffer, release)
+            }
+            // Pre-check false. The fd-backed source is unreliable on some
+            // devices, so do NOT trust it: verify against the explicitly-sized
+            // mmap buffer (sized from the advertised length, not fstat), which
+            // always carries the complete bytes — the exact buffer the decoder
+            // would use, and the same bytes the static decoder renders the
+            // (correct) first frame from.
+            val mapped = result.source.toByteBufferOrNull() ?: return null
+            val (buffer, release) = mapped
+            return if (isAnimatedWebPBuffer(buffer)) {
+                AnimatedWebPDecoder(buffer, release)
+            } else {
+                release?.invoke()
+                null
+            }
         }
     }
 }
@@ -68,7 +90,9 @@ private fun ImageSource.toByteBufferOrNull(): Pair<ByteBuffer, (() -> Unit)?>? {
                 null
             }
         }
-        is ByteBufferMetadata -> metadata.byteBuffer to null
+        is ByteBufferMetadata -> {
+            metadata.byteBuffer to null
+        }
         else -> null
     }
 }
@@ -78,4 +102,24 @@ private fun FileInputStream.mapReadOnly(): ByteBuffer {
     val size = channel.size()
     if (size == 0L) throw IOException("cannot mmap zero-length source (pipe?)")
     return channel.map(FileChannel.MapMode.READ_ONLY, 0, size)
+}
+
+/**
+ * Detect an animated (extended) WebP directly from the backing bytes, without
+ * going through an fd-backed okio Source. The fd Source is unreliable on some
+ * kernels (ashmem fstat reports size 0), but the ByteBuffer is sized from the
+ * explicit length the SMB provider advertised, so it is always complete.
+ *
+ * Layout check (big-endian int reads):
+ *   bytes  0-3  = "RIFF" (0x52494646)
+ *   bytes  8-11 = "WEBP" (0x57454250)
+ *   bytes 12-15 = "VP8X" (0x56503858)
+ *   byte     20 = flags; animation flag is bit 1 (0x02)
+ */
+private fun isAnimatedWebPBuffer(buffer: ByteBuffer): Boolean {
+    val b = buffer.asReadOnlyBuffer()
+    if (b.remaining() < 21) return false
+    if (b.getInt(0) != 0x52494646 || b.getInt(8) != 0x57454250) return false
+    if (b.getInt(12) != 0x56503858) return false
+    return (b.get(20).toInt() and 0xFF and 0x02) != 0
 }

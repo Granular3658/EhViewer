@@ -30,6 +30,10 @@ class AnimatedWebPDrawable(
     /** Full source file size in bytes; used by the page cache to account for the buffer. */
     val sourceSize: Int = source.capacity()
 
+    @Volatile var disposed = false
+        private set
+    val isDisposed: Boolean get() = disposed
+
     private val decodeScope = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val decoder = nativeCreateDecoder(source)
@@ -150,6 +154,7 @@ class AnimatedWebPDrawable(
         // reclaimed. Must run after the decoder is destroyed, since it still
         // reads the buffer during teardown.
         release?.invoke()
+        disposed = true
     }
 }
 
