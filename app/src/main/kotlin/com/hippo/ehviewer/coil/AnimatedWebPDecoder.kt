@@ -32,22 +32,26 @@ class AnimatedWebPDecoder(
             imageLoader: ImageLoader,
         ): Decoder? {
             val src = result.source.source()
-            // Cheap pre-check on the fd-backed source. Reliable on most devices
-            // and avoids an extra mmap for genuinely static images. On some
-            // kernels an ashmem fd's read() is unreliable (its st_size is
-            // reported as 0, so the stream looks empty), so a false negative
-            // here is possible even though the bytes are valid.
+            // Cheap pre-check on the fd-backed source. It works on most devices
+            // and lets us skip the extra mmap for genuinely static images. But
+            // the fd-backed okio Source *read* is intermittently unreliable on
+            // older kernels: on the Linux 4.4 test device it produced ~20% false
+            // negatives (genuinely animated WebPs read back as if empty), while
+            // the Linux 4.19 device reproduced none. The exact kernel mechanism
+            // is unconfirmed (likely an ashmem fd-read quirk/race), and it is
+            // INDEPENDENT of the ashmem fstat=0 behaviour handled below — both
+            // kernels report fstat=0, yet only 4.4 misreads the bytes.
             if (DecodeUtils.isAnimatedWebP(src)) {
                 val mapped = result.source.toByteBufferOrNull() ?: return null
                 val (buffer, release) = mapped
                 return AnimatedWebPDecoder(buffer, release)
             }
-            // Pre-check false. The fd-backed source is unreliable on some
-            // devices, so do NOT trust it: verify against the explicitly-sized
-            // mmap buffer (sized from the advertised length, not fstat), which
-            // always carries the complete bytes — the exact buffer the decoder
-            // would use, and the same bytes the static decoder renders the
-            // (correct) first frame from.
+            // Pre-check false. The fd-backed Source *read* is unreliable on older
+            // kernels (see above), so do NOT trust it: verify against the
+            // explicitly-sized mmap buffer (sized from the advertised length, not
+            // fstat), which always carries the complete bytes — the exact buffer
+            // the decoder would use, and the same bytes the static decoder
+            // renders the (correct) first frame from.
             val mapped = result.source.toByteBufferOrNull() ?: return null
             val (buffer, release) = mapped
             return if (isAnimatedWebPBuffer(buffer)) {
@@ -69,12 +73,14 @@ private fun ImageSource.toByteBufferOrNull(): Pair<ByteBuffer, (() -> Unit)?>? {
     }
     return when (val metadata = metadata) {
         // Local files are mmap'd zero-copy via FileChannel. SMB-served files
-        // arrive as an in-memory ashmem fd whose fstat reports 0 on some Android
-        // versions (notably large files on older kernels), so FileChannel.map()
-        // cannot size the mapping. Map it natively with the real size the
-        // provider advertised: zero copy, the buffer's backing is the ashmem
-        // region itself, never the JVM heap. The provider advertises -1 for the
-        // pipe fallback, which we reject so the caller can fall back.
+        // arrive as an in-memory ashmem fd whose fstat ALWAYS reports 0 —
+        // Android's ashmem driver never fills i_size, on every Android version
+        // and kernel (verified on both the LOS18.1 and LOS22 test devices), so
+        // FileChannel.map() cannot size the mapping from fstat. Map it natively
+        // with the real size the provider advertised: zero copy, the buffer's
+        // backing is the ashmem region itself, never the JVM heap. The provider
+        // advertises -1 for the pipe fallback, which we reject so the caller can
+        // fall back.
         is ContentMetadata -> {
             val afd = metadata.assetFileDescriptor
             if (afd.length > 0) {
@@ -106,9 +112,13 @@ private fun FileInputStream.mapReadOnly(): ByteBuffer {
 
 /**
  * Detect an animated (extended) WebP directly from the backing bytes, without
- * going through an fd-backed okio Source. The fd Source is unreliable on some
- * kernels (ashmem fstat reports size 0), but the ByteBuffer is sized from the
- * explicit length the SMB provider advertised, so it is always complete.
+ * going through an fd-backed okio Source. The fd Source *read* is intermittently
+ * unreliable on older kernels (hence the mmap fallback above); the ByteBuffer is
+ * sized from the explicit length the SMB provider advertised, so it is always
+ * complete. (Separately, an ashmem fd's fstat is always 0 on every Android
+ * version — that is why we advertise the length rather than rely on fstat for
+ * the mmap — but that universal behaviour is independent of the fd-read
+ * flakiness above.)
  *
  * Layout check (big-endian int reads):
  *   bytes  0-3  = "RIFF" (0x52494646)

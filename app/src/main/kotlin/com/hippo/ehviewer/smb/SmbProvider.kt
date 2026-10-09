@@ -105,13 +105,16 @@ class SmbProvider : ContentProvider() {
      * Like [openFile], but wraps the descriptor in an [AssetFileDescriptor] that
      * declares the real file length. The ashmem path knows the exact size from
      * the SMB stat, and advertising it lets the decode layer `mmap` correctly
-     * even when an ashmem fd's `fstat` reports 0 on some Android versions
-     * (notably large files on older kernels). The pipe path leaves the length
-     * unknown (-1), which is the correct signal that it cannot be mmap'd.
+     * even though an ashmem fd's `fstat` is ALWAYS 0 — Android's ashmem driver
+     * never fills `i_size`, on every Android version and kernel (verified on
+     * both the LOS18.1 and LOS22 test devices), not just old ones. The pipe
+     * path leaves the length unknown (-1), which is the correct signal that it
+     * cannot be mmap'd.
      */
     override fun openAssetFile(uri: Uri, mode: String): AssetFileDescriptor {
-        // On this device an ashmem fd's st_size (fstat) is 0, so a streaming read
-        // (which looks at EOF / fstat) on the ashmem path returns zero bytes.
+        // An ashmem fd's st_size (fstat) is always 0 (universal Android ashmem
+        // behavior), so a streaming read that looks at EOF / fstat on the
+        // ashmem path would return zero bytes.
         // Images are mmap'd using the *declared* length and must use the ashmem
         // fd; everything else (notably .ehviewer / ComicInfo.xml metadata read
         // while restoring SMB downloads) is consumed as a byte stream and must go
@@ -130,9 +133,10 @@ class SmbProvider : ContentProvider() {
      * ([openAssetFile]), where a real, mmap-able descriptor plus a declared
      * length is what the decode layer needs. Plain streaming reads
      * ([openFile]) go through the pipe instead: their length is determined by
-     * the byte stream, not by `fstat` — and an ashmem fd's `fstat` returns 0 on
-     * this device, which would otherwise make a streaming read return zero
-     * bytes (e.g. reading `.ehviewer`/`ComicInfo.xml` while restoring downloads).
+     * the byte stream, not by `fstat` — and an ashmem fd's `fstat` always
+     * returns 0 (universal Android ashmem behavior), which would otherwise make
+     * a streaming read return zero bytes (e.g. reading
+     * `.ehviewer`/`ComicInfo.xml` while restoring downloads).
      */
     private val smbImageExtensions = setOf(
         "webp", "gif", "jpg", "jpeg", "png", "avif", "bmp",
@@ -150,7 +154,7 @@ class SmbProvider : ContentProvider() {
         if (mode == "r" || mode == "rt") {
             // Only the mmap/asset-file path benefits from ashmem. For plain
             // streaming reads we skip it and use the pipe, whose length comes
-            // from the stream rather than a `fstat` that lies on this device.
+            // from the stream rather than `fstat`, which is always 0 for ashmem.
             if (useAshmem) {
                 val ashmem = runCatching { runBlocking { SmbRepository.openAshmem(location) } }.getOrNull()
                 Log.d(TAG, "[ASHMEM/$caller] open for ${location.subPath}: ${if (ashmem != null) "OK fd=${ashmem.fd} key=${ashmem.key} size=${ashmem.size}" else "NULL -> pipe fallback"}")

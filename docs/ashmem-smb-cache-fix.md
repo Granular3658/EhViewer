@@ -31,7 +31,7 @@
 |---|---|
 | 仓库 | `Granular3658/EhViewer`（本地 `/workspace/EhViewer_src`） |
 | 用户测试包 | **default** 包（`android-26` feature 启用） |
-| 用户系统 | LOS 15（Android 8.1 / API 27） |
+| 用户测试设备 | LOS 18.1（Linux 4.4，6GB）+ 另一台（Linux 4.19，8GB）；两者 ashmem fd 的 `fstat` 均恒为 0 |
 | `minSdk` | 26；ashmem 代码用 `#[cfg(feature = "android-26")]` 包裹 |
 | CI 触发分支 | **`fix-smb-ashmem`（无斜杠）** ← 实际跑构建的分支 |
 | CI 不触发 | `fix/smb-ashmem-cache`（含 `/`）；`ci.yml` 里 `branches: ['*']` 不匹配含 `/` 的分支 |
@@ -59,13 +59,15 @@
 ### 两个运行时报错的根因链
 
 1. **`cannot mmap zero-length source (pipe?)`**
-   ashmem 区域本身是满尺寸的，但 LOS 15 / Android 8.1 上该 ashmem fd 的 `fstat` 对**大文件返回 0**。解码器用 `channel.size()` 取大小时拿到 0 → 误判成零长度 pipe。
-   （小缩略图 ~20KB 正常、16MB webp 失败，正是这个"大文件 fstat 回归 0"的阈值表现。）
+   ashmem 区域本身是满尺寸的，但 **ashmem fd 的 `fstat` 在任何 Android 版本/内核上恒为 0**（Android 的 ashmem 驱动从不填 `i_size`，已在 Linux 4.4 与 Linux 4.19 两台不同设备上验证）。解码器用 `channel.size()` 取大小时拿到 0 → 误判成零长度 pipe。
+   （早期曾误写成"LOS 15 / Android 8.1 / 大文件 fstat 回归 0"——这是误判：fstat=0 与文件大小、系统版本都无关，是 ashmem 的普遍行为，并非某个旧内核的专属 bug，因此该修复在任何设备上都需要。）
 
 2. **`Channel not open for writing - cannot extend file to required size`**
    上一版把真实 size 传给 `FileChannel.map()`，但框架 `OffsetCorrectFileChannel.map()` 内部会**再用 fstat 重新核对**大小——又拿到 0，于是认为要把只读文件"扩展"到 16MB → 只读 fd 无法扩展而抛错。
 
-3. **为什么 GIF 不受影响**：GIF 走 `InputStream` 流式解码，**根本不调** `channel.size()` / `mmap`，所以 ashmem fd 的 fstat 怪异对它毫无影响。9MB GIF 能正常经 ashmem 解码，反而印证了"ashmem 本身对大文件没问题，问题只在 mmap 路径对 fstat 的依赖"。
+3. **为什么 GIF 不受影响**：GIF 走 `InputStream` 流式解码，**根本不调** `channel.size()` / `mmap`，所以 ashmem fd 的 fstat 恒为 0 对它毫无影响（GIF 走 `InputStream` 流式解码，根本不查 `fstat`）。9MB GIF 能正常经 ashmem 解码，印证了"ashmem 本身没问题，问题只在 mmap 路径对 fstat 的依赖"。
+
+> **后续补充（动画变静图问题）**：本文撰写时的 ashmem mmap 修复（commit `07e88be0d4`）只解决了 **Bug A**——`fstat=0` 导致的零长度 mmap 崩溃，任何设备都会触发（4.4 与 4.19 都 `fstat=0`）。之后又出现"往回翻部分 WebP 变成静止首帧"的现象，**仅出现在 Linux 4.4 设备、且是概率性的（约 20%）**。根因是 fd 背书的 okio `Source` **读取**在老内核上偶发不稳定（读不到前 21 字节魔数 → 误判非动画 → 走静图解码器只渲首帧），与 `fstat=0` 无关——4.4 与 4.19 都 `fstat=0`，但只有 4.4 误读。修复见 `4db9794b5b`：以显式长度 mmap 出的缓冲为权威判据，彻底绕开 fd 读取路径。具体老内核 fd 读取为何不稳，尚未完全定位（疑为 ashmem fd-read 的竞态 / 怪异语义）。
 
 ---
 
