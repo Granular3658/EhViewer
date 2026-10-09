@@ -62,7 +62,10 @@ private fun ImageSource.toByteBufferOrNull(): Pair<ByteBuffer, (() -> Unit)?>? {
                     ?: throw IOException("cannot mmap ashmem fd=$fd size=${afd.length}")
                 buffer to { smbMunmap(buffer) }
             } else {
-                afd.createInputStream().channel.mapReadOnly() to null
+                // Pipe / unknown-length source: cannot be mmap'd natively and we
+                // don't have a declared size, so let Coil fall back to another
+                // decoder rather than crash on a zero-length mapping.
+                null
             }
         }
         is ByteBufferMetadata -> metadata.byteBuffer to null
