@@ -328,6 +328,16 @@ pub fn smbReleaseAshmem(mut env: JNIEnv, _: JClass, key: jlong) {
     }
 }
 
+/// Configure the SMB in-memory (ashmem) cache cap, in MiB.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbSetCacheLimitMb(mut env: JNIEnv, _: JClass, mb: jint) {
+    let _ = &mut env;
+    #[cfg(feature = "android-26")]
+    {
+        crate::smb_cache::set_cache_limit_mb(mb as u64);
+    }
+}
+
 /// Map an ashmem fd into a direct `ByteBuffer` of exactly `size`, with no copy.
 ///
 /// The ashmem region is fully sized, but its `fstat` can report 0 on some

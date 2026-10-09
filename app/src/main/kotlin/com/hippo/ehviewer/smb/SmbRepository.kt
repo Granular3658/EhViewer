@@ -11,6 +11,7 @@ import com.hippo.ehviewer.jni.smbOpenAshmem
 import com.hippo.ehviewer.jni.smbRead
 import com.hippo.ehviewer.jni.smbReleaseAshmem
 import com.hippo.ehviewer.jni.smbRename
+import com.hippo.ehviewer.jni.smbSetCacheLimitMb
 import com.hippo.ehviewer.jni.smbStat
 import com.hippo.ehviewer.jni.smbTest
 import com.hippo.ehviewer.jni.smbWrite
@@ -80,6 +81,9 @@ object SmbRepository {
 
     /** Release a reference obtained from [openAshmem]. */
     fun releaseAshmem(key: Long) = smbReleaseAshmem(key)
+
+    /** Configure the SMB in-memory (ashmem) cache cap, in MiB. */
+    fun setCacheLimitMb(mb: Int) = smbSetCacheLimitMb(mb)
 
     fun read(handle: Long, buffer: ByteBuffer, fileOffset: Long, bufferOffset: Int, length: Int): Int = smbRead(handle, buffer, fileOffset, bufferOffset, length)
 

@@ -141,3 +141,6 @@ external fun smbMmapReadOnly(fd: Int, size: Long): java.nio.ByteBuffer?
 
 /** Releases a mapping created by [smbMmapReadOnly]. */
 external fun smbMunmap(buffer: java.nio.ByteBuffer)
+
+/** Configure the SMB in-memory (ashmem) cache cap, in MiB. */
+external fun smbSetCacheLimitMb(mb: Int)
