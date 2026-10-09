@@ -3,6 +3,7 @@ package com.ehviewer.core.files
 import android.content.Context
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
@@ -14,6 +15,7 @@ import android.webkit.MimeTypeMap
 import androidx.core.database.getLongOrNull
 import kotlinx.io.asSink
 import kotlinx.io.asSource
+import okio.Buffer
 import okio.FileHandle
 import okio.FileMetadata
 import okio.FileNotFoundException
@@ -22,16 +24,27 @@ import okio.IOException
 import okio.Path
 import okio.Sink
 import okio.Source
+import okio.sink
+import okio.source
 
 class AndroidFileSystem(context: Context) : FileSystem() {
     private val contentResolver = context.contentResolver
     private val physicalFileSystem = SYSTEM
 
     override fun appendingSink(file: Path, mustExist: Boolean): Sink {
+        if (file.isSmb) throw IOException("SMB locations are read-only: $file")
         TODO("Not yet implemented")
     }
 
     override fun atomicMove(source: Path, target: Path) {
+        if (source.isSmb || target.isSmb) {
+            val extras = android.os.Bundle().apply {
+                putString("from", source.toString())
+                putString("to", target.toString())
+            }
+            contentResolver.call(source.toUri(), "rename", null, extras)
+            return
+        }
         if (source.isPhysicalFile()) {
             return physicalFileSystem.atomicMove(source, target)
         }
@@ -48,10 +61,26 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     }
 
     override fun canonicalize(path: Path): Path {
+        if (path.isSmb) return path
         TODO("Not yet implemented")
     }
 
     override fun copy(source: Path, target: Path) {
+        if (target.isSmb) {
+            // Route the write through the SMB content provider's write pipe.
+            // The source is a local cache file, so read it via openFileDescriptor
+            // rather than this.source() (which only knows how to read SMB files).
+            source.inputStream().use { srcStream ->
+                sink(target).use { dst ->
+                    val src = srcStream.source()
+                    val buffer = Buffer()
+                    while (src.read(buffer, 8192) != -1L) {
+                        dst.write(buffer, buffer.size)
+                    }
+                }
+            }
+            return
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             source.openFileDescriptor("r").use { src ->
                 target.openFileDescriptor("wt").use { dst ->
@@ -72,6 +101,14 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     }
 
     override fun createDirectory(dir: Path, mustCreate: Boolean) {
+        if (dir.isSmb) {
+            if (metadataOrNull(dir)?.isDirectory == true) {
+                if (mustCreate) throw IOException("$dir already exist")
+                return
+            }
+            contentResolver.call(dir.toUri(), "mkdir", dir.toString(), null)
+            return
+        }
         if (dir.isPhysicalFile()) {
             return physicalFileSystem.createDirectory(dir, mustCreate)
         }
@@ -91,10 +128,20 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     }
 
     override fun createSymlink(source: Path, target: Path) {
+        if (source.isSmb || target.isSmb) throw IOException("SMB locations are read-only")
         TODO("Not yet implemented")
     }
 
     override fun delete(path: Path, mustExist: Boolean) {
+        if (path.isSmb) {
+            val metadata = metadataOrNull(path)
+            if (metadata == null) {
+                if (mustExist) throw FileNotFoundException("$path does not exist")
+                return
+            }
+            contentResolver.call(path.toUri(), "delete", path.toString(), null)
+            return
+        }
         if (path.isPhysicalFile()) {
             return physicalFileSystem.delete(path, mustExist)
         }
@@ -119,6 +166,18 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     }
 
     override fun deleteRecursively(fileOrDirectory: Path, mustExist: Boolean) {
+        if (fileOrDirectory.isSmb) {
+            val meta = metadataOrNull(fileOrDirectory)
+            if (meta == null) {
+                if (mustExist) throw FileNotFoundException("$fileOrDirectory does not exist")
+                return
+            }
+            if (meta.isDirectory) {
+                list(fileOrDirectory).forEach { child -> deleteRecursively(child, mustExist = false) }
+            }
+            contentResolver.call(fileOrDirectory.toUri(), "delete", fileOrDirectory.toString(), null)
+            return
+        }
         if (fileOrDirectory.isPhysicalFile()) {
             if (metadataOrNull(fileOrDirectory)?.isDirectory == true) {
                 physicalFileSystem.deleteRecursively(fileOrDirectory, mustExist)
@@ -135,6 +194,16 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     override fun listOrNull(dir: Path): List<Path>? = list(dir, throwOnFailure = false)
 
     private fun list(dir: Path, throwOnFailure: Boolean): List<Path>? {
+        if (dir.isSmb) {
+            return runCatching {
+                contentResolver.query(dir.toUri(), arrayOf(Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c ->
+                    List(c.count) {
+                        c.moveToNext()
+                        dir / c.getString(0)
+                    }
+                }.orEmpty()
+            }.getOrElse { if (throwOnFailure) throw FileNotFoundException("Failed to list $dir") else null }
+        }
         if (dir.isPhysicalFile()) {
             return if (throwOnFailure) {
                 physicalFileSystem.list(dir)
@@ -167,7 +236,9 @@ class AndroidFileSystem(context: Context) : FileSystem() {
         }
 
         return runCatching {
-            val uri = path.toUri()
+            // SMB: ask the provider for the entry itself. The plain URI answers
+            // with the children of a directory, which is not metadata.
+            val uri = if (path.isSmb) path.toStatUri() else path.toUri()
             val isMediaUri = uri.authority == MediaStore.AUTHORITY
             val projection = if (isMediaUri) {
                 arrayOf(MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.DATE_MODIFIED)
@@ -192,18 +263,26 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     }
 
     override fun openReadOnly(file: Path): FileHandle {
+        if (file.isSmb) throw IOException("SMB locations do not expose seekable FileHandle: $file")
         TODO("Not yet implemented")
     }
 
     override fun openReadWrite(file: Path, mustCreate: Boolean, mustExist: Boolean): FileHandle {
+        if (file.isSmb) throw IOException("SMB locations are read-only: $file")
         TODO("Not yet implemented")
     }
 
     override fun sink(file: Path, mustCreate: Boolean): Sink {
+        if (file.isSmb) {
+            val stream = contentResolver.openOutputStream(file.toUri())
+                ?: throw FileNotFoundException("Failed to open SMB file for writing: $file")
+            return stream.sink()
+        }
         TODO("Not yet implemented")
     }
 
     override fun source(file: Path): Source {
+        if (file.isSmb) return file.inputStream().source()
         TODO("Not yet implemented")
     }
 
@@ -212,6 +291,13 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     fun rawSource(file: Path) = file.inputStream().asSource()
 
     fun openFileDescriptor(path: Path, mode: String): ParcelFileDescriptor {
+        if (path.isSmb) {
+            // The provider serves writes through a pipe, so any write-capable
+            // mode maps to "w" on its side.
+            val smbMode = if ('w' in mode || '+' in mode) "w" else "r"
+            return contentResolver.openFileDescriptor(path.toUri(), smbMode)
+                ?: throw FileNotFoundException("Failed to open SMB file: $path")
+        }
         if (path.isPhysicalFile()) {
             return ParcelFileDescriptor.open(path.toFile(), ParcelFileDescriptor.parseMode(mode))
         }

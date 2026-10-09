@@ -865,9 +865,11 @@ val defaultDownloadLocation: Path
         val set = downloadLocations.value
         val chosen = defaultDownloadLocationUri.value
         when {
-            chosen != null && chosen in set -> runCatching { Uri.parse(chosen).toOkioPath() }.getOrNull()
-            // minOrNull keeps the fallback deterministic: Set ordering is not guaranteed
-            set.isNotEmpty() -> set.minOrNull()?.let { runCatching { Uri.parse(it).toOkioPath() }.getOrNull() }
+            chosen != null && chosen in set -> runCatching { Uri.parse(chosen).toOkioPath() }
+                .getOrNull()
+            set.isNotEmpty() -> set.asSequence().sorted().mapNotNull { uriStr ->
+                runCatching { Uri.parse(uriStr).toOkioPath() }.getOrNull()
+            }.firstOrNull()
             else -> null
         }
     } ?: downloadLocation
@@ -891,6 +893,10 @@ val allDownloadLocations: List<Path>
         return paths
     }
 
+/** Locations that can receive new downloads, including writable SMB shares. */
+val writableDownloadLocations: List<Path>
+    get() = allDownloadLocations
+
 /**
  * Resolved per-dirname and cached: the naive version performed a filesystem
  * stat per list item per recomposition, on the main thread.
@@ -898,7 +904,8 @@ val allDownloadLocations: List<Path>
 val DownloadInfo.downloadDir: Path?
     get() = dirname?.let { name ->
         downloadDirCache[name] ?: run {
-            val resolved = allDownloadLocations.firstNotNullOfOrNull { loc -> (loc / name).takeIf { it.isDirectory } }
+            val resolved = writableDownloadLocations
+                .firstNotNullOfOrNull { loc -> (loc / name).takeIf { it.isDirectory } }
                 ?: (defaultDownloadLocation / name)
             downloadDirCache[name] = resolved
             resolved

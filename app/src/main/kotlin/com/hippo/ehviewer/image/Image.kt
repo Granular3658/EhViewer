@@ -37,6 +37,7 @@ import coil3.size.Precision
 import coil3.size.Scale
 import coil3.size.Size
 import coil3.size.SizeResolver
+import com.ehviewer.core.files.isSmb
 import com.ehviewer.core.files.openFileDescriptor
 import com.ehviewer.core.files.toUri
 import com.ehviewer.core.util.isAtLeastP
@@ -121,7 +122,7 @@ class Image private constructor(image: CoilImage, private val src: ImageSource) 
         suspend fun decode(src: ImageSource, checkExtraneousAds: Boolean = false): Image {
             val image = when (src) {
                 is PathSource -> {
-                    if (isAtLeastP && !isAtLeastU) {
+                    if (isAtLeastP && !isAtLeastU && !src.source.isSmb) {
                         src.source.openFileDescriptor("rw").use {
                             val fd = it.fd
                             if (isGif(fd)) {
