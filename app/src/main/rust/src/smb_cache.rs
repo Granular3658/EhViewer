@@ -103,11 +103,15 @@ fn dup_fd(mem: &SharedMemory) -> Result<i32> {
 /// streaming pipe path. The fd must be freed by the caller (it owns the dup);
 /// the backing region lives on in the cache until `release_ashmem` is called.
 pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
-    let stat = smb::stat(target).context("smb stat")?;
-    ensure!(!stat.is_directory, "refusing to cache a directory");
+    let stat = smb::stat(target).with_context(|| format!("smb stat {}", target.sub))?;
+    ensure!(
+        !stat.is_directory,
+        "refusing to cache a directory: {}",
+        target.sub
+    );
     let size = stat.size;
-    info!(target: "ashmem", "open_ashmem: stat size={size}");
-    ensure!(size > 0, "empty file cannot be cached");
+    info!(target: "ashmem", "open_ashmem: stat size={size} path={}", target.sub);
+    ensure!(size > 0, "empty file cannot be cached: {}", target.sub);
     let key: Key = (
         target.host.clone(),
         target.port,
@@ -137,9 +141,10 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
     }
 
     // Slow path: pull the whole file into a fresh ashmem region.
-    let (handle, _) = smb::open(target)?;
+    let (handle, _) = smb::open(target).with_context(|| format!("smb open {}", target.sub))?;
     let fetched = (|| -> Result<SharedMemory> {
-        let mem = SharedMemory::create(None, size as usize).context("ashmem create")?;
+        let mem = SharedMemory::create(None, size as usize)
+            .with_context(|| format!("ashmem create size={size} path={}", target.sub))?;
         let fd = mem.as_raw_fd();
         // SAFETY: a fresh ashmem region of `size` bytes, mapped read/write so
         // we can copy the file into it, then downgraded to read-only.
@@ -161,7 +166,37 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
         let chunk = 1024 * 1024u64;
         while offset < size {
             let len = chunk.min(size - offset);
-            let bytes = smb::read(handle, offset, len)?;
+            // A single SMB read can fail transiently (timeout / network blip),
+            // especially for large files read in many chunks. Retry a few times
+            // before giving up, otherwise we fall back to the non-mmap pipe and
+            // the animated decoder cannot mmap the source.
+            let mut bytes = Vec::new();
+            let mut last_err = None;
+            for attempt in 0..3 {
+                match smb::read(handle, offset, len) {
+                    Ok(b) => {
+                        bytes = b;
+                        break;
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            target: "ashmem",
+                            "smb read attempt {}/3 failed offset={offset} len={len} path={}: {e:#}",
+                            attempt + 1,
+                            target.sub
+                        );
+                        last_err = Some(e);
+                    }
+                }
+            }
+            let bytes = match last_err {
+                Some(e) => {
+                    return Err(e).with_context(|| {
+                        format!("smb read offset={offset} len={len} path={}", target.sub)
+                    });
+                }
+                None => bytes,
+            };
             if bytes.is_empty() {
                 break;
             }
@@ -212,7 +247,7 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
         .ok_or_else(|| anyhow!("lost cache entry"))?;
     let mem_ref: &SharedMemory = &entry.mem;
     let fd = dup_fd(mem_ref).context("ashmem dup_fd")?;
-    info!(target: "ashmem", "open_ashmem OK: fd={fd} size={size} key={id}");
+    info!(target: "ashmem", "open_ashmem OK: fd={fd} size={size} key={id} path={}", target.sub);
     Ok((fd, size, id))
 }
 

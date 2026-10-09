@@ -106,6 +106,7 @@ class SmbProvider : ContentProvider() {
             // (which cannot be mmap'd) and per-image direct buffers (which used to
             // OOM). Falls back to the pipe below when unsupported or on failure.
             val ashmem = runCatching { runBlocking { SmbRepository.openAshmem(location) } }.getOrNull()
+            Log.d(TAG, "openFile ashmem for ${location.subPath}: ${if (ashmem != null) "OK fd=${ashmem.fd} key=${ashmem.key} size=${ashmem.size}" else "NULL -> pipe fallback"}")
             if (ashmem != null) {
                 val base = ParcelFileDescriptor.adoptFd(ashmem.fd)
                 return object : ParcelFileDescriptor(base) {
