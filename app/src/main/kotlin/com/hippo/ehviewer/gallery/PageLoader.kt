@@ -140,7 +140,7 @@ abstract class PageLoader(val scope: CoroutineScope, val info: GalleryInfo?, sta
         prevIndex.store(index)
         val image = lock.read { cache[index] }
         if (image != null) {
-            logcat("WebPDiag") { "request($index): CACHE HIT refcnt=${image.refcnt.value} animated=${image.isAnimatedDrawable} disposed=${image.isDisposed}" }
+            logcat("WebPDiag") { "request($index): CACHE HIT refcnt=${image.refcnt.load()} animated=${image.isAnimatedDrawable} disposed=${image.isDisposed}" }
             notifyPageSucceed(index, image, false)
         } else {
             logcat("WebPDiag") { "request($index): cache miss -> decode" }
