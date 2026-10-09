@@ -18,7 +18,7 @@
 use crate::smb::{self, Target};
 use anyhow::{Context, Result, anyhow, ensure};
 use libc::{MAP_SHARED, PROT_READ, PROT_WRITE, mmap, munmap};
-use log::{error, info};
+use log::info;
 use ndk::shared_memory::SharedMemory;
 use std::collections::HashMap;
 use std::os::unix::io::AsRawFd;
