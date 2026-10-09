@@ -99,7 +99,7 @@ class SmbProvider : ContentProvider() {
         return row
     }
 
-    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor = openSmb(uri, mode, useAshmem = false).first
+    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor = openSmb(uri, mode, useAshmem = false, caller = "openFile").first
 
     /**
      * Like [openFile], but wraps the descriptor in an [AssetFileDescriptor] that
@@ -110,7 +110,7 @@ class SmbProvider : ContentProvider() {
      * unknown (-1), which is the correct signal that it cannot be mmap'd.
      */
     override fun openAssetFile(uri: Uri, mode: String): AssetFileDescriptor {
-        val (pfd, length) = openSmb(uri, mode, useAshmem = true)
+        val (pfd, length) = openSmb(uri, mode, useAshmem = true, caller = "openAssetFile")
         return AssetFileDescriptor(pfd, 0, length)
     }
 
@@ -127,7 +127,7 @@ class SmbProvider : ContentProvider() {
      * this device, which would otherwise make a streaming read return zero
      * bytes (e.g. reading `.ehviewer`/`ComicInfo.xml` while restoring downloads).
      */
-    private fun openSmb(uri: Uri, mode: String, useAshmem: Boolean): Pair<ParcelFileDescriptor, Long> {
+    private fun openSmb(uri: Uri, mode: String, useAshmem: Boolean, caller: String): Pair<ParcelFileDescriptor, Long> {
         val location = location(uri)
         if (mode == "r" || mode == "rt") {
             // Only the mmap/asset-file path benefits from ashmem. For plain
@@ -135,7 +135,7 @@ class SmbProvider : ContentProvider() {
             // from the stream rather than a `fstat` that lies on this device.
             if (useAshmem) {
                 val ashmem = runCatching { runBlocking { SmbRepository.openAshmem(location) } }.getOrNull()
-                Log.d(TAG, "openFile ashmem for ${location.subPath}: ${if (ashmem != null) "OK fd=${ashmem.fd} key=${ashmem.key} size=${ashmem.size}" else "NULL -> pipe fallback"}")
+                Log.d(TAG, "[ASHMEM/$caller] open for ${location.subPath}: ${if (ashmem != null) "OK fd=${ashmem.fd} key=${ashmem.key} size=${ashmem.size}" else "NULL -> pipe fallback"}")
                 if (ashmem != null) {
                     val base = ParcelFileDescriptor.adoptFd(ashmem.fd)
                     val pfd = object : ParcelFileDescriptor(base) {
@@ -150,6 +150,7 @@ class SmbProvider : ContentProvider() {
                     return pfd to ashmem.size
                 }
             }
+            Log.d(TAG, "[PIPE/$caller] open for ${location.subPath}")
             val (readSide, writeSide) = ParcelFileDescriptor.createPipe()
             executor.execute {
                 var handle: SmbHandle? = null
