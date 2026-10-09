@@ -340,8 +340,9 @@ pub fn smbSetCacheLimitMb(mut env: JNIEnv, _: JClass, mb: jint) {
 
 /// Map an ashmem fd into a direct `ByteBuffer` of exactly `size`, with no copy.
 ///
-/// The ashmem region is fully sized, but its `fstat` can report 0 on some
-/// Android versions (notably large files on older kernels), so Java's
+/// The ashmem region is fully sized, but its `fstat` is ALWAYS 0 — Android's
+/// ashmem driver never fills `i_size`, on every Android version and kernel
+/// (verified on both the LOS18.1 and LOS22 test devices) — so Java's
 /// `FileChannel.map` cannot size the mapping and refuses to "extend" the
 /// read-only file. We mmap natively with the size the provider already knows,
 /// wrapping the region in a direct buffer whose backing is the ashmem shared
