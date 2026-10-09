@@ -159,7 +159,26 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
         let chunk = 1024 * 1024u64;
         while offset < size {
             let len = chunk.min(size - offset);
-            let bytes = smb::read(handle, offset, len)?;
+            // A single SMB read can fail transiently (timeout / network blip),
+            // especially for large files read in many chunks. Retry a few times
+            // before giving up: without this, one transient failure aborts the
+            // whole ashmem path and the file drops back to the non-mmap pipe,
+            // which the animated decoder cannot mmap.
+            let mut last_err = None;
+            let mut bytes = None;
+            for _ in 0..3 {
+                match smb::read(handle, offset, len) {
+                    Ok(b) => {
+                        bytes = Some(b);
+                        break;
+                    }
+                    Err(e) => last_err = Some(e),
+                }
+            }
+            let bytes = match bytes {
+                Some(b) => b,
+                None => return Err(last_err.unwrap_or_else(|| anyhow!("smb read failed"))),
+            };
             if bytes.is_empty() {
                 break;
             }
