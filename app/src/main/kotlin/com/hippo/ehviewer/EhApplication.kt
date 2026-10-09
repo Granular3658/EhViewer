@@ -20,7 +20,6 @@ import android.app.Application
 import android.content.Context
 import android.os.StrictMode
 import androidx.appcompat.app.AppCompatDelegate
-import com.hippo.ehviewer.smb.SmbRepository
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.compose.runtime.Composer
 import androidx.compose.runtime.tooling.ComposeStackTraceMode
@@ -69,6 +68,7 @@ import com.hippo.ehviewer.ktor.Cronet
 import com.hippo.ehviewer.ktor.configureClient
 import com.hippo.ehviewer.ktor.configureCommon
 import com.hippo.ehviewer.ktor.isCronetAvailable
+import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.ui.keepNoMediaFileStatus
 import com.hippo.ehviewer.ui.screen.detailCache
 import com.hippo.ehviewer.ui.tools.dataStateFlow
