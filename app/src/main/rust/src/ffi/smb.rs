@@ -309,9 +309,18 @@ pub fn smbOpenAshmem(
     #[cfg(feature = "android-26")]
     {
         if let Ok(target) = read_target(&mut env, &host, port, &share, &sub, &user, &pass, &domain)
-            && let Ok((fd, size, key)) = crate::smb_cache::open_ashmem(&target)
         {
-            out = [fd as i64, size as i64, key as i64];
+            match crate::smb_cache::open_ashmem(&target) {
+                Ok((fd, size, key)) => {
+                    out = [fd as i64, size as i64, key as i64];
+                    log::info!(target: "ashmem", "smbOpenAshmem ok: fd={fd} size={size} key={key}");
+                }
+                Err(e) => {
+                    log::error!(target: "ashmem", "smbOpenAshmem failed: {e:#}");
+                }
+            }
+        } else {
+            log::error!(target: "ashmem", "smbOpenAshmem: read_target failed");
         }
     }
     let _ = env.set_long_array_region(&array, 0, &out);

@@ -16,8 +16,9 @@
 #![cfg(feature = "android-26")]
 
 use crate::smb::{self, Target};
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use libc::{MAP_SHARED, PROT_READ, PROT_WRITE, mmap, munmap};
+use log::{error, info};
 use ndk::shared_memory::SharedMemory;
 use std::collections::HashMap;
 use std::os::unix::io::AsRawFd;
@@ -102,9 +103,10 @@ fn dup_fd(mem: &SharedMemory) -> Result<i32> {
 /// streaming pipe path. The fd must be freed by the caller (it owns the dup);
 /// the backing region lives on in the cache until `release_ashmem` is called.
 pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
-    let stat = smb::stat(target)?;
+    let stat = smb::stat(target).context("smb stat")?;
     ensure!(!stat.is_directory, "refusing to cache a directory");
     let size = stat.size;
+    info!(target: "ashmem", "open_ashmem: stat size={size}");
     ensure!(size > 0, "empty file cannot be cached");
     let key: Key = (
         target.host.clone(),
@@ -137,7 +139,7 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
     // Slow path: pull the whole file into a fresh ashmem region.
     let (handle, _) = smb::open(target)?;
     let fetched = (|| -> Result<SharedMemory> {
-        let mem = SharedMemory::create(None, size as usize)?;
+        let mem = SharedMemory::create(None, size as usize).context("ashmem create")?;
         let fd = mem.as_raw_fd();
         // SAFETY: a fresh ashmem region of `size` bytes, mapped read/write so
         // we can copy the file into it, then downgraded to read-only.
@@ -152,7 +154,7 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
             )
         };
         if ptr == libc::MAP_FAILED {
-            return Err(anyhow!("mmap ashmem region failed"));
+            return Err(anyhow!("mmap ashmem region failed")).context("ashmem mmap");
         }
         let slice = unsafe { std::slice::from_raw_parts_mut(ptr as *mut u8, size as usize) };
         let mut offset: u64 = 0;
@@ -167,7 +169,7 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
             offset += bytes.len() as u64;
         }
         unsafe { munmap(ptr, size as libc::size_t) };
-        mem.set_prot(PROT_READ)?;
+        mem.set_prot(PROT_READ).context("ashmem set_prot")?;
         Ok(mem)
     })();
     // The remote handle must be closed regardless of success or failure.
@@ -209,7 +211,8 @@ pub fn open_ashmem(target: &Target) -> Result<(i32, u64, u64)> {
         .get(&id)
         .ok_or_else(|| anyhow!("lost cache entry"))?;
     let mem_ref: &SharedMemory = &entry.mem;
-    let fd = dup_fd(mem_ref)?;
+    let fd = dup_fd(mem_ref).context("ashmem dup_fd")?;
+    info!(target: "ashmem", "open_ashmem OK: fd={fd} size={size} key={id}");
     Ok((fd, size, id))
 }
 
