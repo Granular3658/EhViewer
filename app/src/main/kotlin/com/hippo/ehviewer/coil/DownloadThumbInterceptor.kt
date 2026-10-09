@@ -15,7 +15,7 @@ import com.ehviewer.core.files.toUri
 import com.hippo.ehviewer.EhApplication.Companion.thumbCache
 import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.client.getThumbKey
-import com.hippo.ehviewer.download.downloadLocation
+import com.hippo.ehviewer.download.downloadDir
 
 private val downloadInfoKey = Extras.Key<DownloadInfo?>(default = null)
 
@@ -35,7 +35,7 @@ object DownloadThumbInterceptor : Interceptor {
                 info.thumbKey = thumbKey
                 EhDB.putGalleryInfo(info.galleryInfo)
             }
-            val dir = downloadLocation / info.dirname!!
+            val dir = info.downloadDir ?: return chain.proceed()
             val format = thumbKey.substringAfterLast('.', "")
             check(format.isNotBlank())
             val thumb = dir / "thumb.$format"

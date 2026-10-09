@@ -42,7 +42,8 @@ import com.hippo.ehviewer.client.getImageKey
 import com.hippo.ehviewer.coil.read
 import com.hippo.ehviewer.coil.suspendEdit
 import com.hippo.ehviewer.download.DownloadManager
-import com.hippo.ehviewer.download.downloadLocation
+import com.hippo.ehviewer.download.allDownloadLocations
+import com.hippo.ehviewer.download.defaultDownloadLocation
 import com.hippo.ehviewer.download.tempDownloadDir
 import com.hippo.ehviewer.image.PathSource
 import com.hippo.ehviewer.jni.archiveFdBatch
@@ -80,7 +81,8 @@ class SpiderDen(val info: GalleryInfo) {
         get() = tempDownloadDir.takeIf { saveAsCbz } ?: downloadDir
 
     constructor(info: GalleryInfo, dirname: String) : this(info) {
-        downloadDir = downloadLocation / dirname
+        downloadDir = allDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
+            ?: (defaultDownloadLocation / dirname)
     }
 
     @Volatile
@@ -372,5 +374,6 @@ suspend fun GalleryInfo.downloadDirname(): String {
 
 suspend fun getGalleryDownloadDir(info: GalleryInfo): Path {
     val dirname = info.downloadDirname()
-    return downloadLocation / dirname
+    return allDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
+        ?: (defaultDownloadLocation / dirname)
 }

@@ -62,6 +62,7 @@ fun DownloadCard(
     info: DownloadInfo,
     selectMode: Boolean,
     showProgress: Boolean,
+    source: String? = null,
     modifier: Modifier = Modifier,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
 ) = CrystalCard(modifier = modifier, onClick = onClick, onLongClick = onLongClick, interactionSource = interactionSource) {
@@ -155,12 +156,25 @@ fun DownloadCard(
                     GalleryListCardRating(rating = info.rating, modifier = Modifier.padding(top = 1.dp, bottom = 3.dp))
                     val categoryColor = EhUtils.getCategoryColor(info.category)
                     val categoryText = EhUtils.getCategory(info.category).uppercase()
-                    Text(
-                        text = categoryText,
-                        modifier = Modifier.clip(ShapeDefaults.Small).background(categoryColor).padding(vertical = 2.dp, horizontal = 8.dp),
-                        color = EhUtils.getCategoryTextColor(categoryColor),
-                        style = MaterialTheme.typography.labelLarge,
-                    )
+                    Row {
+                        Text(
+                            text = categoryText,
+                            modifier = Modifier.clip(ShapeDefaults.Small).background(categoryColor).padding(vertical = 2.dp, horizontal = 8.dp),
+                            color = EhUtils.getCategoryTextColor(categoryColor),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        // A null source already means "hidden": the caller decides via the pref
+                        if (source != null) {
+                            Text(
+                                text = source,
+                                modifier = Modifier.padding(start = 4.dp).clip(ShapeDefaults.Small)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                                    .padding(vertical = 2.dp, horizontal = 8.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                        }
+                    }
                 }
                 Spacer(modifier = Modifier.weight(1f))
                 val running = downloadState == DownloadInfo.STATE_WAIT || downloadState == DownloadInfo.STATE_DOWNLOAD

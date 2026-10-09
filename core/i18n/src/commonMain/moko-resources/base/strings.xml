@@ -336,6 +336,16 @@
     <string name="settings_ads_placeholder">[Optional] Pick placeholder to replace ads</string>
     <string name="settings_download">Download</string>
     <string name="settings_download_download_location">Download location</string>
+    <string name="settings_download_default_location">Default download directory</string>
+    <string name="settings_download_extra_locations">Download directories</string>
+    <string name="settings_download_add_location">Add directory</string>
+    <string name="settings_download_location_already_added">This directory has already been added</string>
+    <string name="settings_download_remove_location">Remove</string>
+    <string name="settings_download_cannot_remove_default">The default download location cannot be removed. Set another location as default first.</string>
+    <string name="settings_download_set_default">Set as default</string>
+    <string name="settings_download_set_default_done">Default</string>
+    <string name="settings_download_show_source">Show download directory source</string>
+    <string name="settings_download_show_source_summary">Label each download with the directory it lives in</string>
     <string name="settings_download_cant_get_download_location">Can\'t get download location</string>
     <string name="settings_download_media_scan">Allow media scan</string>
     <string name="settings_download_media_scan_summary_on">Please hide your gallery apps away from other people</string>

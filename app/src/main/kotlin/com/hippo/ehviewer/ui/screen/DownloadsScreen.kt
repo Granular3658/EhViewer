@@ -119,6 +119,7 @@ import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.download.DownloadService
 import com.hippo.ehviewer.download.DownloadsFilterMode
 import com.hippo.ehviewer.download.SortMode
+import com.hippo.ehviewer.download.downloadDir
 import com.hippo.ehviewer.ui.DrawerHandle
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.confirmRemoveDownloadRange
@@ -148,6 +149,7 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
     var sortMode by Settings.downloadSortMode.asMutableState()
     val filterMode by Settings.downloadFilterMode.collectAsState { DownloadsFilterMode.from(it) }
     val showProgress by Settings.showReadingProgress.collectAsState()
+    val showSource by Settings.showDownloadSource.collectAsState()
     var filterState by rememberSerializable { mutableStateOf(DownloadsFilterState(filterMode, Settings.recentDownloadLabel.value)) }
     var invalidateKey by rememberSaveable { mutableStateOf(false) }
     var isLoading by rememberSaveable { mutableStateOf(true) }
@@ -609,6 +611,7 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
                 ) {
                     items(list, key = { it.gid }) { info ->
                         val checked = info.gid in checkedInfoMap
+                        val source = if (showSource) info.downloadDir?.parent?.name else null
                         CheckableItem(
                             checked = checked,
                             modifier = Modifier.thenIf(animateItems) { animateItem() },
@@ -638,6 +641,7 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
                                 info = info,
                                 selectMode = selectMode,
                                 showProgress = showProgress,
+                                source = source,
                                 modifier = Modifier.height(height),
                                 interactionSource = interactionSource,
                             )

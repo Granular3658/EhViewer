@@ -41,6 +41,7 @@ import coil3.util.DebugLogger
 import com.ehviewer.core.database.SearchDatabase
 import com.ehviewer.core.database.roomDb
 import com.ehviewer.core.files.deleteContent
+import com.ehviewer.core.files.toUri
 import com.ehviewer.core.ui.util.initSETConnection
 import com.ehviewer.core.util.isAtLeastO
 import com.ehviewer.core.util.isAtLeastP
@@ -60,6 +61,7 @@ import com.hippo.ehviewer.coil.QrCodeInterceptor
 import com.hippo.ehviewer.dailycheck.checkDawn
 import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.download.DownloadsFilterMode
+import com.hippo.ehviewer.download.downloadLocation
 import com.hippo.ehviewer.ktbuilder.diskCache
 import com.hippo.ehviewer.ktbuilder.imageLoader
 import com.hippo.ehviewer.ktor.Cronet
@@ -121,6 +123,19 @@ class EhApplication : Application(), SingletonImageLoader.Factory {
             }
         }
         launchIO {
+            // One-shot: fold the legacy single download location into the multi-location set.
+            // Guarded by downloadLocationsMigrated so that clearing every configured
+            // location later does not resurrect the legacy one on the next launch.
+            if (!Settings.downloadLocationsMigrated.value) {
+                if (Settings.downloadLocations.value.isEmpty() && Settings.downloadScheme != null) {
+                    runCatching {
+                        val legacyUri = downloadLocation.toUri().toString()
+                        Settings.downloadLocations.value = setOf(legacyUri)
+                        Settings.defaultDownloadLocationUri.value = legacyUri
+                    }.onFailure { logcat(it) }
+                }
+                Settings.downloadLocationsMigrated.value = true
+            }
             EhTagDatabase.launchUpdate()
             @Suppress("UNUSED_EXPRESSION")
             launch { EhDB }

@@ -320,6 +320,16 @@
     <string name="settings_ads_placeholder">[可选] 选择替换外部广告的图片</string>
     <string name="settings_download">下载</string>
     <string name="settings_download_download_location">下载路径</string>
+    <string name="settings_download_default_location">默认下载目录</string>
+    <string name="settings_download_extra_locations">下载目录</string>
+    <string name="settings_download_add_location">添加下载目录</string>
+    <string name="settings_download_location_already_added">该目录已添加</string>
+    <string name="settings_download_remove_location">移除</string>
+    <string name="settings_download_cannot_remove_default">无法移除默认下载目录，请先将其他目录设为默认</string>
+    <string name="settings_download_set_default">设为默认</string>
+    <string name="settings_download_set_default_done">默认</string>
+    <string name="settings_download_show_source">显示下载目录来源</string>
+    <string name="settings_download_show_source_summary">在每个下载项上标注其所在目录</string>
     <string name="settings_download_cant_get_download_location">无法获取下载路径</string>
     <string name="settings_download_concurrency">并发下载数</string>
     <string name="settings_download_concurrency_summary">最多同时下载 %s 张图片</string>
