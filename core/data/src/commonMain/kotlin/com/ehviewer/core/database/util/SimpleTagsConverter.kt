@@ -1,11 +1,11 @@
 package com.ehviewer.core.database.util
 
-import androidx.room3.ColumnTypeConverter
+import androidx.room.TypeConverter
 
 class SimpleTagsConverter {
-    @ColumnTypeConverter
+    @TypeConverter
     fun fromString(value: String) = value.split(", ")
 
-    @ColumnTypeConverter
+    @TypeConverter
     fun toString(value: List<String>) = value.joinToString()
 }

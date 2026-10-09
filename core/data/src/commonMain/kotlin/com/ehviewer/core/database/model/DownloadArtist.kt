@@ -1,13 +1,15 @@
 package com.ehviewer.core.database.model
 
-import androidx.room3.ColumnInfo
-import androidx.room3.Entity
-import androidx.room3.ForeignKey
+import androidx.room.ColumnInfo
+import androidx.room.Entity
+import androidx.room.ForeignKey
 
 @Entity(
     tableName = "DOWNLOAD_ARTISTS",
     primaryKeys = ["GID", "ARTIST"],
-    foreignKeys = [ForeignKey(DownloadEntity::class, ["GID"], ["GID"], onDelete = ForeignKey.CASCADE)],
+    foreignKeys = [
+        ForeignKey(DownloadEntity::class, ["GID"], ["GID"], onDelete = ForeignKey.CASCADE),
+    ],
 )
 data class DownloadArtist(
     @ColumnInfo(name = "GID")

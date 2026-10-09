@@ -1,7 +1,7 @@
 plugins {
     alias(libs.plugins.ehviewer.multiplatform.library)
     alias(libs.plugins.ksp)
-    alias(libs.plugins.room3)
+    alias(libs.plugins.room)
 }
 
 kotlin {
@@ -10,7 +10,7 @@ kotlin {
             dependencies {
                 api(projects.core.common)
                 api(libs.androidx.datastore)
-                api(libs.androidx.room3.paging)
+                api(libs.androidx.room.paging)
                 implementation(libs.ktor.client.core)
             }
         }
@@ -24,9 +24,9 @@ kotlin {
 }
 
 dependencies {
-    add("kspAndroid", libs.androidx.room3.compiler)
+    add("kspAndroid", libs.androidx.room.compiler)
 }
 
-room3 {
+room {
     schemaDirectory("$projectDir/schemas")
 }

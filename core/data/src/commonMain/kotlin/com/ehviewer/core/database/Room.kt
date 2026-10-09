@@ -1,6 +1,6 @@
 package com.ehviewer.core.database
 
-import androidx.room3.RoomDatabase
+import androidx.room.RoomDatabase
 import okio.Path
 
 expect inline fun <reified T : RoomDatabase> roomDb(
