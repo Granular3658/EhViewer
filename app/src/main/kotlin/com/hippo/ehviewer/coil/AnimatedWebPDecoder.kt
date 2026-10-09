@@ -45,7 +45,16 @@ private fun ImageSource.toByteBufferOrNull(): ByteBuffer? {
         // file descriptor (SMB uses an in-memory ashmem region), so a zero-copy
         // mmap is always correct and OOM-safe. Pipes cannot be mmap'd and report
         // a zero length, which we reject so the caller can fall back.
-        is ContentMetadata -> metadata.assetFileDescriptor.createInputStream().mapReadOnly()
+        is ContentMetadata -> {
+            val afd = metadata.assetFileDescriptor
+            // Prefer the length the provider declared: an ashmem fd's fstat can
+            // report 0 for large files on some Android versions (e.g. LOS 15 /
+            // Android 8.1), even though the region is fully sized. The provider
+            // advertises the real SMB size via the AssetFileDescriptor length.
+            val size = if (afd.length > 0) afd.length else afd.createInputStream().channel.size()
+            if (size <= 0L) throw IOException("cannot mmap zero-length source (pipe?)")
+            afd.createInputStream().channel.map(FileChannel.MapMode.READ_ONLY, 0, size)
+        }
         is ByteBufferMetadata -> metadata.byteBuffer
         else -> null
     }

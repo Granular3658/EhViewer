@@ -2,6 +2,7 @@ package com.hippo.ehviewer.smb
 
 import android.content.ContentProvider
 import android.content.ContentValues
+import android.content.res.AssetFileDescriptor
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
@@ -98,7 +99,27 @@ class SmbProvider : ContentProvider() {
         return row
     }
 
-    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
+    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor = openSmb(uri, mode).first
+
+    /**
+     * Like [openFile], but wraps the descriptor in an [AssetFileDescriptor] that
+     * declares the real file length. The ashmem path knows the exact size from
+     * the SMB stat, and advertising it lets the decode layer `mmap` correctly
+     * even when an ashmem fd's `fstat` reports 0 on some Android versions
+     * (notably large files on older kernels). The pipe path leaves the length
+     * unknown (-1), which is the correct signal that it cannot be mmap'd.
+     */
+    override fun openAssetFile(uri: Uri, mode: String): AssetFileDescriptor {
+        val (pfd, length) = openSmb(uri, mode)
+        return AssetFileDescriptor(pfd, 0, length)
+    }
+
+    /**
+     * Opens an SMB location, returning the descriptor together with its declared
+     * length: the real file size for the ashmem path, or -1 for the streaming
+     * pipe (its length is only known once fully read).
+     */
+    private fun openSmb(uri: Uri, mode: String): Pair<ParcelFileDescriptor, Long> {
         val location = location(uri)
         if (mode == "r" || mode == "rt") {
             // Prefer the in-memory (ashmem) cache: it yields a real, mmap-able
@@ -109,7 +130,7 @@ class SmbProvider : ContentProvider() {
             Log.d(TAG, "openFile ashmem for ${location.subPath}: ${if (ashmem != null) "OK fd=${ashmem.fd} key=${ashmem.key} size=${ashmem.size}" else "NULL -> pipe fallback"}")
             if (ashmem != null) {
                 val base = ParcelFileDescriptor.adoptFd(ashmem.fd)
-                return object : ParcelFileDescriptor(base) {
+                val pfd = object : ParcelFileDescriptor(base) {
                     override fun close() {
                         try {
                             super.close()
@@ -118,6 +139,7 @@ class SmbProvider : ContentProvider() {
                         }
                     }
                 }
+                return pfd to ashmem.size
             }
             val (readSide, writeSide) = ParcelFileDescriptor.createPipe()
             executor.execute {
@@ -150,7 +172,7 @@ class SmbProvider : ContentProvider() {
                     runCatching { writeSide.close() }
                 }
             }
-            return readSide
+            return readSide to -1L
         } else if (mode.contains('w', ignoreCase = true)) {
             val (readSide, writeSide) = ParcelFileDescriptor.createPipe()
             // Write mode: the caller writes into `writeSide`; we drain `readSide`
@@ -188,7 +210,7 @@ class SmbProvider : ContentProvider() {
                     finished.countDown()
                 }
             }
-            return object : ParcelFileDescriptor(writeSide) {
+            val pfd = object : ParcelFileDescriptor(writeSide) {
                 override fun close() {
                     try {
                         super.close()
@@ -198,6 +220,7 @@ class SmbProvider : ContentProvider() {
                     }
                 }
             }
+            return pfd to -1L
         } else {
             throw IOException("Unsupported SMB open mode: $mode")
         }
