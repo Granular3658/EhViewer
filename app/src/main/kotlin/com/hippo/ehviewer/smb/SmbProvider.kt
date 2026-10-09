@@ -99,7 +99,7 @@ class SmbProvider : ContentProvider() {
         return row
     }
 
-    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor = openSmb(uri, mode).first
+    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor = openSmb(uri, mode, useAshmem = false).first
 
     /**
      * Like [openFile], but wraps the descriptor in an [AssetFileDescriptor] that
@@ -110,7 +110,7 @@ class SmbProvider : ContentProvider() {
      * unknown (-1), which is the correct signal that it cannot be mmap'd.
      */
     override fun openAssetFile(uri: Uri, mode: String): AssetFileDescriptor {
-        val (pfd, length) = openSmb(uri, mode)
+        val (pfd, length) = openSmb(uri, mode, useAshmem = true)
         return AssetFileDescriptor(pfd, 0, length)
     }
 
@@ -118,28 +118,37 @@ class SmbProvider : ContentProvider() {
      * Opens an SMB location, returning the descriptor together with its declared
      * length: the real file size for the ashmem path, or -1 for the streaming
      * pipe (its length is only known once fully read).
+     *
+     * `useAshmem` should be true only for the asset-file (mmap) path
+     * ([openAssetFile]), where a real, mmap-able descriptor plus a declared
+     * length is what the decode layer needs. Plain streaming reads
+     * ([openFile]) go through the pipe instead: their length is determined by
+     * the byte stream, not by `fstat` — and an ashmem fd's `fstat` returns 0 on
+     * this device, which would otherwise make a streaming read return zero
+     * bytes (e.g. reading `.ehviewer`/`ComicInfo.xml` while restoring downloads).
      */
-    private fun openSmb(uri: Uri, mode: String): Pair<ParcelFileDescriptor, Long> {
+    private fun openSmb(uri: Uri, mode: String, useAshmem: Boolean): Pair<ParcelFileDescriptor, Long> {
         val location = location(uri)
         if (mode == "r" || mode == "rt") {
-            // Prefer the in-memory (ashmem) cache: it yields a real, mmap-able
-            // file descriptor, so the decode layer avoids both the one-shot pipe
-            // (which cannot be mmap'd) and per-image direct buffers (which used to
-            // OOM). Falls back to the pipe below when unsupported or on failure.
-            val ashmem = runCatching { runBlocking { SmbRepository.openAshmem(location) } }.getOrNull()
-            Log.d(TAG, "openFile ashmem for ${location.subPath}: ${if (ashmem != null) "OK fd=${ashmem.fd} key=${ashmem.key} size=${ashmem.size}" else "NULL -> pipe fallback"}")
-            if (ashmem != null) {
-                val base = ParcelFileDescriptor.adoptFd(ashmem.fd)
-                val pfd = object : ParcelFileDescriptor(base) {
-                    override fun close() {
-                        try {
-                            super.close()
-                        } finally {
-                            runCatching { SmbRepository.releaseAshmem(ashmem.key) }
+            // Only the mmap/asset-file path benefits from ashmem. For plain
+            // streaming reads we skip it and use the pipe, whose length comes
+            // from the stream rather than a `fstat` that lies on this device.
+            if (useAshmem) {
+                val ashmem = runCatching { runBlocking { SmbRepository.openAshmem(location) } }.getOrNull()
+                Log.d(TAG, "openFile ashmem for ${location.subPath}: ${if (ashmem != null) "OK fd=${ashmem.fd} key=${ashmem.key} size=${ashmem.size}" else "NULL -> pipe fallback"}")
+                if (ashmem != null) {
+                    val base = ParcelFileDescriptor.adoptFd(ashmem.fd)
+                    val pfd = object : ParcelFileDescriptor(base) {
+                        override fun close() {
+                            try {
+                                super.close()
+                            } finally {
+                                runCatching { SmbRepository.releaseAshmem(ashmem.key) }
+                            }
                         }
                     }
+                    return pfd to ashmem.size
                 }
-                return pfd to ashmem.size
             }
             val (readSide, writeSide) = ParcelFileDescriptor.createPipe()
             executor.execute {
