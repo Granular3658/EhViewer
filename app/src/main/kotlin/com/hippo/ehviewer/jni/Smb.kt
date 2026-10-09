@@ -129,3 +129,15 @@ external fun smbOpenAshmem(
 
 /** Release a reference obtained from [smbOpenAshmem]. */
 external fun smbReleaseAshmem(key: Long)
+
+/**
+ * Maps an ashmem fd into a direct [java.nio.ByteBuffer] of exactly [size], with
+ * no copy: the buffer's backing is the in-memory ashmem region itself, never the
+ * JVM heap. Used by the animated WebP decoder because an ashmem fd's `fstat`
+ * reports 0 on some Android versions, so `FileChannel.map` cannot size the
+ * mapping. Returns null if the mapping fails.
+ */
+external fun smbMmapReadOnly(fd: Int, size: Long): java.nio.ByteBuffer?
+
+/** Releases a mapping created by [smbMmapReadOnly]. */
+external fun smbMunmap(buffer: java.nio.ByteBuffer)

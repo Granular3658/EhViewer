@@ -5,7 +5,7 @@ use crate::smb::{self, DEFAULT_PORT, Target};
 use anyhow::{Result, ensure};
 use jni::JNIEnv;
 use jni::objects::{JByteBuffer, JClass, JObject, JString};
-use jni::sys::{jint, jlong, jlongArray, jobjectArray};
+use jni::sys::{jint, jlong, jlongArray, jobject, jobjectArray};
 use jni_fn::jni_fn;
 
 #[allow(clippy::too_many_arguments)]
@@ -335,4 +335,66 @@ pub fn smbReleaseAshmem(mut env: JNIEnv, _: JClass, key: jlong) {
     {
         crate::smb_cache::release_ashmem(key as u64);
     }
+}
+
+/// Map an ashmem fd into a direct `ByteBuffer` of exactly `size`, with no copy.
+///
+/// The ashmem region is fully sized, but its `fstat` can report 0 on some
+/// Android versions (notably large files on older kernels), so Java's
+/// `FileChannel.map` cannot size the mapping and refuses to "extend" the
+/// read-only file. We mmap natively with the size the provider already knows,
+/// wrapping the region in a direct buffer whose backing is the ashmem shared
+/// memory itself — never the JVM heap. Returns null on failure.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbMmapReadOnly(mut env: JNIEnv, _: JClass, fd: jint, size: jlong) -> jobject {
+    if size <= 0 {
+        return std::ptr::null_mut();
+    }
+    let size = size as usize;
+    let ptr = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            size,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        )
+    };
+    if ptr == libc::MAP_FAILED {
+        log::error!(
+            target: "ashmem",
+            "smbMmapReadOnly: mmap failed for fd={fd} size={size}: {}",
+            std::io::Error::last_os_error()
+        );
+        return std::ptr::null_mut();
+    }
+    let buf = unsafe { env.new_direct_byte_buffer(ptr as *mut u8, size) };
+    match buf {
+        Ok(buf) => buf.into_raw(),
+        Err(e) => {
+            log::error!(target: "ashmem", "smbMmapReadOnly: new_direct_byte_buffer failed: {e:#}");
+            unsafe {
+                libc::munmap(ptr, size);
+            }
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Release a mapping created by `smbMmapReadOnly`. The underlying memory is
+/// ashmem shared memory, so unmapping it lets the bounded cache reclaim the
+/// region once the decoder is done with it.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbMunmap(mut env: JNIEnv, _: JClass, buffer: JByteBuffer) {
+    jni_throwing(&mut env, |env| {
+        let addr = env.get_direct_buffer_address(&buffer)? as *mut libc::c_void;
+        let size = env.get_direct_buffer_capacity(&buffer)?;
+        if !addr.is_null() && size > 0 {
+            unsafe {
+                libc::munmap(addr, size);
+            }
+        }
+        Ok(())
+    })
 }
