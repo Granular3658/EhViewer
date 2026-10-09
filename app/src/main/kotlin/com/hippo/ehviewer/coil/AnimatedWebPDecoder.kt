@@ -33,12 +33,14 @@ class AnimatedWebPDecoder(
             imageLoader: ImageLoader,
         ): Decoder? {
             val src = result.source.source()
-            // Fast path: cheap peek on the source stream. Reliable on most
-            // devices and avoids an extra mmap for genuinely static images.
+            // Cheap pre-check on the fd-backed source. Reliable on most devices
+            // and avoids an extra mmap for genuinely static images. On some
+            // kernels an ashmem fd's read() is unreliable (its st_size is
+            // reported as 0, so the stream looks empty), so a false negative
+            // here is possible even though the bytes are valid.
             if (DecodeUtils.isAnimatedWebP(src)) {
                 logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: source pre-check isAnimated=true, mapping (meta=${result.source.metadata})" }
-                val mapped = result.source.toByteBufferOrNull()
-                if (mapped == null) {
+                val mapped = result.source.toByteBufferOrNull() ?: run {
                     logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: toByteBufferOrNull NULL -> static fallback" }
                     return null
                 }
@@ -46,29 +48,25 @@ class AnimatedWebPDecoder(
                 logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: mmap OK size=${buffer.capacity()} isAnimated=true" }
                 return AnimatedWebPDecoder(buffer, release)
             }
-            // The pre-check read the fd-backed source and found no animation.
-            // On some devices the ashmem fd reports size 0 to fstat, so the
-            // Source reads as empty even though the bytes are valid. Re-verify
-            // against the explicitly sized mmap buffer (the exact bytes the
-            // decoder would use) before giving up on the animated path.
-            val readable = src.peek().request(12)
-            if (!readable) {
-                val mapped = result.source.toByteBufferOrNull() ?: run {
-                    logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: pre-check false + source unreadable, toByteBufferOrNull NULL -> static" }
-                    return null
-                }
-                val (buffer, release) = mapped
-                return if (isAnimatedWebPBuffer(buffer)) {
-                    logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: PRE-CHECK FALSE but mmap buffer IS animated! size=${buffer.capacity()} (fd-source detection was unreliable)" }
-                    AnimatedWebPDecoder(buffer, release)
-                } else {
-                    logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: truly not animated (mmap) size=${buffer.capacity()} -> static" }
-                    release?.invoke()
-                    null
-                }
+            // Pre-check false. The fd-backed source is unreliable on some
+            // devices, so do NOT trust it: verify against the explicitly-sized
+            // mmap buffer (sized from the advertised length, not fstat), which
+            // always carries the complete bytes — the exact buffer the decoder
+            // would use, and the same bytes the static decoder renders the
+            // (correct) first frame from.
+            val mapped = result.source.toByteBufferOrNull() ?: run {
+                logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: pre-check false, toByteBufferOrNull NULL -> static" }
+                return null
             }
-            logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: isAnimatedWebP=false on readable source -> static" }
-            return null
+            val (buffer, release) = mapped
+            return if (isAnimatedWebPBuffer(buffer)) {
+                logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: PRE-CHECK FALSE but mmap buffer IS animated! size=${buffer.capacity()} (fd-source detection unreliable)" }
+                AnimatedWebPDecoder(buffer, release)
+            } else {
+                logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: truly not animated (mmap) size=${buffer.capacity()} -> static" }
+                release?.invoke()
+                null
+            }
         }
     }
 }
