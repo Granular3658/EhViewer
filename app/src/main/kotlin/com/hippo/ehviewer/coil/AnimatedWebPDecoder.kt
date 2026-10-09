@@ -19,7 +19,6 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import okio.FileSystem
-import okio.Okio
 
 class AnimatedWebPDecoder(
     private val source: ByteBuffer,
@@ -59,8 +58,7 @@ class AnimatedWebPDecoder(
                     return null
                 }
                 val (buffer, release) = mapped
-                val buffered = Okio.buffer(Okio.source(buffer.asReadOnlyBuffer()))
-                return if (DecodeUtils.isAnimatedWebP(buffered)) {
+                return if (isAnimatedWebPBuffer(buffer)) {
                     logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: PRE-CHECK FALSE but mmap buffer IS animated! size=${buffer.capacity()} (fd-source detection was unreliable)" }
                     AnimatedWebPDecoder(buffer, release)
                 } else {
@@ -121,4 +119,24 @@ private fun FileInputStream.mapReadOnly(): ByteBuffer {
     val size = channel.size()
     if (size == 0L) throw IOException("cannot mmap zero-length source (pipe?)")
     return channel.map(FileChannel.MapMode.READ_ONLY, 0, size)
+}
+
+/**
+ * Detect an animated (extended) WebP directly from the backing bytes, without
+ * going through an fd-backed okio Source. The fd Source is unreliable on some
+ * kernels (ashmem fstat reports size 0), but the ByteBuffer is sized from the
+ * explicit length the SMB provider advertised, so it is always complete.
+ *
+ * Layout check (big-endian int reads):
+ *   bytes  0-3  = "RIFF" (0x52494646)
+ *   bytes  8-11 = "WEBP" (0x57454250)
+ *   bytes 12-15 = "VP8X" (0x56503858)
+ *   byte     20 = flags; animation flag is bit 1 (0x02)
+ */
+private fun isAnimatedWebPBuffer(buffer: ByteBuffer): Boolean {
+    val b = buffer.asReadOnlyBuffer()
+    if (b.remaining() < 21) return false
+    if (b.getInt(0) != 0x52494646 || b.getInt(8) != 0x57454250) return false
+    if (b.getInt(12) != 0x56503858) return false
+    return (b.get(20).toInt() and 0xFF and 0x02) != 0
 }
