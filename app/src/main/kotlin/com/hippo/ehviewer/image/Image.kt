@@ -54,6 +54,7 @@ import com.hippo.ehviewer.jni.munmap
 import com.hippo.ehviewer.jni.rewriteGifSource
 import com.hippo.ehviewer.ktbuilder.execute
 import com.hippo.ehviewer.ktbuilder.imageRequest
+import com.ehviewer.core.util.logcat
 import java.nio.ByteBuffer
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.decrementAndFetch
@@ -64,9 +65,22 @@ import splitties.init.appCtx
 class Image private constructor(image: CoilImage, private val src: ImageSource) {
     val refcnt = AtomicInt(1)
 
-    fun pin() = refcnt.updateAndFetch { if (it != 0) it + 1 else 0 } != 0
+    val diagId = System.identityHashCode(this)
+    val isAnimatedDrawable: Boolean
+        get() = (innerImage as? DrawableImage)?.drawable is AnimatedWebPDrawable
+    val isDisposed: Boolean
+        get() = ((innerImage as? DrawableImage)?.drawable as? AnimatedWebPDrawable)?.isDisposed ?: false
 
-    fun unpin() = (refcnt.decrementAndFetch() == 0).also { if (it) recycle() }
+    fun pin() = refcnt.updateAndFetch { if (it != 0) it + 1 else 0 }.also { new ->
+        if (new == 0) logcat("WebPDiag") { "Image#$diagId pin() REFUSED (already disposed) animated=${isAnimatedDrawable}" }
+    } != 0
+
+    fun unpin() = (refcnt.decrementAndFetch() == 0).also { zero ->
+        if (zero) {
+            logcat("WebPDiag") { "Image#$diagId unpin -> refcnt 0, recycling animated=${isAnimatedDrawable}" }
+            recycle()
+        }
+    }
 
     val intrinsicSize = with(image) { IntSize(width, height) }
     val allocationSize = image.size
@@ -89,10 +103,16 @@ class Image private constructor(image: CoilImage, private val src: ImageSource) 
     private fun recycle() {
         when (val image = innerImage!!) {
             is DrawableImage -> {
-                (image.drawable as? AnimatedWebPDrawable)?.dispose()
+                (image.drawable as? AnimatedWebPDrawable)?.let {
+                    logcat("WebPDiag") { "Image#$diagId recycle: disposing AnimatedWebPDrawable#${System.identityHashCode(it)}" }
+                    it.dispose()
+                }
                 src.close()
             }
-            is BitmapImage -> image.bitmap.recycle()
+            is BitmapImage -> {
+                logcat("WebPDiag") { "Image#$diagId recycle: BitmapImage ${image.bitmap.width}x${image.bitmap.height}" }
+                image.bitmap.recycle()
+            }
         }
         innerImage = null
     }

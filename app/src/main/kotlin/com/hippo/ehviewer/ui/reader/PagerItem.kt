@@ -57,6 +57,7 @@ import com.hippo.ehviewer.gallery.progressObserved
 import com.hippo.ehviewer.gallery.statusObserved
 import com.hippo.ehviewer.image.Image
 import com.hippo.ehviewer.util.AdsPlaceholderFile
+import com.ehviewer.core.util.logcat
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.drop
 
@@ -112,6 +113,11 @@ fun PagerItem(
             var painter by remember { mutableStateOf<Painter?>(null) }
             LaunchedEffect(image) {
                 if (image.pin()) {
+                    if (image.isDisposed) {
+                        logcat("WebPDiag") { "PagerItem: DISPLAYING ALREADY-DISPOSED image at index=${page.index} (use-after-dispose!)" }
+                    } else if (image.isAnimatedDrawable) {
+                        logcat("WebPDiag") { "PagerItem: showing animated webp at index=${page.index}" }
+                    }
                     painter = image.toPainter()
                     try {
                         awaitCancellation()

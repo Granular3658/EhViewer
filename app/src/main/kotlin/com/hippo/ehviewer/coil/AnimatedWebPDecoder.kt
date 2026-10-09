@@ -11,6 +11,7 @@ import coil3.decode.ImageSource
 import coil3.fetch.SourceFetchResult
 import coil3.gif.isAnimatedWebP
 import coil3.request.Options
+import com.ehviewer.core.util.logcat
 import com.hippo.ehviewer.jni.smbMmapReadOnly
 import com.hippo.ehviewer.jni.smbMunmap
 import java.io.FileInputStream
@@ -31,8 +32,18 @@ class AnimatedWebPDecoder(
             options: Options,
             imageLoader: ImageLoader,
         ) = if (DecodeUtils.isAnimatedWebP(result.source.source())) {
-            result.source.toByteBufferOrNull()?.let { (buffer, release) -> AnimatedWebPDecoder(buffer, release) }
+            logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: animated webp detected, mapping source (metadata=${result.source.metadata})" }
+            val mapped = result.source.toByteBufferOrNull()
+            if (mapped == null) {
+                logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: toByteBufferOrNull NULL -> falls back to static decoder (first frame only!)" }
+                null
+            } else {
+                val (buffer, release) = mapped
+                logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: mmap OK size=${buffer.capacity()}" }
+                AnimatedWebPDecoder(buffer, release)
+            }
         } else {
+            logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: isAnimatedWebP=false -> skip (static decoder will handle)" }
             null
         }
     }
@@ -42,6 +53,7 @@ private fun ImageSource.toByteBufferOrNull(): Pair<ByteBuffer, (() -> Unit)?>? {
     if (fileSystem === FileSystem.SYSTEM) {
         val file = fileOrNull()
         if (file != null) {
+            logcat("WebPDiag") { "toByteBufferOrNull: LOCAL file mmap" }
             return file.toFile().inputStream().mapReadOnly() to null
         }
     }
@@ -58,17 +70,19 @@ private fun ImageSource.toByteBufferOrNull(): Pair<ByteBuffer, (() -> Unit)?>? {
             if (afd.length > 0) {
                 val fd = afd.parcelFileDescriptor?.fd ?: -1
                 if (fd < 0) throw IOException("cannot mmap ashmem: missing fd")
+                logcat("WebPDiag") { "toByteBufferOrNull: ASHMEM mmap fd=$fd len=${afd.length}" }
                 val buffer = smbMmapReadOnly(fd, afd.length)
                     ?: throw IOException("cannot mmap ashmem fd=$fd size=${afd.length}")
                 buffer to { smbMunmap(buffer) }
             } else {
+                logcat("WebPDiag") { "toByteBufferOrNull: pipe/unknown length=${afd.length} -> null (fallback to non-mmap decoder)" }
                 // Pipe / unknown-length source: cannot be mmap'd natively and we
                 // don't have a declared size, so let Coil fall back to another
                 // decoder rather than crash on a zero-length mapping.
                 null
             }
         }
-        is ByteBufferMetadata -> metadata.byteBuffer to null
+        is ByteBufferMetadata -> { logcat("WebPDiag") { "toByteBufferOrNull: ByteBufferMetadata" }; metadata.byteBuffer to null }
         else -> null
     }
 }
