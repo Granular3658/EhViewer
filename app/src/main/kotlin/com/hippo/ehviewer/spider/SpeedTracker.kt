@@ -80,8 +80,9 @@ suspend inline fun <R> timeoutBySpeed(
     request {
         var prev = 0L
         onDownload { done, total ->
+            val total = total ?: Long.MAX_VALUE
             val bytesRead = (done - prev).toInt()
-            if (done == total!!) {
+            if (done == total) {
                 tracker.reset()
             } else {
                 tracker.track(bytesRead)
