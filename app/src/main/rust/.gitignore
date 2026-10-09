@@ -1,1 +1,3 @@
 /target
+# Corrosion copies Cargo.toml to a hashed dir (Cargo.toml_<hash>) as a build cache.
+Cargo.toml_*/
