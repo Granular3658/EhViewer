@@ -1,15 +1,15 @@
 package com.ehviewer.core.database.model
 
-import androidx.room.ColumnInfo
-import androidx.room.Entity
-import androidx.room.Ignore
-import androidx.room.PrimaryKey
-import androidx.room.TypeConverters
+import androidx.room3.ColumnInfo
+import androidx.room3.ColumnTypeConverters
+import androidx.room3.Entity
+import androidx.room3.Ignore
+import androidx.room3.PrimaryKey
 import com.ehviewer.core.database.util.SimpleTagsConverter
 import com.ehviewer.core.model.BaseGalleryInfo
 
 @Entity(tableName = "GALLERIES")
-@TypeConverters(SimpleTagsConverter::class)
+@ColumnTypeConverters(SimpleTagsConverter::class)
 class GalleryEntity(
     @PrimaryKey
     @ColumnInfo(name = "GID")

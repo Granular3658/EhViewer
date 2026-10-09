@@ -1,12 +1,12 @@
 package com.ehviewer.core.database.model
 
-import androidx.room.ColumnInfo
-import androidx.room.Embedded
-import androidx.room.Entity
-import androidx.room.ForeignKey
-import androidx.room.Ignore
-import androidx.room.PrimaryKey
-import androidx.room.Relation
+import androidx.room3.ColumnInfo
+import androidx.room3.Embedded
+import androidx.room3.Entity
+import androidx.room3.ForeignKey
+import androidx.room3.Ignore
+import androidx.room3.PrimaryKey
+import androidx.room3.Relation
 import com.ehviewer.core.model.GalleryInfo
 import kotlin.time.Clock
 
@@ -69,13 +69,13 @@ data class DownloadEntity(
 ) : AbstractDownloadInfo
 
 data class DownloadInfo(
-    @Relation(parentColumn = "GID", entityColumn = "GID")
+    @Relation(parentColumns = ["GID"], entityColumns = ["GID"])
     val galleryInfo: GalleryEntity,
 
     @ColumnInfo(name = "DIRNAME")
     val dirname: String?,
 
-    @Relation(parentColumn = "GID", entityColumn = "GID")
+    @Relation(parentColumns = ["GID"], entityColumns = ["GID"])
     var artistInfoList: List<DownloadArtist> = emptyList(),
 
     @Embedded

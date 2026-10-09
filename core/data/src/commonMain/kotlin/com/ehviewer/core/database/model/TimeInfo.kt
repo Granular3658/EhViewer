@@ -1,7 +1,7 @@
 package com.ehviewer.core.database.model
 
-import androidx.room.ColumnInfo
-import androidx.room.PrimaryKey
+import androidx.room3.ColumnInfo
+import androidx.room3.PrimaryKey
 
 open class TimeInfo(
     @PrimaryKey

@@ -1,29 +1,19 @@
 package com.ehviewer.core.database
 
-import androidx.room.DeleteColumn
-import androidx.room.DeleteTable
-import androidx.room.RenameColumn
-import androidx.room.RenameTable
-import androidx.room.migration.AutoMigrationSpec
-import androidx.room.migration.Migration
+import androidx.room3.DeleteColumn
+import androidx.room3.DeleteTable
+import androidx.room3.RenameColumn
+import androidx.room3.RenameTable
+import androidx.room3.migration.AutoMigrationSpec
+import androidx.room3.migration.Migration
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.execSQL
 import com.ehviewer.core.model.GalleryInfo.Companion.NOT_FAVORITED
 
 class Schema4to5 : AutoMigrationSpec {
-    override fun onPostMigrate(connection: SQLiteConnection) {
-        val needMigrationTables = arrayOf(
-            "DOWNLOADS",
-            "HISTORY",
-            "LOCAL_FAVORITES",
-        )
-        val prefixToRemove = arrayOf(
-            "https://ehgt.org/",
-            "https://s.exhentai.org/t/",
-            "https://exhentai.org/t/",
-        )
-        needMigrationTables.forEach { table ->
-            prefixToRemove.forEach { prefix ->
+    override suspend fun onPostMigrate(connection: SQLiteConnection) {
+        ["DOWNLOADS", "HISTORY", "LOCAL_FAVORITES"].forEach { table ->
+            ["https://ehgt.org/", "https://s.exhentai.org/t/", "https://exhentai.org/t/"].forEach { prefix ->
                 connection.execSQL("UPDATE $table SET thumb = SUBSTR(thumb ,LENGTH('$prefix') + 1) WHERE thumb LIKE '$prefix%'")
             }
         }
@@ -35,19 +25,14 @@ class Schema6to7 : AutoMigrationSpec
 
 @RenameColumn(tableName = "HISTORY", fromColumnName = "MODE", toColumnName = "FAVORITE_SLOT")
 class Schema9to10 : AutoMigrationSpec {
-    override fun onPostMigrate(connection: SQLiteConnection) {
+    override suspend fun onPostMigrate(connection: SQLiteConnection) {
         connection.execSQL("UPDATE HISTORY SET FAVORITE_SLOT = FAVORITE_SLOT - 2")
     }
 }
 
 class Schema10to11 : AutoMigrationSpec {
-    override fun onPostMigrate(connection: SQLiteConnection) {
-        val needMigrationTables = arrayOf(
-            "QUICK_SEARCH",
-            "DOWNLOAD_LABELS",
-            "DOWNLOADS",
-        )
-        needMigrationTables.forEach { table ->
+    override suspend fun onPostMigrate(connection: SQLiteConnection) {
+        ["QUICK_SEARCH", "DOWNLOAD_LABELS", "DOWNLOADS"].forEach { table ->
             // TODO: Rewrite this with row_number() when min sdk is 30 (SQLite 3.28.0)
             connection.execSQL("UPDATE $table SET POSITION = (SELECT COUNT(*) FROM $table T WHERE T.TIME < $table.TIME)")
         }
@@ -59,13 +44,8 @@ class Schema10to11 : AutoMigrationSpec {
 class Schema11to12 : AutoMigrationSpec
 
 class Schema12to13 : AutoMigrationSpec {
-    override fun onPostMigrate(connection: SQLiteConnection) {
-        val needMigrationTables = arrayOf(
-            "HISTORY",
-            "DOWNLOADS",
-            "LOCAL_FAVORITES",
-        )
-        needMigrationTables.forEachIndexed { index, table ->
+    override suspend fun onPostMigrate(connection: SQLiteConnection) {
+        ["HISTORY", "DOWNLOADS", "LOCAL_FAVORITES"].forEachIndexed { index, table ->
             connection.execSQL(
                 "INSERT OR IGNORE INTO GALLERIES " +
                     "SELECT GID, TOKEN, TITLE, TITLE_JPN, THUMB, CATEGORY, POSTED, UPLOADER, RATING, SIMPLE_LANGUAGE, " +
@@ -106,7 +86,7 @@ class Schema12to13 : AutoMigrationSpec {
 class Schema13to14 : AutoMigrationSpec
 
 class Schema17to18 : Migration(17, 18) {
-    override fun migrate(connection: SQLiteConnection) {
+    override suspend fun migrate(connection: SQLiteConnection) {
         connection.execSQL("CREATE TABLE IF NOT EXISTS `_new_GALLERIES` (`GID` INTEGER NOT NULL, `TOKEN` TEXT NOT NULL, `TITLE` TEXT, `TITLE_JPN` TEXT, `THUMB` TEXT, `CATEGORY` INTEGER NOT NULL, `POSTED` TEXT, `UPLOADER` TEXT, `RATING` REAL NOT NULL, `SIMPLE_LANGUAGE` TEXT, `FAVORITE_SLOT` INTEGER NOT NULL, PRIMARY KEY(`GID`))")
         connection.execSQL("INSERT INTO `_new_GALLERIES` (`GID`,`TOKEN`,`TITLE`,`TITLE_JPN`,`THUMB`,`CATEGORY`,`POSTED`,`UPLOADER`,`RATING`,`SIMPLE_LANGUAGE`,`FAVORITE_SLOT`) SELECT `GID`,`TOKEN`,`TITLE`,`TITLE_JPN`,`THUMB`,`CATEGORY`,`POSTED`,`UPLOADER`,`RATING`,`SIMPLE_LANGUAGE`,`FAVORITE_SLOT` FROM `GALLERIES` WHERE `TOKEN` IS NOT NULL")
         connection.execSQL("DROP TABLE `GALLERIES`")
@@ -118,7 +98,7 @@ class Schema17to18 : Migration(17, 18) {
 class Schema18to19 : AutoMigrationSpec
 
 class Schema20to21 : AutoMigrationSpec {
-    override fun onPostMigrate(connection: SQLiteConnection) {
+    override suspend fun onPostMigrate(connection: SQLiteConnection) {
         connection.execSQL("INSERT INTO GalleryFts(GalleryFts) VALUES('rebuild')")
     }
 }

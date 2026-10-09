@@ -15,8 +15,8 @@
  */
 package com.hippo.ehviewer
 
-import androidx.room.execSQL
-import androidx.room.useWriterConnection
+import androidx.room3.executeSQL
+import androidx.room3.useWriterConnection
 import arrow.fx.coroutines.resource
 import arrow.fx.coroutines.resourceScope
 import com.ehviewer.core.data.model.asEntity
@@ -280,8 +280,8 @@ object EhDB {
 
     suspend fun exportDB(file: Path) {
         db.useWriterConnection { conn ->
-            conn.execSQL("PRAGMA wal_checkpoint(FULL)")
-            conn.execSQL("VACUUM")
+            conn.executeSQL("PRAGMA wal_checkpoint(FULL)")
+            conn.executeSQL("VACUUM")
         }
         val dbFile = getDatabasePath(DB_NAME)
         dbFile sendTo file

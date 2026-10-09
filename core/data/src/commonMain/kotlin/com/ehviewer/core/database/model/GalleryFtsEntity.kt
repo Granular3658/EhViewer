@@ -1,8 +1,8 @@
 package com.ehviewer.core.database.model
 
-import androidx.room.ColumnInfo
-import androidx.room.Entity
-import androidx.room.Fts4
+import androidx.room3.ColumnInfo
+import androidx.room3.Entity
+import androidx.room3.Fts4
 
 @Fts4(contentEntity = GalleryEntity::class)
 @Entity(tableName = "GALLERIES_FTS")

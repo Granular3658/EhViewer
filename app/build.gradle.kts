@@ -204,7 +204,7 @@ dependencies {
     implementation(libs.androidx.paging.compose)
 
     // https://developer.android.com/jetpack/androidx/releases/room
-    implementation(libs.androidx.room.paging)
+    implementation(libs.androidx.room3.paging)
 
     implementation(libs.androidx.work.runtime)
     implementation(libs.material.motion.core)

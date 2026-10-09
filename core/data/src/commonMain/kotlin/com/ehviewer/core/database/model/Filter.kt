@@ -1,9 +1,9 @@
 package com.ehviewer.core.database.model
 
-import androidx.room.ColumnInfo
-import androidx.room.Entity
-import androidx.room.PrimaryKey
-import androidx.room.TypeConverter
+import androidx.room3.ColumnInfo
+import androidx.room3.ColumnTypeConverter
+import androidx.room3.Entity
+import androidx.room3.PrimaryKey
 
 @Entity(tableName = "FILTER")
 data class Filter(
@@ -31,9 +31,9 @@ enum class FilterMode(val field: Int) {
 }
 
 class FilterModeConverter {
-    @TypeConverter
+    @ColumnTypeConverter
     fun fromFilterMode(mode: FilterMode) = mode.field
 
-    @TypeConverter
+    @ColumnTypeConverter
     fun toFilterMode(mode: Int) = FilterMode.entries[mode]
 }

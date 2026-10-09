@@ -1,9 +1,11 @@
 package com.ehviewer.core.database
 
-import androidx.room.AutoMigration
-import androidx.room.Database
-import androidx.room.RoomDatabase
-import androidx.room.TypeConverters
+import androidx.room3.AutoMigration
+import androidx.room3.ColumnTypeConverters
+import androidx.room3.DaoReturnTypeConverters
+import androidx.room3.Database
+import androidx.room3.RoomDatabase
+import androidx.room3.paging.PagingSourceDaoReturnTypeConverter
 import com.ehviewer.core.database.dao.DownloadArtistDao
 import com.ehviewer.core.database.dao.DownloadDirnameDao
 import com.ehviewer.core.database.dao.DownloadLabelDao
@@ -58,7 +60,8 @@ import com.ehviewer.core.database.model.Search
         AutoMigration(from = 22, to = 23),
     ],
 )
-@TypeConverters(FilterModeConverter::class)
+@ColumnTypeConverters(FilterModeConverter::class)
+@DaoReturnTypeConverters(PagingSourceDaoReturnTypeConverter::class)
 abstract class EhDatabase : RoomDatabase() {
     abstract fun galleryDao(): GalleryDao
     abstract fun downloadArtistDao(): DownloadArtistDao
