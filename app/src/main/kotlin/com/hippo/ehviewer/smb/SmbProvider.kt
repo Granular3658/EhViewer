@@ -2,6 +2,7 @@ package com.hippo.ehviewer.smb
 
 import android.content.ContentProvider
 import android.content.ContentValues
+import android.content.res.AssetFileDescriptor
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
@@ -98,10 +99,48 @@ class SmbProvider : ContentProvider() {
         return row
     }
 
-    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
-        val (readSide, writeSide) = ParcelFileDescriptor.createPipe()
+    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor = openSmb(uri, mode).first
+
+    /**
+     * Like [openFile], but wraps the descriptor in an [AssetFileDescriptor] that
+     * declares the real file length. The ashmem path knows the exact size from
+     * the SMB stat, and advertising it lets the decode layer `mmap` correctly
+     * even when an ashmem fd's `fstat` reports 0 on some Android versions
+     * (notably large files on older kernels). The pipe path leaves the length
+     * unknown (-1), which is the correct signal that it cannot be mmap'd.
+     */
+    override fun openAssetFile(uri: Uri, mode: String): AssetFileDescriptor {
+        val (pfd, length) = openSmb(uri, mode)
+        return AssetFileDescriptor(pfd, 0, length)
+    }
+
+    /**
+     * Opens an SMB location, returning the descriptor together with its declared
+     * length: the real file size for the ashmem path, or -1 for the streaming
+     * pipe (its length is only known once fully read).
+     */
+    private fun openSmb(uri: Uri, mode: String): Pair<ParcelFileDescriptor, Long> {
         val location = location(uri)
         if (mode == "r" || mode == "rt") {
+            // Prefer the in-memory (ashmem) cache: it yields a real, mmap-able
+            // file descriptor, so the decode layer avoids both the one-shot pipe
+            // (which cannot be mmap'd) and per-image direct buffers (which used to
+            // OOM). Falls back to the pipe below when unsupported or on failure.
+            val ashmem = runCatching { runBlocking { SmbRepository.openAshmem(location) } }.getOrNull()
+            if (ashmem != null) {
+                val base = ParcelFileDescriptor.adoptFd(ashmem.fd)
+                val pfd = object : ParcelFileDescriptor(base) {
+                    override fun close() {
+                        try {
+                            super.close()
+                        } finally {
+                            runCatching { SmbRepository.releaseAshmem(ashmem.key) }
+                        }
+                    }
+                }
+                return pfd to ashmem.size
+            }
+            val (readSide, writeSide) = ParcelFileDescriptor.createPipe()
             executor.execute {
                 var handle: SmbHandle? = null
                 try {
@@ -132,8 +171,9 @@ class SmbProvider : ContentProvider() {
                     runCatching { writeSide.close() }
                 }
             }
-            return readSide
+            return readSide to -1L
         } else if (mode.contains('w', ignoreCase = true)) {
+            val (readSide, writeSide) = ParcelFileDescriptor.createPipe()
             // Write mode: the caller writes into `writeSide`; we drain `readSide`
             // on a worker thread and forward the bytes to the Rust SMB writer.
             // That forwarding is asynchronous, so a caller that closes the
@@ -169,7 +209,7 @@ class SmbProvider : ContentProvider() {
                     finished.countDown()
                 }
             }
-            return object : ParcelFileDescriptor(writeSide) {
+            val pfd = object : ParcelFileDescriptor(writeSide) {
                 override fun close() {
                     try {
                         super.close()
@@ -179,6 +219,7 @@ class SmbProvider : ContentProvider() {
                     }
                 }
             }
+            return pfd to -1L
         } else {
             throw IOException("Unsupported SMB open mode: $mode")
         }

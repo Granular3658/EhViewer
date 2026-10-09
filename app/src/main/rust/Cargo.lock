@@ -404,6 +404,7 @@ dependencies = [
  "image",
  "jni 0.21.1",
  "jni_fn",
+ "libc",
  "libwebp-sys2",
  "log",
  "ndk",

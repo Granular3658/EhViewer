@@ -111,3 +111,33 @@ external fun smbRename(
 )
 
 external fun smbInvalidate()
+
+/**
+ * Returns `[fd, size, key]` for an in-memory (ashmem) cache of the file, or
+ * `[-1, 0, 0]` if unsupported. The descriptor must be released with
+ * [smbReleaseAshmem] once consumed.
+ */
+external fun smbOpenAshmem(
+    host: String,
+    port: Int,
+    share: String,
+    sub: String,
+    user: String,
+    pass: String,
+    domain: String,
+): LongArray
+
+/** Release a reference obtained from [smbOpenAshmem]. */
+external fun smbReleaseAshmem(key: Long)
+
+/**
+ * Maps an ashmem fd into a direct [java.nio.ByteBuffer] of exactly [size], with
+ * no copy: the buffer's backing is the in-memory ashmem region itself, never the
+ * JVM heap. Used by the animated WebP decoder because an ashmem fd's `fstat`
+ * reports 0 on some Android versions, so `FileChannel.map` cannot size the
+ * mapping. Returns null if the mapping fails.
+ */
+external fun smbMmapReadOnly(fd: Int, size: Long): java.nio.ByteBuffer?
+
+/** Releases a mapping created by [smbMmapReadOnly]. */
+external fun smbMunmap(buffer: java.nio.ByteBuffer)
