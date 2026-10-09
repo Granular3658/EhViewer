@@ -11,7 +11,6 @@ import coil3.decode.ImageSource
 import coil3.fetch.SourceFetchResult
 import coil3.gif.isAnimatedWebP
 import coil3.request.Options
-import com.ehviewer.core.util.logcat
 import com.hippo.ehviewer.jni.smbMmapReadOnly
 import com.hippo.ehviewer.jni.smbMunmap
 import java.io.FileInputStream
@@ -39,13 +38,8 @@ class AnimatedWebPDecoder(
             // reported as 0, so the stream looks empty), so a false negative
             // here is possible even though the bytes are valid.
             if (DecodeUtils.isAnimatedWebP(src)) {
-                logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: source pre-check isAnimated=true, mapping (meta=${result.source.metadata})" }
-                val mapped = result.source.toByteBufferOrNull() ?: run {
-                    logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: toByteBufferOrNull NULL -> static fallback" }
-                    return null
-                }
+                val mapped = result.source.toByteBufferOrNull() ?: return null
                 val (buffer, release) = mapped
-                logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: mmap OK size=${buffer.capacity()} isAnimated=true" }
                 return AnimatedWebPDecoder(buffer, release)
             }
             // Pre-check false. The fd-backed source is unreliable on some
@@ -54,16 +48,11 @@ class AnimatedWebPDecoder(
             // always carries the complete bytes — the exact buffer the decoder
             // would use, and the same bytes the static decoder renders the
             // (correct) first frame from.
-            val mapped = result.source.toByteBufferOrNull() ?: run {
-                logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: pre-check false, toByteBufferOrNull NULL -> static" }
-                return null
-            }
+            val mapped = result.source.toByteBufferOrNull() ?: return null
             val (buffer, release) = mapped
             return if (isAnimatedWebPBuffer(buffer)) {
-                logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: PRE-CHECK FALSE but mmap buffer IS animated! size=${buffer.capacity()} (fd-source detection unreliable)" }
                 AnimatedWebPDecoder(buffer, release)
             } else {
-                logcat("WebPDiag") { "AnimatedWebPDecoder.Factory: truly not animated (mmap) size=${buffer.capacity()} -> static" }
                 release?.invoke()
                 null
             }
@@ -75,7 +64,6 @@ private fun ImageSource.toByteBufferOrNull(): Pair<ByteBuffer, (() -> Unit)?>? {
     if (fileSystem === FileSystem.SYSTEM) {
         val file = fileOrNull()
         if (file != null) {
-            logcat("WebPDiag") { "toByteBufferOrNull: LOCAL file mmap" }
             return file.toFile().inputStream().mapReadOnly() to null
         }
     }
@@ -92,12 +80,10 @@ private fun ImageSource.toByteBufferOrNull(): Pair<ByteBuffer, (() -> Unit)?>? {
             if (afd.length > 0) {
                 val fd = afd.parcelFileDescriptor?.fd ?: -1
                 if (fd < 0) throw IOException("cannot mmap ashmem: missing fd")
-                logcat("WebPDiag") { "toByteBufferOrNull: ASHMEM mmap fd=$fd len=${afd.length}" }
                 val buffer = smbMmapReadOnly(fd, afd.length)
                     ?: throw IOException("cannot mmap ashmem fd=$fd size=${afd.length}")
                 buffer to { smbMunmap(buffer) }
             } else {
-                logcat("WebPDiag") { "toByteBufferOrNull: pipe/unknown length=${afd.length} -> null (fallback to non-mmap decoder)" }
                 // Pipe / unknown-length source: cannot be mmap'd natively and we
                 // don't have a declared size, so let Coil fall back to another
                 // decoder rather than crash on a zero-length mapping.
@@ -105,7 +91,6 @@ private fun ImageSource.toByteBufferOrNull(): Pair<ByteBuffer, (() -> Unit)?>? {
             }
         }
         is ByteBufferMetadata -> {
-            logcat("WebPDiag") { "toByteBufferOrNull: ByteBufferMetadata" }
             metadata.byteBuffer to null
         }
         else -> null

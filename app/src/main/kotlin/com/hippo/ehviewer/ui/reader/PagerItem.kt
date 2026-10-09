@@ -46,7 +46,6 @@ import coil3.compose.SubcomposeAsyncImage
 import coil3.compose.SubcomposeAsyncImageContent
 import com.ehviewer.core.i18n.R
 import com.ehviewer.core.ui.util.thenIf
-import com.ehviewer.core.util.logcat
 import com.ehviewer.core.util.unreachable
 import com.google.accompanist.drawablepainter.DrawablePainter
 import com.hippo.ehviewer.Settings
@@ -113,11 +112,6 @@ fun PagerItem(
             var painter by remember { mutableStateOf<Painter?>(null) }
             LaunchedEffect(image) {
                 if (image.pin()) {
-                    if (image.isDisposed) {
-                        logcat("WebPDiag") { "PagerItem: DISPLAYING ALREADY-DISPOSED image at index=${page.index} (use-after-dispose!)" }
-                    } else if (image.isAnimatedDrawable) {
-                        logcat("WebPDiag") { "PagerItem: showing animated webp at index=${page.index}" }
-                    }
                     painter = image.toPainter()
                     try {
                         awaitCancellation()

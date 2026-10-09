@@ -30,12 +30,9 @@ class AnimatedWebPDrawable(
     /** Full source file size in bytes; used by the page cache to account for the buffer. */
     val sourceSize: Int = source.capacity()
 
-    private val drawableId = System.identityHashCode(this)
-
     @Volatile var disposed = false
         private set
     val isDisposed: Boolean get() = disposed
-    private var drawStuckLogged = false
 
     private val decodeScope = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -64,7 +61,6 @@ class AnimatedWebPDrawable(
         }
         currentFrame = Frame(bitmap, timestamp)
         nextFrame = Frame(createBitmap(width, height), 0)
-        logcat("WebPDiag") { "AnimatedWebPDrawable#$drawableId created w=$width h=$height loop=$loopCount srcSize=${source.capacity()}" }
     }
 
     override fun getIntrinsicWidth() = width
@@ -97,18 +93,12 @@ class AnimatedWebPDrawable(
                 } else {
                     scheduleSelf(runnable, timeToShowNextFrame)
                 }
-                !is CancellationException -> logcat("WebPDiag", cause)
+                !is CancellationException -> logcat(cause)
             }
         }
     }
 
     override fun draw(canvas: Canvas) {
-        if (decodeJob == null && isVisible && !disposed) {
-            if (!drawStuckLogged) {
-                drawStuckLogged = true
-                logcat("WebPDiag") { "AnimatedWebPDrawable#$drawableId draw() with decodeJob==null while visible (frozen/stopped, not restarted)" }
-            }
-        }
         if (decodeJob?.isCompleted == true && isVisible) {
             decodeJob = if (loopCount == 0 || loopsCompleted < loopCount) {
                 currentFrame = nextFrame.also { nextFrame = currentFrame }
@@ -144,18 +134,12 @@ class AnimatedWebPDrawable(
     override fun isRunning() = decodeJob != null
 
     override fun start() {
-        if (disposed) {
-            logcat("WebPDiag") { "AnimatedWebPDrawable#$drawableId start() DISPOSED (use-after-dispose)" }
-        } else {
-            logcat("WebPDiag") { "AnimatedWebPDrawable#$drawableId start()" }
-        }
         if (decodeJob == null) {
             decodeJob = decodeNextFrame(true)
         }
     }
 
     override fun stop() {
-        logcat("WebPDiag") { "AnimatedWebPDrawable#$drawableId stop()" }
         decodeJob?.cancel()
         decodeJob = null
         unscheduleSelf(runnable)
@@ -171,7 +155,6 @@ class AnimatedWebPDrawable(
         // reads the buffer during teardown.
         release?.invoke()
         disposed = true
-        logcat("WebPDiag") { "AnimatedWebPDrawable#$drawableId dispose()\n${Throwable().stackTraceToString()}" }
     }
 }
 

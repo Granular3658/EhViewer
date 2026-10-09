@@ -6,7 +6,6 @@ import arrow.fx.coroutines.ExitCase
 import arrow.fx.coroutines.bracketCase
 import com.ehviewer.core.model.GalleryInfo
 import com.ehviewer.core.util.isAtLeastO
-import com.ehviewer.core.util.logcat
 import com.ehviewer.core.util.withNonCancellableContext
 import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.Settings
@@ -52,7 +51,6 @@ abstract class PageLoader(val scope: CoroutineScope, val info: GalleryInfo?, sta
         },
         sizeOf = { _, v -> (v.allocationSize + v.sourceBufferSize).toInt() },
         onEntryRemoved = { k, o, n, _ ->
-            logcat("WebPDiag") { "cache evict index=$k animated=${o.isAnimatedDrawable} disposed=${o.isDisposed}" }
             if (o.unpin()) n ?: notifyPageWait(k)
         },
     )
@@ -140,10 +138,8 @@ abstract class PageLoader(val scope: CoroutineScope, val info: GalleryInfo?, sta
         prevIndex.store(index)
         val image = lock.read { cache[index] }
         if (image != null) {
-            logcat("WebPDiag") { "request($index): CACHE HIT refcnt=${image.refcnt.load()} animated=${image.isAnimatedDrawable} disposed=${image.isDisposed}" }
             notifyPageSucceed(index, image, false)
         } else {
-            logcat("WebPDiag") { "request($index): cache miss -> decode" }
             notifyPageWait(index)
             onRequest(index)
         }
