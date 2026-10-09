@@ -110,7 +110,14 @@ class SmbProvider : ContentProvider() {
      * unknown (-1), which is the correct signal that it cannot be mmap'd.
      */
     override fun openAssetFile(uri: Uri, mode: String): AssetFileDescriptor {
-        val (pfd, length) = openSmb(uri, mode, useAshmem = true, caller = "openAssetFile")
+        // On this device an ashmem fd's st_size (fstat) is 0, so a streaming read
+        // (which looks at EOF / fstat) on the ashmem path returns zero bytes.
+        // Images are mmap'd using the *declared* length and must use the ashmem
+        // fd; everything else (notably .ehviewer / ComicInfo.xml metadata read
+        // while restoring SMB downloads) is consumed as a byte stream and must go
+        // through the pipe instead. Route by content type, not by caller.
+        val useAshmem = isSmbImagePath(location(uri).subPath)
+        val (pfd, length) = openSmb(uri, mode, useAshmem = useAshmem, caller = "openAssetFile")
         return AssetFileDescriptor(pfd, 0, length)
     }
 
@@ -127,6 +134,17 @@ class SmbProvider : ContentProvider() {
      * this device, which would otherwise make a streaming read return zero
      * bytes (e.g. reading `.ehviewer`/`ComicInfo.xml` while restoring downloads).
      */
+    private val smbImageExtensions = setOf(
+        "webp", "gif", "jpg", "jpeg", "png", "avif", "bmp",
+        "heic", "heif", "jxl", "mng", "apng", "tif", "tiff", "wbmp",
+    )
+
+    /** True for SMB paths whose content is an image and therefore consumed via mmap. */
+    private fun isSmbImagePath(subPath: String): Boolean {
+        val ext = subPath.substringAfterLast('.').lowercase()
+        return ext in smbImageExtensions
+    }
+
     private fun openSmb(uri: Uri, mode: String, useAshmem: Boolean, caller: String): Pair<ParcelFileDescriptor, Long> {
         val location = location(uri)
         if (mode == "r" || mode == "rt") {
