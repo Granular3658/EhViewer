@@ -292,10 +292,15 @@ class AndroidFileSystem(context: Context) : FileSystem() {
 
     fun openFileDescriptor(path: Path, mode: String): ParcelFileDescriptor {
         if (path.isSmb) {
-            // The provider serves writes through a pipe, so any write-capable
-            // mode maps to "w" on its side.
+            // The provider serves writes through a pipe, so any write-capable mode
+            // maps to "w" on its side. Reads must use the pipe as well: this call is
+            // how a consumer asks for the whole file, and the platform rejects a
+            // descriptor that declares a length ("Not a whole file"), which the
+            // cached one does. The mmap-able cached descriptor is for the
+            // openAssetFileDescriptor consumers that want that length.
             val smbMode = if ('w' in mode || '+' in mode) "w" else "r"
-            return contentResolver.openFileDescriptor(path.toUri(), smbMode)
+            val uri = if (smbMode == "r") path.toPipeUri() else path.toUri()
+            return contentResolver.openFileDescriptor(uri, smbMode)
                 ?: throw FileNotFoundException("Failed to open SMB file: $path")
         }
         if (path.isPhysicalFile()) {
