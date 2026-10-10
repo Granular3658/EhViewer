@@ -16,6 +16,7 @@
 package com.hippo.ehviewer.gallery
 
 import arrow.autoCloseScope
+import com.ehviewer.core.files.isSmb
 import com.ehviewer.core.files.openFileDescriptor
 import com.ehviewer.core.model.GalleryInfo
 import com.ehviewer.core.util.logcat
@@ -29,8 +30,11 @@ import com.hippo.ehviewer.jni.extractToFd
 import com.hippo.ehviewer.jni.getExtension
 import com.hippo.ehviewer.jni.needPassword
 import com.hippo.ehviewer.jni.openArchive
+import com.hippo.ehviewer.jni.openArchiveSmb
 import com.hippo.ehviewer.jni.providePassword
 import com.hippo.ehviewer.jni.releaseByteBuffer
+import com.hippo.ehviewer.smb.SmbLocation
+import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.util.FileUtils
 import com.hippo.ehviewer.util.displayName
 import kotlinx.coroutines.coroutineScope
@@ -49,11 +53,27 @@ suspend inline fun <T> useArchivePageLoader(
     crossinline block: suspend (PageLoader) -> T,
 ) = autoCloseScope {
     coroutineScope {
-        val pfd = install(file.openFileDescriptor("r"))
-        val size = install(
-            { openArchive(pfd.fd, pfd.statSize, info == null || file.name.endsWith(".zip")) },
-            { _, _ -> closeArchive() },
-        )
+        val sortEntries = info == null || file.name.endsWith(".zip")
+        // An archive on a share is read through an SMB handle, not a descriptor:
+        // the descriptor for a remote file is a pipe, and a pipe can neither be
+        // mapped nor seeked, which reading an archive needs both of.
+        val location = if (file.isSmb) SmbLocation.parse(file) else null
+        val size = if (location != null) {
+            val handle = SmbRepository.open(location)
+            install(
+                { openArchiveSmb(handle.value, handle.size, sortEntries) },
+                { _, _ ->
+                    closeArchive()
+                    SmbRepository.close(handle.value)
+                },
+            )
+        } else {
+            val pfd = install(file.openFileDescriptor("r"))
+            install(
+                { openArchive(pfd.fd, pfd.statSize, sortEntries) },
+                { _, _ -> closeArchive() },
+            )
+        }
         check(size > 0) { "Archive have no content!" }
         if (needPassword() && archivePasswds.none(::providePassword)) {
             archivePasswds += passwdProvider(::providePassword)

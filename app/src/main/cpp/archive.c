@@ -18,6 +18,7 @@
  */
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -61,9 +62,103 @@ static bool need_encrypt = false;
 static char *passwd = NULL;
 static void *archiveAddr = MAP_FAILED;
 static size_t archiveSize = 0;
+static bool archiveIsSmb = false;
+static uint64_t archiveSmbHandle = 0;
 static entry *entries = NULL;
 static size_t entryCount = 0;
 static ssize_t max_file_size = 0;
+
+/*
+ * Remote sources cannot be mapped, so libarchive pulls from them through the
+ * callbacks below instead of a memory buffer. The reader is per-context (the
+ * pool can hold CTX_POOL_SIZE of them) and the window is allocated on first
+ * read, so an idle context costs nothing.
+ *
+ * A window is what keeps the round trips down: libarchive asks for a block,
+ * consumes all of it, and only then asks again, so one SMB READ serves a whole
+ * window. 256 KiB is small enough to be cheap per seek and large enough that
+ * reading one page of an archive costs a single round trip.
+ */
+#define SMB_WINDOW_SIZE (256 * 1024)
+
+typedef struct {
+    uint64_t handle;
+    int64_t size;
+    int64_t pos;
+    uint8_t *window;
+} smb_reader;
+
+/* Implemented in Rust; see app/src/main/rust/src/ffi/archive.rs. */
+extern ssize_t smb_archive_read(uint64_t handle, uint64_t offset, uint8_t *buf, size_t len);
+
+static la_int64_t smb_seek_cb(struct archive *a, void *client_data, la_int64_t offset, int whence) {
+    EH_UNUSED(a);
+    smb_reader *reader = client_data;
+    la_int64_t base;
+    switch (whence) {
+        case SEEK_SET:
+            base = 0;
+            break;
+        case SEEK_CUR:
+            base = reader->pos;
+            break;
+        case SEEK_END:
+            base = reader->size;
+            break;
+        default:
+            return -1;
+    }
+    la_int64_t next = base + offset;
+    if (next < 0)
+        return -1;
+    reader->pos = next;
+    return next;
+}
+
+static la_ssize_t smb_read_cb(struct archive *a, void *client_data, const void **buff) {
+    EH_UNUSED(a);
+    smb_reader *reader = client_data;
+    if (reader->pos >= reader->size)
+        return 0;
+    if (!reader->window) {
+        reader->window = malloc(SMB_WINDOW_SIZE);
+        if (!reader->window)
+            return -1;
+    }
+    size_t want = SMB_WINDOW_SIZE;
+    if ((int64_t) want > reader->size - reader->pos)
+        want = (size_t) (reader->size - reader->pos);
+    ssize_t got = smb_archive_read(reader->handle, (uint64_t) reader->pos, reader->window, want);
+    if (got < 0)
+        return -1;
+    /* A short result is not end-of-file. Only reaching the declared size is, and
+     * the caller asked for a length, so a short block simply means libarchive
+     * gets less than it hoped for and asks again. */
+    reader->pos += got;
+    *buff = reader->window;
+    return got;
+}
+
+static la_int64_t smb_skip_cb(struct archive *a, void *client_data, la_int64_t request) {
+    EH_UNUSED(a);
+    smb_reader *reader = client_data;
+    la_int64_t next = reader->pos + request;
+    if (next > reader->size)
+        next = reader->size;
+    if (next < 0)
+        return -1;
+    la_int64_t skipped = next - reader->pos;
+    reader->pos = next;
+    return skipped;
+}
+
+static int smb_close_cb(struct archive *a, void *client_data) {
+    EH_UNUSED(a);
+    smb_reader *reader = client_data;
+    free(reader->window);
+    free(reader);
+    return ARCHIVE_OK;
+}
 
 #define SUPPORT_EXT_COUNT 11
 
@@ -198,7 +293,28 @@ static archive_ctx *archive_alloc_ctx() {
     archive_read_set_option(ctx->arc, "zip", "ignorecrc32", "1");
     if (passwd)
         archive_read_add_passphrase(ctx->arc, passwd);
-    int err = archive_read_open_memory(ctx->arc, archiveAddr, archiveSize);
+    int err;
+    if (archiveIsSmb) {
+        smb_reader *reader = calloc(1, sizeof(smb_reader));
+        if (!reader) {
+            archive_read_free(ctx->arc);
+            free(ctx);
+            return NULL;
+        }
+        reader->handle = archiveSmbHandle;
+        reader->size = (int64_t) archiveSize;
+        /* The callbacks have to be in place before open1, because the format
+         * bidders run during it and the seekable Zip bidder is the one that
+         * decides to read through the central directory. */
+        archive_read_set_callback_data(ctx->arc, reader);
+        archive_read_set_read_callback(ctx->arc, smb_read_cb);
+        archive_read_set_skip_callback(ctx->arc, smb_skip_cb);
+        archive_read_set_seek_callback(ctx->arc, smb_seek_cb);
+        archive_read_set_close_callback(ctx->arc, smb_close_cb);
+        err = archive_read_open1(ctx->arc);
+    } else {
+        err = archive_read_open_memory(ctx->arc, archiveAddr, archiveSize);
+    }
     if (err < ARCHIVE_OK) {
         LOGE("%s%s", "Open archive failed: ", archive_error_string(ctx->arc));
         archive_read_free(ctx->arc);
@@ -273,17 +389,8 @@ static int archive_get_ctx(archive_ctx **ctxptr, int idx) {
     return 0;
 }
 
-JNIEXPORT jint JNICALL
-Java_com_hippo_ehviewer_jni_ArchiveKt_openArchive(JNIEnv *env, jclass thiz, jint fd, jlong size, jboolean sort_entries) {
-    EH_UNUSED(env);
-    EH_UNUSED(thiz);
+static int archive_open_common(jboolean sort_entries) {
     archive_ctx *ctx = NULL;
-    archiveAddr = mmap(0, size, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (archiveAddr == MAP_FAILED) {
-        LOGE("%s%s", "mmap failed with error ", strerror(errno));
-        return 0;
-    }
-    archiveSize = size;
     ctx_pool = calloc(CTX_POOL_SIZE, sizeof(archive_ctx **));
     ctx = archive_alloc_ctx();
     if (!ctx) return 0;
@@ -307,16 +414,18 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_openArchive(JNIEnv *env, jclass thiz, jint
             need_encrypt = false;
     }
 
-    int format = archive_format(ctx->arc);
-    switch (format) {
-        case ARCHIVE_FORMAT_ZIP:
-        case ARCHIVE_FORMAT_RAR_V5:
-            madvise_log_if_error(archiveAddr, archiveSize, MADV_SEQUENTIAL);
-            break;
-        case ARCHIVE_FORMAT_7ZIP: // Seek is bad
-            madvise_log_if_error(archiveAddr, archiveSize, MADV_RANDOM);
-            break;
-        default:;
+    if (!archiveIsSmb) {
+        int format = archive_format(ctx->arc);
+        switch (format) {
+            case ARCHIVE_FORMAT_ZIP:
+            case ARCHIVE_FORMAT_RAR_V5:
+                madvise_log_if_error(archiveAddr, archiveSize, MADV_SEQUENTIAL);
+                break;
+            case ARCHIVE_FORMAT_7ZIP: // Seek is bad
+                madvise_log_if_error(archiveAddr, archiveSize, MADV_RANDOM);
+                break;
+            default:;
+        }
     }
     archive_release_ctx(ctx);
 
@@ -326,6 +435,41 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_openArchive(JNIEnv *env, jclass thiz, jint
     archive_map_entries_index(ctx, sort_entries);
     archive_release_ctx(ctx);
     return (int) entryCount;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_hippo_ehviewer_jni_ArchiveKt_openArchive(JNIEnv *env, jclass thiz, jint fd, jlong size, jboolean sort_entries) {
+    EH_UNUSED(env);
+    EH_UNUSED(thiz);
+    archiveAddr = mmap(0, size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (archiveAddr == MAP_FAILED) {
+        LOGE("%s%s", "mmap failed with error ", strerror(errno));
+        return 0;
+    }
+    archiveSize = size;
+    archiveIsSmb = false;
+    archiveSmbHandle = 0;
+    return archive_open_common(sort_entries);
+}
+
+/*
+ * Open an archive that lives on a share, through an SMB handle rather than a
+ * descriptor: a descriptor for a remote file is a pipe, and a pipe can neither
+ * be mapped nor seeked, both of which reading an archive needs.
+ */
+JNIEXPORT jint JNICALL
+Java_com_hippo_ehviewer_jni_ArchiveKt_openArchiveSmb(JNIEnv *env, jclass thiz, jlong handle, jlong size, jboolean sort_entries) {
+    EH_UNUSED(env);
+    EH_UNUSED(thiz);
+    if (handle <= 0 || size <= 0) {
+        LOGE("%s", "Invalid SMB archive source");
+        return 0;
+    }
+    archiveAddr = MAP_FAILED;
+    archiveSize = (size_t) size;
+    archiveIsSmb = true;
+    archiveSmbHandle = (uint64_t) handle;
+    return archive_open_common(sort_entries);
 }
 
 JNIEXPORT jobject JNICALL
