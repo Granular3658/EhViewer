@@ -223,10 +223,10 @@ fn reopen(mem: &Memfd) -> Result<i32> {
     Ok(fd)
 }
 
-/// Fetch a remote file into an in-memory region and return a dup'd fd plus a
-/// cache key. On any failure returns `Err`, and the caller falls back to the
-/// streaming pipe path. The fd must be freed by the caller (it owns the dup);
-/// the backing region lives on in the cache until `release_memfd` is called.
+/// Fetch a remote file into an in-memory region and return a consumer-owned fd
+/// plus a cache key. On any failure returns `Err`, and the caller falls back to
+/// the streaming pipe path. The fd must be freed by the caller (it owns it); the
+/// backing region lives on in the cache until `release_memfd` is called.
 pub fn open_memfd(target: &Target) -> Result<(i32, u64, u64)> {
     let stat = smb::stat(target)?;
     ensure!(!stat.is_directory, "refusing to cache a directory");

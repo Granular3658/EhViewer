@@ -103,37 +103,33 @@ class SmbProvider : ContentProvider() {
 
     /**
      * Like [openFile], but wraps the descriptor in an [AssetFileDescriptor] that
-     * declares the real file length. The memfd path knows the exact size from
-     * the SMB stat, and advertising it lets the decode layer `mmap` correctly
-     * even when an memfd fd's `fstat` reports 0 on some Android versions
-     * (notably large files on older kernels). The pipe path leaves the length
-     * unknown (-1), which is the correct signal that it cannot be mmap'd.
+     * declares the real file length. The in-memory path knows the exact size
+     * from the SMB stat, and advertising it lets the decode layer `mmap`
+     * correctly. The pipe path leaves the length unknown (-1), which is the
+     * correct signal that it cannot be mmap'd.
      */
     override fun openAssetFile(uri: Uri, mode: String): AssetFileDescriptor {
-        // On this device an memfd fd's st_size (fstat) is 0, so a streaming read
-        // (which looks at EOF / fstat) on the memfd path returns zero bytes.
-        // Images are mmap'd using the *declared* length and must use the memfd
-        // fd; everything else (notably .ehviewer / ComicInfo.xml metadata read
-        // while restoring SMB downloads) is consumed as a byte stream and must go
-        // through the pipe instead. Route by content type, not by caller.
+        // Images are mmap'd using the *declared* length and use the in-memory
+        // descriptor; everything else (notably .ehviewer / ComicInfo.xml
+        // metadata read while restoring SMB downloads) is consumed as a byte
+        // stream and goes through the pipe instead. Route by content type, not
+        // by caller.
+        //
+        // The split is required by the platform, not by the cache. A consumer
+        // that asks for a whole file -- ContentResolver.openFileDescriptor,
+        // which AndroidFileSystem uses for every SMB read -- throws
+        // FileNotFoundException("Not a whole file") unless the descriptor it
+        // gets back has a declared length < 0. Only the asset-file/mmap path
+        // (Coil) wants the declared length, so only that path may use the
+        // in-memory cache; every other read must keep the pipe's unknown
+        // length. Serving everything from the cache breaks restoring SMB
+        // downloads, which reads .ehviewer / ComicInfo.xml this way.
         val useMemfd = isSmbImagePath(location(uri).subPath)
         val (pfd, length) = openSmb(uri, mode, useMemfd = useMemfd)
         return AssetFileDescriptor(pfd, 0, length)
     }
 
-    /**
-     * Opens an SMB location, returning the descriptor together with its declared
-     * length: the real file size for the memfd path, or -1 for the streaming
-     * pipe (its length is only known once fully read).
-     *
-     * `useMemfd` should be true only for the asset-file (mmap) path
-     * ([openAssetFile]), where a real, mmap-able descriptor plus a declared
-     * length is what the decode layer needs. Plain streaming reads
-     * ([openFile]) go through the pipe instead: their length is determined by
-     * the byte stream, not by `fstat` — and an memfd fd's `fstat` returns 0 on
-     * this device, which would otherwise make a streaming read return zero
-     * bytes (e.g. reading `.ehviewer`/`ComicInfo.xml` while restoring downloads).
-     */
+    /** Extensions treated as images, and so served from the in-memory cache. */
     private val smbImageExtensions = setOf(
         "webp", "gif", "jpg", "jpeg", "png", "avif", "bmp",
         "heic", "heif", "jxl", "mng", "apng", "tif", "tiff", "wbmp",
@@ -145,14 +141,23 @@ class SmbProvider : ContentProvider() {
         return ext in smbImageExtensions
     }
 
+    /**
+     * Opens an SMB location, returning the descriptor together with its declared
+     * length: the real file size for the in-memory path, or -1 for the streaming
+     * pipe (its length is only known once fully read).
+     *
+     * `useMemfd` (use the in-memory cache) is true only for the asset-file
+     * (mmap) path ([openAssetFile]), where a real, mmap-able descriptor plus a
+     * declared length is what the decode layer needs. Plain streaming reads
+     * ([openFile]) go through the pipe instead, whose length is determined by
+     * the byte stream rather than by `fstat`.
+     */
     private fun openSmb(uri: Uri, mode: String, useMemfd: Boolean): Pair<ParcelFileDescriptor, Long> {
         val location = location(uri)
         if (mode == "r" || mode == "rt") {
-            // Only the mmap/asset-file path uses the in-memory cache: it yields
-            // a real, mmap-able descriptor carrying the file's true length,
-            // which is what the decode layer needs. Plain streaming reads go
-            // through the pipe instead, whose length comes from the stream
-            // rather than from `fstat`.
+            // Only the mmap/asset-file path uses the in-memory cache. Plain
+            // streaming reads go through the pipe, whose length comes from the
+            // stream rather than from `fstat`.
             if (useMemfd) {
                 val memfd = runCatching { runBlocking { SmbRepository.openMemfd(location) } }.getOrNull()
                 if (memfd != null) {

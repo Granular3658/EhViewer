@@ -32,23 +32,27 @@ class AnimatedWebPDecoder(
             imageLoader: ImageLoader,
         ): Decoder? {
             val src = result.source.source()
-            // Cheap pre-check on the fd-backed source. Reliable on most devices
-            // and avoids an extra mmap for genuinely static images. But the
-            // fd-backed read has been observed to return the wrong bytes on the
-            // Android 11 test device (~20% false negatives on genuinely animated
-            // WebPs), so a false negative here is possible even though the bytes
-            // are valid. The cause is not established yet.
+            // Cheap pre-check on the fd-backed source. It works on most devices
+            // and lets us skip the extra mmap for genuinely static images. It
+            // used to fail intermittently on the Android 11 test device (~20%
+            // false negatives) because the cached descriptor was handed out with
+            // dup(2), which shares the file position, while Android before 15
+            // reads AssetFileDescriptor.AutoCloseInputStream with read(2) — so
+            // re-decoding a file read from wherever the previous decode stopped.
+            // Fixed by reopening the region instead of dup'ing it (see
+            // smb_cache::open_for_consumer); the mmap fallback below is kept as a
+            // safety net.
             if (DecodeUtils.isAnimatedWebP(src)) {
                 val mapped = result.source.toByteBufferOrNull() ?: return null
                 val (buffer, release) = mapped
                 return AnimatedWebPDecoder(buffer, release)
             }
-            // Pre-check false. The fd-backed source is unreliable on some
-            // devices, so do NOT trust it: verify against the explicitly-sized
-            // mmap buffer (sized from the advertised length, not fstat), which
-            // always carries the complete bytes — the exact buffer the decoder
-            // would use, and the same bytes the static decoder renders the
-            // (correct) first frame from.
+            // Pre-check false. Do NOT trust it: verify against the explicitly
+            // sized mmap buffer (sized from the advertised length, not fstat),
+            // which always carries the complete bytes — the exact buffer the
+            // decoder would use, and the same bytes the static decoder renders
+            // the (correct) first frame from. mmap ignores the file position,
+            // which is why this re-check was immune to the bug above.
             val mapped = result.source.toByteBufferOrNull() ?: return null
             val (buffer, release) = mapped
             return if (isAnimatedWebPBuffer(buffer)) {
@@ -108,9 +112,11 @@ private fun FileInputStream.mapReadOnly(): ByteBuffer {
 
 /**
  * Detect an animated (extended) WebP directly from the backing bytes, without
- * going through an fd-backed okio Source. That fd read is unreliable on some
- * devices (see the factory above), but the ByteBuffer is sized from the explicit
- * length the SMB provider advertised, so it is always complete.
+ * going through an fd-backed okio Source. The ByteBuffer is sized from the
+ * explicit length the SMB provider advertised, so it is always complete, and
+ * mmap ignores the file position — unlike the fd-backed stream, which used to
+ * read from the wrong offset once the cached descriptor's position had been
+ * advanced (see the factory above).
  *
  * Layout check (big-endian int reads):
  *   bytes  0-3  = "RIFF" (0x52494646)

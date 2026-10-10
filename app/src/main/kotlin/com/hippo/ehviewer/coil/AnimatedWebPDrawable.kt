@@ -183,9 +183,9 @@ class AnimatedWebPDrawable(
         nativeDestroyDecoder(decoder)
         currentFrame.close()
         nextFrame.close()
-        // Release the native mmap view (if any) so the memfd region can be
-        // reclaimed. Must run after the decoder is destroyed, since it still
-        // reads the buffer during teardown.
+        // Release the native mmap view (if any) so the region can be reclaimed.
+        // Must run after the decoder is destroyed, since it still reads the
+        // buffer during teardown.
         release?.invoke()
         disposed = true
     }
