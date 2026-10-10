@@ -17,7 +17,7 @@
 //! call `memfd_create` and that the resulting fd reports the correct size.
 //!
 //! Regions are reference-counted. Every consumer that maps one bumps `pins`;
-//! only regions with `pins == 0` may be evicted by the LRU. That guarantees a
+//! only regions with `pins == 0` may be evicted. That guarantees a
 //! region libwebp is still decoding lazily from is never reclaimed underneath
 //! it — the consumer releases it (which drops `pins`) only after it has called
 //! `dispose()` and closed the descriptor.
@@ -101,6 +101,11 @@ struct Entry {
     mem: Memfd,
     size: u64,
     pins: u32,
+    /// Second-chance bit, set when the region is read (a cache hit) or when a
+    /// consumer releases it, and cleared when the eviction hand gives it a
+    /// reprieve. A region inserted by a one-way scan starts with the bit clear,
+    /// so the scan is evicted before the pages the user was actually reading.
+    accessed: bool,
 }
 
 struct Cache {
@@ -137,15 +142,37 @@ pub fn set_cache_limit_mb(mb: u64) {
     MAX_BYTES.store(bytes, Ordering::Relaxed);
 }
 
-fn touch(lru: &mut Vec<u64>, id: u64) {
+/// Move `id` to the newest end of the eviction list.
+fn bump(lru: &mut Vec<u64>, id: u64) {
     if let Some(pos) = lru.iter().position(|&x| x == id) {
         lru.remove(pos);
     }
     lru.push(id);
 }
 
-/// Evict the oldest entries whose `pins == 0` until `total` is within `MAX_BYTES`.
+/// Record that `id` was read just now: set its second-chance bit and make it the
+/// newest entry. Called on a cache hit, and on release -- the latter is what
+/// aligns this tier with the page cache above it. The page cache drops a page
+/// only once the reader has moved past it, so at that moment the region is the
+/// most likely one to be wanted again, not the least.
+fn touch(cache: &mut Cache, id: u64) {
+    if let Some(entry) = cache.by_id.get_mut(&id) {
+        entry.accessed = true;
+        bump(&mut cache.lru, id);
+    }
+}
+
+/// Evict entries until `total` is within `MAX_BYTES`.
+///
 /// Pinned entries are always skipped, so this never reclaims a live mapping.
+/// Among the rest it is a CLOCK rather than a plain LRU: the oldest unpinned
+/// entry gets one reprieve (moved to the newest end, second-chance bit cleared)
+/// before it is actually dropped. A plain LRU is pathological for a long one-way
+/// scan -- which is what scrolling quickly through a gallery is -- because every
+/// page the user just read is pushed out by the page after it, so scrolling back
+/// re-fetches everything. The reprieve keeps the pages that were read more than
+/// once (the ones a reversal actually returns to) at the expense of the scan.
+/// Each reprieve clears a bit, so the sweep always terminates.
 fn evict() {
     let cap = MAX_BYTES.load(Ordering::Relaxed);
     let mut guard = cache().lock().unwrap();
@@ -156,6 +183,17 @@ fn evict() {
             .copied()
             .find(|&id| guard.by_id.get(&id).is_some_and(|e| e.pins == 0));
         let Some(id) = victim else { break };
+        let reprieved = if let Some(e) = guard.by_id.get_mut(&id) {
+            let was_accessed = e.accessed;
+            e.accessed = false;
+            was_accessed
+        } else {
+            false
+        };
+        if reprieved {
+            bump(&mut guard.lru, id);
+            continue;
+        }
         if let Some(entry) = guard.by_id.remove(&id) {
             guard.by_key.remove(&entry.key);
             guard.total = guard.total.saturating_sub(entry.size);
@@ -250,7 +288,7 @@ pub fn open_memfd(target: &Target) -> Result<(i32, u64, u64)> {
             if let Some(entry) = guard.by_id.get_mut(&id) {
                 entry.pins += 1;
             }
-            touch(&mut guard.lru, id);
+            touch(&mut guard, id);
             let entry = guard
                 .by_id
                 .get(&id)
@@ -331,6 +369,7 @@ pub fn open_memfd(target: &Target) -> Result<(i32, u64, u64)> {
                 mem,
                 size,
                 pins: 0,
+                accessed: false,
             },
         );
         guard.by_key.insert(key.clone(), id);
@@ -339,11 +378,11 @@ pub fn open_memfd(target: &Target) -> Result<(i32, u64, u64)> {
         id
     };
     // Whether we inserted or found a resident region, this consumer holds a
-    // reference: bump the pin so the LRU cannot evict it under us.
+    // reference: bump the pin so the eviction hand cannot reclaim it under us.
     if let Some(entry) = guard.by_id.get_mut(&id) {
         entry.pins += 1;
     }
-    touch(&mut guard.lru, id);
+    touch(&mut guard, id);
     drop(guard);
 
     evict();
@@ -358,10 +397,16 @@ pub fn open_memfd(target: &Target) -> Result<(i32, u64, u64)> {
 }
 
 /// Drop a consumer's reference to a cached region. Only once `pins` returns to
-/// 0 does the region become eligible for LRU eviction.
+/// 0 does the region become eligible for eviction.
 pub fn release_memfd(id: u64) {
     let mut guard = cache().lock().unwrap();
     if let Some(entry) = guard.by_id.get_mut(&id) {
         entry.pins = entry.pins.saturating_sub(1);
     }
+    // Refresh recency here, not only on open. A consumer releases a region when
+    // it is done with it -- for an animated WebP that is the moment the user
+    // scrolls away from the page -- so this is what makes this tier agree with
+    // the page cache above it about which page was read most recently. Without
+    // it the page the user just left looks like the oldest one in the cache.
+    touch(&mut guard, id);
 }
