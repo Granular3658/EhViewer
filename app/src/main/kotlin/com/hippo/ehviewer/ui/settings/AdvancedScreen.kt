@@ -174,12 +174,12 @@ fun AnimatedVisibilityScope.AdvancedScreen(navigator: DestinationsNavigator) = S
                 state = Settings.readCacheSize.asMutableState(),
             )
             // A slider, not a menu: the chosen size is the point of this setting
-            // and a dropdown hides it until you open it. 64 MB to 2 GB in 64 MB
-            // steps, so every value the old menu offered is still reachable.
+            // and a dropdown hides it until you open it. 0 to 2 GB in 128 MB
+            // steps; 0 means nothing is kept beyond what is open right now.
             IntSliderPreference(
-                minValue = 64,
+                minValue = 0,
                 maxValue = 2048,
-                step = 30,
+                step = 15,
                 title = stringResource(id = R.string.settings_advanced_smb_cache_size),
                 summary = stringResource(id = R.string.settings_advanced_smb_cache_size_summary),
                 state = Settings.smbCacheSize.asMutableState(),
