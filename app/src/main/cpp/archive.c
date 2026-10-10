@@ -74,17 +74,31 @@ static ssize_t max_file_size = 0;
  * pool can hold CTX_POOL_SIZE of them) and the window is allocated on first
  * read, so an idle context costs nothing.
  *
- * A window is what keeps the round trips down: libarchive asks for a block,
- * consumes all of it, and only then asks again, so one SMB READ serves a whole
- * window. 256 KiB is small enough to be cheap per seek and large enough that
- * reading one page of an archive costs a single round trip.
+ * The window has to serve two access patterns that want opposite things.
+ *
+ * Listing the entries reads each entry's local header and then skips its data.
+ * libarchive consumes the rest of whatever block the callback returned, so a
+ * large window means the skipped data was transferred anyway: measured against
+ * a 1985-entry archive, a 256 KiB window made the listing read 71% of the file
+ * and a 4 KiB one 3.4%. On a share that is the difference between waiting for
+ * the whole archive and waiting for a few megabytes.
+ *
+ * Showing a page reads one entry's data straight through, where a small window
+ * costs a round trip per block.
+ *
+ * So grow the window while the reads stay contiguous, and drop it back to the
+ * minimum whenever the reader skips -- a skip is the reader saying it is
+ * discarding, not consuming, and there is no point reading ahead into it.
  */
-#define SMB_WINDOW_SIZE (256 * 1024)
+#define SMB_WINDOW_MIN (4 * 1024)
+#define SMB_WINDOW_MAX (256 * 1024)
 
 typedef struct {
     uint64_t handle;
     int64_t size;
     int64_t pos;
+    int64_t last_end;
+    size_t window_size;
     uint8_t *window;
 } smb_reader;
 
@@ -112,6 +126,9 @@ static la_int64_t smb_seek_cb(struct archive *a, void *client_data, la_int64_t o
     if (next < 0)
         return -1;
     reader->pos = next;
+    /* A seek breaks the run: the next read must not be treated as a
+     * continuation of the previous one. */
+    reader->last_end = -1;
     return next;
 }
 
@@ -121,11 +138,15 @@ static la_ssize_t smb_read_cb(struct archive *a, void *client_data, const void *
     if (reader->pos >= reader->size)
         return 0;
     if (!reader->window) {
-        reader->window = malloc(SMB_WINDOW_SIZE);
+        reader->window = malloc(SMB_WINDOW_MAX);
         if (!reader->window)
             return -1;
     }
-    size_t want = SMB_WINDOW_SIZE;
+    if (reader->window_size < SMB_WINDOW_MIN)
+        reader->window_size = SMB_WINDOW_MIN;
+    if (reader->pos == reader->last_end && reader->window_size < SMB_WINDOW_MAX)
+        reader->window_size = reader->window_size * 2;
+    size_t want = reader->window_size;
     if ((int64_t) want > reader->size - reader->pos)
         want = (size_t) (reader->size - reader->pos);
     ssize_t got = smb_archive_read(reader->handle, (uint64_t) reader->pos, reader->window, want);
@@ -135,6 +156,7 @@ static la_ssize_t smb_read_cb(struct archive *a, void *client_data, const void *
      * the caller asked for a length, so a short block simply means libarchive
      * gets less than it hoped for and asks again. */
     reader->pos += got;
+    reader->last_end = reader->pos;
     *buff = reader->window;
     return got;
 }
@@ -142,6 +164,8 @@ static la_ssize_t smb_read_cb(struct archive *a, void *client_data, const void *
 static la_int64_t smb_skip_cb(struct archive *a, void *client_data, la_int64_t request) {
     EH_UNUSED(a);
     smb_reader *reader = client_data;
+    reader->window_size = SMB_WINDOW_MIN;
+    reader->last_end = -1;
     la_int64_t next = reader->pos + request;
     if (next > reader->size)
         next = reader->size;
@@ -303,6 +327,8 @@ static archive_ctx *archive_alloc_ctx() {
         }
         reader->handle = archiveSmbHandle;
         reader->size = (int64_t) archiveSize;
+        reader->last_end = -1;
+        reader->window_size = SMB_WINDOW_MIN;
         /* The callbacks have to be in place before open1, because the format
          * bidders run during it and the seekable Zip bidder is the one that
          * decides to read through the central directory. */
