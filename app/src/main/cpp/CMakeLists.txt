@@ -103,12 +103,16 @@ set(LIBARCHIVE_PATCH
 FetchContent_Declare(
         libarchive
         GIT_REPOSITORY https://github.com/libarchive/libarchive.git
-        GIT_TAG v3.8.7
+        GIT_TAG v3.8.9
         GIT_SHALLOW 1
         PATCH_COMMAND git apply --check -R ${LIBARCHIVE_PATCH} || git apply ${LIBARCHIVE_PATCH}
 )
 
 FetchContent_MakeAvailable(libarchive)
+
+# https://github.com/libarchive/libarchive/commit/b91f32b55f111f2ee487793f331322dea282b02f
+target_compile_options(archive_static PRIVATE -Wno-error=unused-variable)
+
 target_link_libraries(archive_static liblzma libnettle)
 include_directories(${libarchive_SOURCE_DIR}/libarchive)
 
