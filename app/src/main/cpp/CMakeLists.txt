@@ -156,7 +156,7 @@ corrosion_add_target_rustflags(ehviewer_rust $<$<NOT:$<CONFIG:Debug>>:-Z unstabl
 corrosion_link_libraries(ehviewer_rust android jnigraphics log webp webpdemux)
 
 # Build and link our app's native lib
-add_library(${PROJECT_NAME} SHARED archive.c gifutils.c hash.c natsort/strnatcmp.c)
+add_library(${PROJECT_NAME} SHARED archive.c gifutils.c hash.c natsort/strnatcmp.c zip_central_dir.c)
 target_link_libraries(
         ${PROJECT_NAME} archive_static ehviewer_rust
         -Wl,-u,JNI_OnLoad -Wl,--undefined-glob,Java_*
