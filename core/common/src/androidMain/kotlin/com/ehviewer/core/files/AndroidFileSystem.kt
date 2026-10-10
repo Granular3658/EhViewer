@@ -241,9 +241,9 @@ class AndroidFileSystem(context: Context) : FileSystem() {
             val uri = if (path.isSmb) path.toStatUri() else path.toUri()
             val isMediaUri = uri.authority == MediaStore.AUTHORITY
             val projection = if (isMediaUri) {
-                arrayOf(MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.DATE_MODIFIED)
+                arrayOf(MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.SIZE)
             } else {
-                arrayOf(Document.COLUMN_MIME_TYPE, Document.COLUMN_LAST_MODIFIED)
+                arrayOf(Document.COLUMN_MIME_TYPE, Document.COLUMN_LAST_MODIFIED, Document.COLUMN_SIZE)
             }
 
             contentResolver.query(uri, projection, null, null, null)?.use { c ->
@@ -252,10 +252,15 @@ class AndroidFileSystem(context: Context) : FileSystem() {
                 val mimeType = c.getString(0)
                 val lastModified = c.getLongOrNull(1)?.let { if (isMediaUri) it * 1000 else it }
                 val isDirectory = mimeType == Document.MIME_TYPE_DIR
+                // The length matters: a consumer that archives an SMB file gets a
+                // pipe, and a pipe's own stat reports a FIFO of size 0, which the
+                // zip writer refuses outright. Only the provider knows the real size.
+                val size = c.getLongOrNull(2)?.takeIf { !isDirectory && it >= 0 }
 
                 FileMetadata(
                     isRegularFile = !isDirectory,
                     isDirectory = isDirectory,
+                    size = size,
                     lastModifiedAtMillis = lastModified,
                 )
             }
