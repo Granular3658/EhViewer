@@ -24,6 +24,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include <jni.h>
 #include <android/log.h>
@@ -49,6 +50,12 @@ typedef struct {
     int index;
     ssize_t size;
     void *addr;
+    /* Where the entry lives, from the central directory. Lets a stored entry be
+     * read straight from its offset instead of walking to it. Zero when the
+     * entry came from libarchive's walk or is not stored. */
+    uint64_t offset;
+    uint64_t csize;
+    uint16_t method;
 } entry;
 
 #define CTX_POOL_SIZE 20
@@ -294,6 +301,9 @@ static size_t archive_map_entries_central_dir(bool sort) {
         entries[count].size = (ssize_t) e->usize;
         /* No mapping to point at, so no zero copy here. */
         entries[count].addr = NULL;
+        entries[count].offset = e->offset;
+        entries[count].csize = e->csize;
+        entries[count].method = e->method;
         max_file_size = max((ssize_t) e->usize, max_file_size);
         count++;
     }
@@ -325,6 +335,9 @@ static size_t archive_map_entries_index(archive_ctx *ctx, bool sort) {
             ssize_t size = archive_entry_size(ctx->entry);
             max_file_size = max(size, max_file_size);
             entries[count].size = size;
+            entries[count].offset = 0;
+            entries[count].csize = 0;
+            entries[count].method = 0;
             // We don't expect zero copy if first content can't do zero copy
             if (zero_copy) zero_copy = fill_entry_zero_copy(ctx->arc, &entries[count]);
             count++;
@@ -568,6 +581,28 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_openArchiveSmb(JNIEnv *env, jclass thiz, j
     return archive_open_common(sort_entries);
 }
 
+/*
+ * Read a stored entry's payload straight from its central directory offset.
+ *
+ * Walking to an entry costs a round trip for every entry before it, which is
+ * what makes resuming at a late page slow: the reader remembers the page and
+ * then has to walk there. A stored entry's payload sits at a known offset, so
+ * two requests reach it regardless of position.
+ *
+ * Returns false when the entry is not stored (deflated needs libarchive) or a
+ * read fails, leaving the caller to fall back to the walk.
+ */
+static bool archive_read_stored_entry(const entry *entry, void *buf, size_t size) {
+    if (entry->method != 0 || entry->offset == 0 || entry->csize != (uint64_t) entry->size)
+        return false;
+    uint8_t hdr[30];
+    if (!archive_read_at(NULL, entry->offset, hdr, sizeof(hdr)))
+        return false;
+    uint16_t name_len = (uint16_t) (hdr[26] | (hdr[27] << 8));
+    uint16_t extra_len = (uint16_t) (hdr[28] | (hdr[29] << 8));
+    return archive_read_at(NULL, entry->offset + 30 + name_len + extra_len, buf, size);
+}
+
 JNIEXPORT jobject JNICALL
 Java_com_hippo_ehviewer_jni_ArchiveKt_extractToByteBuffer(JNIEnv *env, jclass thiz, jint index) {
     EH_UNUSED(env);
@@ -576,7 +611,17 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_extractToByteBuffer(JNIEnv *env, jclass th
     ssize_t size = entry->size;
     if (entry->addr) {
         return (*env)->NewDirectByteBuffer(env, entry->addr, size);
-    } else {
+    }
+    /* Stored entries are reachable directly, which is what keeps a resumed read
+     * from walking the whole archive to get to a late page. */
+    if (entry->method == 0 && entry->offset != 0) {
+        void *direct = acquire_decode_buffer();
+        if (archive_read_stored_entry(entry, direct, size)) {
+            return (*env)->NewDirectByteBuffer(env, direct, size);
+        }
+        release_decode_buffer(direct);
+    }
+    {
         archive_ctx *ctx = NULL;
         /* archive_get_ctx returns 0 on success. Entering this block on failure
          * dereferenced a null context -- which is what a dropped SMB session
@@ -681,7 +726,14 @@ JNIEXPORT jboolean JNICALL
 Java_com_hippo_ehviewer_jni_ArchiveKt_extractToFd(JNIEnv *env, jclass thiz, jint index, jint fd) {
     EH_UNUSED(env);
     EH_UNUSED(thiz);
-    index = entries[index].index;
+    entry *e = &entries[index];
+    if (e->method == 0 && e->offset != 0) {
+        void *buf = acquire_decode_buffer();
+        bool ok = archive_read_stored_entry(e, buf, e->size) && write(fd, buf, e->size) == e->size;
+        release_decode_buffer(buf);
+        return ok;
+    }
+    index = e->index;
     archive_ctx *ctx = NULL;
     int ret;
     ret = archive_get_ctx(&ctx, index);
