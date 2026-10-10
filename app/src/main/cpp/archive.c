@@ -578,7 +578,10 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_extractToByteBuffer(JNIEnv *env, jclass th
         return (*env)->NewDirectByteBuffer(env, entry->addr, size);
     } else {
         archive_ctx *ctx = NULL;
-        if (!archive_get_ctx(&ctx, entry->index)) {
+        /* archive_get_ctx returns 0 on success. Entering this block on failure
+         * dereferenced a null context -- which is what a dropped SMB session
+         * leads to, because the archive cannot be reopened after it. */
+        if (archive_get_ctx(&ctx, entry->index) == 0) {
             void *addr = acquire_decode_buffer();
             ssize_t bytes = archive_read_data(ctx->arc, addr, size);
             ctx->using = 0;
@@ -592,6 +595,8 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_extractToByteBuffer(JNIEnv *env, jclass th
                 }
             }
             release_decode_buffer(addr);
+        } else {
+            LOGE("%s%d", "No archive context available for entry ", entry->index);
         }
     }
     return 0;
