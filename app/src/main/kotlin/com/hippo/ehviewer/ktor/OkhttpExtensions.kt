@@ -2,13 +2,12 @@ package com.hippo.ehviewer.ktor
 
 import com.ehviewer.core.util.isAtLeastQ
 import io.ktor.client.engine.okhttp.OkHttpConfig
-import okhttp3.AsyncDns
-import okhttp3.android.AndroidAsyncDns
+import okhttp3.android.AndroidDns
 
 fun OkHttpConfig.configureClient() {
     config {
         if (isAtLeastQ) {
-            dns(AsyncDns.toDns(AndroidAsyncDns.IPv4, AndroidAsyncDns.IPv6))
+            dns(AndroidDns())
         }
     }
 }
