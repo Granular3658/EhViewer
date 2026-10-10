@@ -5,7 +5,7 @@ use crate::smb::{self, DEFAULT_PORT, Target};
 use anyhow::{Result, ensure};
 use jni::JNIEnv;
 use jni::objects::{JByteBuffer, JClass, JObject, JString};
-use jni::sys::{jint, jlong, jlongArray, jobjectArray};
+use jni::sys::{jint, jlong, jlongArray, jobject, jobjectArray};
 use jni_fn::jni_fn;
 
 #[allow(clippy::too_many_arguments)]
@@ -281,6 +281,129 @@ pub fn smbRename(
         let target = read_target(env, &host, port, &share, &sub, &user, &pass, &domain)?;
         let to_sub = env.get_string(&toSub)?.to_string_lossy().into_owned();
         smb::rename(&target, &to_sub)?;
+        Ok(())
+    })
+}
+
+/// Returns `[fd, size, key]` for an in-memory (memfd) cache of the file, or
+/// `[-1, 0, 0]` when the platform/build cannot provide one (the caller falls
+/// back to the streaming pipe). The descriptor must be released with
+/// `smbReleaseMemfd(key)` once it is no longer needed.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbOpenMemfd(
+    mut env: JNIEnv,
+    _: JClass,
+    host: JString,
+    port: jint,
+    share: JString,
+    sub: JString,
+    user: JString,
+    pass: JString,
+    domain: JString,
+) -> jlongArray {
+    let array = match env.new_long_array(3) {
+        Ok(a) => a,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let mut out = [-1i64, 0, 0];
+    #[cfg(feature = "android-26")]
+    {
+        if let Ok(target) = read_target(&mut env, &host, port, &share, &sub, &user, &pass, &domain)
+            && let Ok((fd, size, key)) = crate::smb_cache::open_memfd(&target)
+        {
+            out = [fd as i64, size as i64, key as i64];
+        }
+    }
+    let _ = env.set_long_array_region(&array, 0, &out);
+    array.into_raw()
+}
+
+/// Release a reference obtained from `smbOpenMemfd`.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbReleaseMemfd(mut env: JNIEnv, _: JClass, key: jlong) {
+    let _ = &mut env;
+    #[cfg(feature = "android-26")]
+    {
+        crate::smb_cache::release_memfd(key as u64);
+    }
+}
+
+/// Configure the SMB in-memory (memfd) cache cap, in MiB.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbSetCacheLimitMb(mut env: JNIEnv, _: JClass, mb: jint) {
+    let _ = &mut env;
+    #[cfg(feature = "android-26")]
+    {
+        crate::smb_cache::set_cache_limit_mb(mb as u64);
+    }
+}
+
+/// Map a file descriptor into a direct `ByteBuffer` of exactly `size`, with no
+/// copy.
+///
+/// The provider serves an in-memory memfd (see `smb_cache`), whose `fstat` does
+/// report the real size — but `FileChannel.map` is still not usable here: the
+/// provider hands us an `AssetFileDescriptor`, and the only way to get a
+/// `FileChannel` over one is `createInputStream()`, whose stream *owns* the
+/// `ParcelFileDescriptor` and closes it on `close()` (see
+/// `AssetFileDescriptor.AutoCloseInputStream`). That would tear down the
+/// provider's descriptor while Coil may still need the source — notably when
+/// this factory returns null and Coil falls back to the static decoder.
+///
+/// Mapping natively with the size the provider advertises avoids touching the
+/// PFD at all, keeps the mapping zero-copy (its backing is the memfd itself,
+/// never the JVM heap), and gives us an explicit `munmap` on dispose instead of
+/// waiting for the GC to collect a `MappedByteBuffer`. Returns null on failure.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbMmapReadOnly(mut env: JNIEnv, _: JClass, fd: jint, size: jlong) -> jobject {
+    if size <= 0 {
+        return std::ptr::null_mut();
+    }
+    let size = size as usize;
+    let ptr = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            size,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        )
+    };
+    if ptr == libc::MAP_FAILED {
+        log::error!(
+            target: "memfd",
+            "smbMmapReadOnly: mmap failed for fd={fd} size={size}: {}",
+            std::io::Error::last_os_error()
+        );
+        return std::ptr::null_mut();
+    }
+    let buf = unsafe { env.new_direct_byte_buffer(ptr as *mut u8, size) };
+    match buf {
+        Ok(buf) => buf.into_raw(),
+        Err(e) => {
+            log::error!(target: "memfd", "smbMmapReadOnly: new_direct_byte_buffer failed: {e:#}");
+            unsafe {
+                libc::munmap(ptr, size);
+            }
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Release a mapping created by `smbMmapReadOnly`. The underlying memory is
+/// memfd shared memory, so unmapping it lets the bounded cache reclaim the
+/// region once the decoder is done with it.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbMunmap(mut env: JNIEnv, _: JClass, buffer: JByteBuffer) {
+    jni_throwing(&mut env, |env| {
+        let addr = env.get_direct_buffer_address(&buffer)? as *mut libc::c_void;
+        let size = env.get_direct_buffer_capacity(&buffer)?;
+        if !addr.is_null() && size > 0 {
+            unsafe {
+                libc::munmap(addr, size);
+            }
+        }
         Ok(())
     })
 }

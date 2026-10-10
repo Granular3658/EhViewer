@@ -7,8 +7,11 @@ import com.hippo.ehviewer.jni.smbInvalidate
 import com.hippo.ehviewer.jni.smbList
 import com.hippo.ehviewer.jni.smbMkdir
 import com.hippo.ehviewer.jni.smbOpen
+import com.hippo.ehviewer.jni.smbOpenMemfd
 import com.hippo.ehviewer.jni.smbRead
+import com.hippo.ehviewer.jni.smbReleaseMemfd
 import com.hippo.ehviewer.jni.smbRename
+import com.hippo.ehviewer.jni.smbSetCacheLimitMb
 import com.hippo.ehviewer.jni.smbStat
 import com.hippo.ehviewer.jni.smbTest
 import com.hippo.ehviewer.jni.smbWrite
@@ -53,6 +56,34 @@ object SmbRepository {
             SmbHandle(raw[0], raw[1])
         }
     }
+
+    /**
+     * Open a remote file through the in-memory (memfd) cache, returning a real
+     * file descriptor that the decode layer can `mmap` like a local file. Returns
+     * `null` when the platform/build does not support it, so the caller can fall
+     * back to the streaming pipe. The returned [SmbMemfdHandle.key] must be
+     * passed to [releaseMemfd] once the descriptor is consumed.
+     */
+    suspend fun openMemfd(location: SmbLocation): SmbMemfdHandle? = withContext(Dispatchers.IO) {
+        withTarget(location) { credentials ->
+            val raw = smbOpenMemfd(
+                location.host,
+                location.port,
+                location.share,
+                location.subPath,
+                credentials.user,
+                credentials.password,
+                credentials.domain,
+            )
+            if (raw.size >= 3 && raw[0] >= 0) SmbMemfdHandle(raw[0].toInt(), raw[1], raw[2]) else null
+        }
+    }
+
+    /** Release a reference obtained from [openMemfd]. */
+    fun releaseMemfd(key: Long) = smbReleaseMemfd(key)
+
+    /** Configure the SMB in-memory (memfd) cache cap, in MiB. */
+    fun setCacheLimitMb(mb: Int) = smbSetCacheLimitMb(mb)
 
     fun read(handle: Long, buffer: ByteBuffer, fileOffset: Long, bufferOffset: Int, length: Int): Int = smbRead(handle, buffer, fileOffset, bufferOffset, length)
 
@@ -139,5 +170,7 @@ object SmbRepository {
 }
 
 data class SmbHandle(val value: Long, val size: Long)
+
+data class SmbMemfdHandle(val fd: Int, val size: Long, val key: Long)
 
 data class SmbWriteHandle(val value: Long)

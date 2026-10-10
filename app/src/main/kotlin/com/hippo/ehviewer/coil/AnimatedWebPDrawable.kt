@@ -23,7 +23,13 @@ import kotlinx.coroutines.runBlocking
 
 // Hold a reference to the buffer as it's used by the decoder
 @Suppress("CanBeParameter")
-class AnimatedWebPDrawable(private val source: ByteBuffer) : Drawable(), Animatable {
+class AnimatedWebPDrawable(
+    private val source: ByteBuffer,
+    private val release: (() -> Unit)? = null,
+) : Drawable(), Animatable {
+    /** Full source file size in bytes; used by the page cache to account for the buffer. */
+    val sourceSize: Int = source.capacity()
+
     private val decodeScope = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val decoder = nativeCreateDecoder(source)
@@ -140,6 +146,10 @@ class AnimatedWebPDrawable(private val source: ByteBuffer) : Drawable(), Animata
             decodeScope.coroutineContext.job.cancelAndJoin()
         }
         nativeDestroyDecoder(decoder)
+        // Release the native mmap view (if any) so the memfd region can be
+        // reclaimed. Must run after the decoder is destroyed, since it still
+        // reads the buffer during teardown.
+        release?.invoke()
     }
 }
 

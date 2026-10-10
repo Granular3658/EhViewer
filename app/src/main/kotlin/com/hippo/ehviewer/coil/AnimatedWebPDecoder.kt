@@ -11,14 +11,19 @@ import coil3.decode.ImageSource
 import coil3.fetch.SourceFetchResult
 import coil3.gif.isAnimatedWebP
 import coil3.request.Options
+import com.hippo.ehviewer.jni.smbMmapReadOnly
+import com.hippo.ehviewer.jni.smbMunmap
 import java.io.FileInputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import okio.FileSystem
 
-class AnimatedWebPDecoder(private val source: ByteBuffer) : Decoder {
-    override suspend fun decode() = DecodeResult(AnimatedWebPDrawable(source).asImage(), false)
+class AnimatedWebPDecoder(
+    private val source: ByteBuffer,
+    private val release: (() -> Unit)? = null,
+) : Decoder {
+    override suspend fun decode() = DecodeResult(AnimatedWebPDrawable(source, release).asImage(), false)
 
     object Factory : Decoder.Factory {
         override fun create(
@@ -26,46 +31,52 @@ class AnimatedWebPDecoder(private val source: ByteBuffer) : Decoder {
             options: Options,
             imageLoader: ImageLoader,
         ) = if (DecodeUtils.isAnimatedWebP(result.source.source())) {
-            result.source.toByteBufferOrNull()?.let { AnimatedWebPDecoder(it) }
+            result.source.toByteBufferOrNull()?.let { (buffer, release) -> AnimatedWebPDecoder(buffer, release) }
         } else {
             null
         }
     }
 }
 
-private fun ImageSource.toByteBufferOrNull(): ByteBuffer? {
+private fun ImageSource.toByteBufferOrNull(): Pair<ByteBuffer, (() -> Unit)?>? {
     if (fileSystem === FileSystem.SYSTEM) {
         val file = fileOrNull()
         if (file != null) {
-            return file.toFile().inputStream().mapReadOnly()
+            return file.toFile().inputStream().mapReadOnly() to null
         }
     }
     return when (val metadata = metadata) {
-        // A real file fd (e.g. a content:// that resolves to a local file) can
-        // be mmap'd zero-copy, which keeps local decoding OOM-safe. A pipe
-        // (e.g. SMB served through the ContentProvider proxy) cannot be mmap'd,
-        // so fall back to reading Coil's already-open source exactly once into
-        // a direct buffer. Re-opening the fd a second time races the first
-        // reader and truncates the WebP or throws a get_direct_buffer_address
-        // NPE.
-        is ContentMetadata -> runCatching {
-            metadata.assetFileDescriptor.createInputStream().mapReadOnly()
-        }.getOrNull() ?: source().readByteArray().toDirectBuffer()
-        is ByteBufferMetadata -> metadata.byteBuffer
+        // Local files are mmap'd zero-copy via FileChannel. SMB-served files
+        // arrive as an in-memory memfd the provider advertises a real length
+        // for; map it natively (see smbMmapReadOnly) — zero copy, the buffer's
+        // backing is the memfd itself, never the JVM heap. FileChannel.map() is
+        // not usable here because the only FileChannel over the provider's
+        // AssetFileDescriptor comes from createInputStream(), whose stream closes
+        // the provider's PFD. The provider advertises -1 for the pipe fallback,
+        // which we reject so the caller can fall back.
+        is ContentMetadata -> {
+            val afd = metadata.assetFileDescriptor
+            if (afd.length > 0) {
+                val fd = afd.parcelFileDescriptor?.fd ?: -1
+                if (fd < 0) throw IOException("cannot mmap memfd: missing fd")
+                val buffer = smbMmapReadOnly(fd, afd.length)
+                    ?: throw IOException("cannot mmap memfd fd=$fd size=${afd.length}")
+                buffer to { smbMunmap(buffer) }
+            } else {
+                // Pipe / unknown-length source: cannot be mmap'd natively and we
+                // don't have a declared size, so let Coil fall back to another
+                // decoder rather than crash on a zero-length mapping.
+                null
+            }
+        }
+        is ByteBufferMetadata -> metadata.byteBuffer to null
         else -> null
     }
 }
 
-private fun ByteArray.toDirectBuffer(): ByteBuffer = ByteBuffer.allocateDirect(size).apply {
-    put(this@toDirectBuffer)
-    flip()
-}
-
-private fun FileInputStream.mapReadOnly(): ByteBuffer = channel.use {
-    val size = it.size()
-    // A pipe (e.g. an SMB ContentProvider proxy) reports size 0 and cannot be
-    // mmap'd; mapping 0 bytes would succeed but yield an empty buffer. Reject
-    // it so the caller falls back to a one-shot direct read.
+private fun FileInputStream.mapReadOnly(): ByteBuffer {
+    val channel = this.channel
+    val size = channel.size()
     if (size == 0L) throw IOException("cannot mmap zero-length source (pipe?)")
-    it.map(FileChannel.MapMode.READ_ONLY, 0, size)
+    return channel.map(FileChannel.MapMode.READ_ONLY, 0, size)
 }

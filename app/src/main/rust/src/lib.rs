@@ -5,6 +5,8 @@ mod ffi;
 pub mod img;
 pub mod parser;
 pub mod smb;
+#[cfg(feature = "android-26")]
+mod smb_cache;
 
 use serde::{Serialize, Serializer, ser::SerializeTuple};
 use std::fmt::{Debug, Display, Formatter};

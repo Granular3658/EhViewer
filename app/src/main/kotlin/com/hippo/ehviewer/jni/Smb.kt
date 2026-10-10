@@ -111,3 +111,41 @@ external fun smbRename(
 )
 
 external fun smbInvalidate()
+
+/**
+ * Returns `[fd, size, key]` for an in-memory (memfd) cache of the file, or
+ * `[-1, 0, 0]` if unsupported. The descriptor must be released with
+ * [smbReleaseMemfd] once consumed.
+ */
+external fun smbOpenMemfd(
+    host: String,
+    port: Int,
+    share: String,
+    sub: String,
+    user: String,
+    pass: String,
+    domain: String,
+): LongArray
+
+/** Release a reference obtained from [smbOpenMemfd]. */
+external fun smbReleaseMemfd(key: Long)
+
+/**
+ * Maps the SMB provider's descriptor into a direct [java.nio.ByteBuffer] of
+ * exactly [size], with no copy: the buffer's backing is the in-memory region
+ * itself, never the JVM heap.
+ *
+ * The provider serves a memfd, whose `fstat` is accurate — but we still map
+ * natively rather than via `FileChannel.map`, because the only `FileChannel`
+ * available over an [android.content.res.AssetFileDescriptor] comes from
+ * `createInputStream()`, whose stream owns and closes the provider's
+ * `ParcelFileDescriptor`. Mapping natively also gives an explicit unmap on
+ * dispose. Returns null if the mapping fails.
+ */
+external fun smbMmapReadOnly(fd: Int, size: Long): java.nio.ByteBuffer?
+
+/** Releases a mapping created by [smbMmapReadOnly]. */
+external fun smbMunmap(buffer: java.nio.ByteBuffer)
+
+/** Configure the SMB in-memory (memfd) cache cap, in MiB. */
+external fun smbSetCacheLimitMb(mb: Int)

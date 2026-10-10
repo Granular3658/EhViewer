@@ -68,6 +68,7 @@ import com.hippo.ehviewer.ktor.Cronet
 import com.hippo.ehviewer.ktor.configureClient
 import com.hippo.ehviewer.ktor.configureCommon
 import com.hippo.ehviewer.ktor.isCronetAvailable
+import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.ui.keepNoMediaFileStatus
 import com.hippo.ehviewer.ui.screen.detailCache
 import com.hippo.ehviewer.ui.tools.dataStateFlow
@@ -113,6 +114,10 @@ class EhApplication : Application(), SingletonImageLoader.Factory {
         CrashHandler.install()
         super.onCreate()
         System.loadLibrary("ehviewer")
+        // Push the SMB in-memory (memfd) cache cap into the Rust LRU. The symbol
+        // only exists in builds with the android-26 feature, so swallow a missing-link
+        // error the same way the provider's fallback path does.
+        runCatching { SmbRepository.setCacheLimitMb(Settings.smbCacheSize.value) }
         launch {
             FavouriteStatusRouter.collect { info ->
                 detailCache[info.gid]?.apply {
