@@ -82,7 +82,7 @@ class Image private constructor(image: CoilImage, private val src: ImageSource) 
     private fun recycle() {
         when (val image = innerImage!!) {
             is DrawableImage -> {
-                (image.drawable as? AnimatedWebPDrawable)?.dispose()
+                (image.drawable as? AnimatedWebPDrawable)?.close()
                 src.close()
             }
             is BitmapImage -> image.bitmap.recycle()

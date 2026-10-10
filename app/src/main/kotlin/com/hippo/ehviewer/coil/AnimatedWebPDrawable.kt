@@ -28,6 +28,7 @@ private const val USAGE = HardwareBuffer.USAGE_CPU_WRITE_OFTEN or HardwareBuffer
 
 private class Frame(val bitmap: Bitmap, val ahb: HardwareBuffer?, var timestamp: Int) : AutoCloseable {
     override fun close() {
+        bitmap.recycle()
         ahb?.close()
     }
 
@@ -57,7 +58,7 @@ private fun allocFrame(w: Int, h: Int): Frame {
 
 // Hold a reference to the buffer as it's used by the decoder
 @Suppress("CanBeParameter")
-class AnimatedWebPDrawable(private val source: ByteBuffer) : Drawable(), Animatable {
+class AnimatedWebPDrawable(private val source: ByteBuffer) : Drawable(), Animatable, AutoCloseable {
     private val decodeScope = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val decoder = nativeCreateDecoder(source)
@@ -167,11 +168,11 @@ class AnimatedWebPDrawable(private val source: ByteBuffer) : Drawable(), Animata
         unscheduleSelf(runnable)
     }
 
-    fun dispose() {
-        runBlocking {
-            decodeScope.coroutineContext.job.cancelAndJoin()
-        }
+    override fun close() {
+        runBlocking { decodeScope.coroutineContext.job.cancelAndJoin() }
         nativeDestroyDecoder(decoder)
+        currentFrame.close()
+        nextFrame.close()
     }
 }
 
