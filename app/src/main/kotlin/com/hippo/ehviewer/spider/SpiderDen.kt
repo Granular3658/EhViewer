@@ -27,6 +27,7 @@ import com.ehviewer.core.files.find
 import com.ehviewer.core.files.isDirectory
 import com.ehviewer.core.files.isSmb
 import com.ehviewer.core.files.list
+import com.ehviewer.core.files.metadataOrNull
 import com.ehviewer.core.files.mkdirs
 import com.ehviewer.core.files.moveTo
 import com.ehviewer.core.files.openFileDescriptor
@@ -95,7 +96,9 @@ class SpiderDen(val info: GalleryInfo) {
 
     private val imageDir
         get() = if (downloadDir?.isSmb == true) {
-            // SMB galleries always store loose images; CBZ archival is skipped.
+            // An SMB gallery keeps its loose images on the share: there is no local
+            // temp directory to stage them in, and the archive is built from them in
+            // place.
             downloadDir
         } else {
             tempDownloadDir.takeIf { saveAsCbz } ?: downloadDir
@@ -117,8 +120,8 @@ class SpiderDen(val info: GalleryInfo) {
             if (downloadDir == null) {
                 downloadDir = getGalleryWritableDownloadDir(info).apply { mkdirs() }
             }
-            // For SMB galleries, write images straight to the share; keep the
-            // local temp directory only for CBZ archiving on local storage.
+            // An SMB gallery has no local temp directory: its images go straight to
+            // the share and the archive is built from them there.
             if (saveAsCbz && tempDownloadDir == null && downloadDir?.isSmb != true) {
                 tempDownloadDir = info.tempDownloadDir!!.apply { mkdirs() }
             }
@@ -298,10 +301,17 @@ class SpiderDen(val info: GalleryInfo) {
         }
     }
 
-    suspend fun archive() = saveAsCbz && downloadDir?.takeUnless { it.isSmb }?.run {
+    suspend fun archive() = saveAsCbz && downloadDir?.run {
         resolve(archiveName).let { file ->
             runCatching {
                 archiveTo(file)
+                // The native writer reports failures only through logcat, so the
+                // written file is the one signal available here. An empty archive
+                // must not count as success: postArchive() deletes the loose images
+                // once this returns true.
+                check(file.exists() && (file.metadataOrNull()?.size ?: 0) > 0) {
+                    "Archive was not written: $file"
+                }
             }.onFailure {
                 file.delete()
                 logcat(it)
@@ -311,6 +321,10 @@ class SpiderDen(val info: GalleryInfo) {
 
     // Postpone this to `SpiderQueen.stop` because files may still be in use by reader
     suspend fun postArchive(): Boolean {
+        // An SMB archive is written but not cleaned up yet: reading one back needs a
+        // mmap-able descriptor, which the share cannot provide, so the loose images
+        // are still the only copy the app can open. Drop this guard once the archive
+        // reader can take its input from the in-memory cache instead.
         val dir = downloadDir?.takeUnless { it.isSmb }
         val archived = saveAsCbz && dir?.find(archiveName) != null
         if (archived) {
@@ -326,7 +340,6 @@ class SpiderDen(val info: GalleryInfo) {
     }
 
     suspend fun exportAsCbz(file: Path) {
-        check(downloadDir?.isSmb != true) { "Exporting an SMB location is not supported" }
         downloadDir!!.find(archiveName)?.sendTo(file) ?: archiveTo(file)
     }
 
@@ -359,7 +372,7 @@ class SpiderDen(val info: GalleryInfo) {
     }
 
     suspend fun writeComicInfo(fetchMetadata: Boolean = true) {
-        downloadDir?.takeUnless { it.isSmb }?.run {
+        downloadDir?.run {
             resolve(COMIC_INFO_FILE).also {
                 if (info !is GalleryDetail && fetchMetadata) {
                     EhEngine.fillGalleryListByApi(listOf(info))
