@@ -119,8 +119,15 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
             var showSmbDialog by remember { mutableStateOf(false) }
             // The SMB location whose URL is being edited, if any.
             var editingSmb by remember { mutableStateOf<String?>(null) }
+            // The location being re-picked, or null when adding a new one.
+            var replacing by remember { mutableStateOf<String?>(null) }
+            // Until a location is configured the downloader still uses the legacy
+            // single one. Show it as a row of its own -- it is not part of the
+            // configured set -- so there is still somewhere to change it from.
+            val legacyUriStr = downloadLocation.toUri().toString()
+            val legacyOnly = downloadLocationsState.isEmpty()
+            val locations = downloadLocationsState.ifEmpty { listOfNotNull(legacyUriStr.takeIf(String::isNotEmpty)) }
             val cannotGetDownloadLocation = stringResource(id = R.string.settings_download_cant_get_download_location)
-            val defaultDownloadDirLabel = stringResource(id = R.string.settings_download_default_location)
             val extraLocationsLabel = stringResource(id = R.string.settings_download_extra_locations)
             val addLocationLabel = stringResource(id = R.string.settings_download_add_location)
             val removeLocationLabel = stringResource(id = R.string.settings_download_remove_location)
@@ -128,11 +135,11 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
             val alreadyAddedLabel = stringResource(id = R.string.settings_download_location_already_added)
             val cannotRemoveDefaultLabel = stringResource(id = R.string.settings_download_cannot_remove_default)
 
-            suspend fun onLocationPicked(treeUri: Uri, setAsDefault: Boolean) {
+            suspend fun onLocationPicked(treeUri: Uri, replaceUriStr: String?) {
                 contextOf<Context>().contentResolver.runCatching {
                     // Only take the new permission. Releasing the existing ones here would
-                    // revoke access to every other configured location: permissions are
-                    // released explicitly when a location is removed instead.
+                    // revoke access to every other configured location: a replaced location
+                    // releases its own below, and a removed one when it is removed.
                     takePersistableUriPermission(treeUri, URI_FLAGS)
                     val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
                     val path = docUri.toOkioPath()
@@ -140,17 +147,23 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     keepNoMediaFileStatus(path)
                     val current = Settings.downloadLocations.value
                     // Different tree URIs can resolve to the same directory
-                    if (current.any { runCatching { Uri.parse(it).toOkioPath() }.getOrNull() == path }) {
+                    if (current.any { it != replaceUriStr && runCatching { Uri.parse(it).toOkioPath() }.getOrNull() == path }) {
                         launchSnackbar(alreadyAddedLabel)
                         return@runCatching
                     }
                     val uriStr = docUri.toString()
-                    Settings.downloadLocations.value = current + uriStr
+                    val wasDefault = replaceUriStr != null &&
+                        (replaceUriStr == defaultLocationUri || replaceUriStr == legacyUriStr)
+                    Settings.downloadLocations.value = current - (replaceUriStr ?: "") + uriStr
                     // The first location (or an explicit pick) becomes the default, so the
                     // default never depends on the iteration order of the underlying Set
-                    if (setAsDefault || Settings.defaultDownloadLocationUri.value == null) {
+                    if (wasDefault || Settings.defaultDownloadLocationUri.value == null) {
                         Settings.defaultDownloadLocationUri.value = uriStr
                         downloadLocation = path
+                    }
+                    if (replaceUriStr != null) {
+                        // The location it replaced loses its permission
+                        runCatching { releasePersistableUriPermission(Uri.parse(replaceUriStr), URI_FLAGS) }
                     }
                     invalidateDownloadLocationCache()
                 }.onFailure {
@@ -159,70 +172,33 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                 }
             }
 
-            val defaultDirLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
-                treeUri?.let { launchIO { onLocationPicked(it, true) } }
-            }
-            val extraDirLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
-                treeUri?.let { launchIO { onLocationPicked(it, false) } }
+            val dirLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
+                treeUri?.let { launchIO { onLocationPicked(it, replacing) } }
             }
 
-            val defaultSummary = defaultLocationUri?.let { Uri.parse(it).displayPath }
-                ?: downloadLocation.toUri().displayPath
-            Preference(
-                title = defaultDownloadDirLabel,
-                summary = defaultSummary,
-            ) {
-                launchIO {
-                    val defaultDownloadDir = AppConfig.defaultDownloadDir
-                    if (defaultDownloadDir?.delete() == false) {
-                        val path = defaultDownloadDir.toOkioPath()
-                        awaitConfirmationOrCancel(
-                            confirmText = R.string.pick_new_download_location,
-                            dismissText = if (downloadLocation != path) {
-                                R.string.reset_download_location
-                            } else {
-                                android.R.string.cancel
-                            },
-                            title = R.string.waring,
-                            onCancelButtonClick = {
-                                // Resetting only makes sense for the legacy single location.
-                                // With locations configured it would revoke every granted
-                                // permission without changing anything effective.
-                                if (downloadLocationsState.isEmpty() && downloadLocation != path) {
-                                    contextOf<Context>().contentResolver.run {
-                                        persistedUriPermissions.forEach {
-                                            releasePersistableUriPermission(it.uri, URI_FLAGS)
-                                        }
-                                    }
-                                    downloadLocation = path
-                                }
-                            },
-                        ) {
-                            Text(stringResource(id = R.string.default_download_dir_not_empty))
+            /** Opens the folder picker, falling back to the app directory without DocumentsUI. */
+            suspend fun pickDirectory() {
+                try {
+                    dirLauncher.launch(null)
+                } catch (_: ActivityNotFoundException) {
+                    // Best effort for devices without DocumentsUI
+                    if (!isAtLeastQ && requestPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+                        runCatching {
+                            val path = Environment.getExternalStorageDirectory().toOkioPath() / AppConfig.APP_DIRNAME
+                            path.mkdirs()
+                            check(path.isDirectory) { "$path is not a directory" }
+                            keepNoMediaFileStatus(path)
+                            val uriStr = path.toUri().toString()
+                            Settings.downloadLocations.value = Settings.downloadLocations.value + uriStr
+                            Settings.defaultDownloadLocationUri.value = uriStr
+                            downloadLocation = path
+                            invalidateDownloadLocationCache()
+                            return
+                        }.onFailure {
+                            logcat(it)
                         }
                     }
-                    try {
-                        defaultDirLauncher.launch(null)
-                    } catch (_: ActivityNotFoundException) {
-                        // Best effort for devices without DocumentsUI
-                        if (!isAtLeastQ && requestPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
-                            runCatching {
-                                val path = Environment.getExternalStorageDirectory().toOkioPath() / AppConfig.APP_DIRNAME
-                                path.mkdirs()
-                                check(path.isDirectory) { "$path is not a directory" }
-                                keepNoMediaFileStatus(path)
-                                val uriStr = path.toUri().toString()
-                                Settings.downloadLocations.value = Settings.downloadLocations.value + uriStr
-                                Settings.defaultDownloadLocationUri.value = uriStr
-                                downloadLocation = path
-                                invalidateDownloadLocationCache()
-                                return@launchIO
-                            }.onFailure {
-                                logcat(it)
-                            }
-                        }
-                        launchSnackbar(cannotGetDownloadLocation)
-                    }
+                    launchSnackbar(cannotGetDownloadLocation)
                 }
             }
 
@@ -233,12 +209,16 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                 state = showSource,
             )
 
-            if (downloadLocationsState.isNotEmpty()) {
+            if (locations.isNotEmpty()) {
                 Preference(title = extraLocationsLabel) {}
-                downloadLocationsState.forEach { uriStr ->
+                locations.forEach { uriStr ->
                     val isSmb = uriStr in smbLocationsState
+                    // The legacy location is the default by definition: it is only
+                    // shown when nothing is configured, and then it is what the
+                    // downloader falls back to.
+                    val isLegacy = legacyOnly && uriStr == legacyUriStr
                     // SMB shares are writable now, so they can be picked as the default too
-                    val isDefault = uriStr == defaultLocationUri
+                    val isDefault = isLegacy || uriStr == defaultLocationUri
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
@@ -248,10 +228,18 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                             modifier = Modifier
                                 .weight(1f)
                                 .then(
-                                    // An SMB location is a URL the user typed, so a tap
-                                    // reopens the dialog to fix it. A local one is backed
-                                    // by a SAF grant that has to be picked again instead.
-                                    if (isSmb) Modifier.clickable { editingSmb = uriStr } else Modifier,
+                                    Modifier.clickable {
+                                        if (isSmb) {
+                                            // An SMB location is a URL the user typed, so a tap
+                                            // reopens the dialog to fix it.
+                                            editingSmb = uriStr
+                                        } else {
+                                            // A local one is backed by a SAF grant, so it has to
+                                            // be picked again to replace it.
+                                            replacing = uriStr
+                                            launchIO { pickDirectory() }
+                                        }
+                                    },
                                 ),
                         )
                         if (isDefault) {
@@ -276,7 +264,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                         // silently fall back to the legacy single one, which then disappears
                         // again as soon as a new location is added. Any other location can go,
                         // including the default one, which re-points the default elsewhere.
-                        if (downloadLocationsState.size > 1) {
+                        if (locations.size > 1) {
                             TextButton(
                                 onClick = {
                                     launchIO {
@@ -309,7 +297,8 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
             // Keep this outside the block above so a location can always be added back,
             // even after the last one has been removed
             Preference(title = addLocationLabel) {
-                extraDirLauncher.launch(null)
+                replacing = null
+                launchIO { pickDirectory() }
             }
             Preference(title = stringResource(R.string.settings_download_add_smb_location)) {
                 showSmbDialog = true
