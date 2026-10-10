@@ -22,17 +22,9 @@ val Uri.displayPath: String?
         }
 
         val context = appCtx
-        // A tree URI -- what the folder picker hands back -- is not a document
-        // URI, so it used to fall through to toString() and render as
-        // `.../tree/primary%3AEhViewer`, the %3A being an encoded colon.
-        val documentId = when {
-            DocumentsContract.isDocumentUri(context, this) -> DocumentsContract.getDocumentId(this)
-            DocumentsContractCompat.isTreeUri(this) -> DocumentsContract.getTreeDocumentId(this)
-            else -> null
-        }
-        if (documentId != null) {
-            val (type, path) = documentId.split(":", limit = 2).also {
-                if (it.size < 2) return Uri.decode(toString())
+        if (DocumentsContract.isDocumentUri(context, this)) {
+            val (type, path) = DocumentsContract.getDocumentId(this).split(":", limit = 2).also {
+                if (it.size < 2) return toString()
             }
             if (authority == "com.android.externalstorage.documents") {
                 if (type == "primary") {
@@ -49,18 +41,8 @@ val Uri.displayPath: String?
             }
         }
 
-        // Nothing matched. Decode the percent-escapes anyway so no %3A shows up.
-        return Uri.decode(toString())
+        return toString()
     }
-
-/**
- * A short label for a configured download location.
- *
- * SMB locations are shown by their share name: what gets stored is an
- * `smb://host:port/share` URL, and `Path.toUri()` wraps that in the provider's
- * own `content://` URI, which is not something to put in a summary.
- */
-fun downloadLocationLabel(uriString: String): String = SmbLocation.parse(uriString)?.share ?: Uri.parse(uriString).displayPath.orEmpty()
 
 /**
  * The compact label shown next to a download's own labels, identifying where it
