@@ -397,8 +397,8 @@
     <string name="settings_advanced_dump_logcat_failed">Dump logcat failed</string>
     <string name="settings_advanced_dump_logcat_to">Logcat dumped to %s</string>
     <string name="settings_advanced_read_cache_size">Read cache size</string>
-    <string name="settings_advanced_smb_cache_size">SMB memory cache (too large may OOM)</string>
-    <string name="settings_advanced_smb_cache_size_summary">In-memory (memfd) cap for remote SMB files. Larger keeps more pages resident but uses more RAM. Applies immediately.</string>
+    <string name="settings_advanced_smb_cache_size">SMB memory cache (MB)</string>
+    <string name="settings_advanced_smb_cache_size_summary">How much RAM may be spent keeping remote SMB files you have already opened. Smaller saves memory; larger keeps more of the pages you have scrolled past, so going back to them does not read from the network again — smoother browsing and less network I/O. Too large can cause OOM. Applies immediately.</string>
     <string name="settings_advanced_app_language_title">App language</string>
     <string name="settings_advanced_enable_quic">QUIC support</string>
     <string name="settings_advanced_hardware_bitmap_threshold">Hardware bitmap (better performance) threshold</string>
