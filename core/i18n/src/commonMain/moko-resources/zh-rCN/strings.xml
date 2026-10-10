@@ -378,6 +378,8 @@
     <string name="settings_advanced_dump_logcat_failed">导出日志失败</string>
     <string name="settings_advanced_dump_logcat_to">已保存日志至 %s</string>
     <string name="settings_advanced_read_cache_size">阅读缓存大小</string>
+    <string name="settings_advanced_smb_cache_size">SMB 内存缓存（太大容易 OOM）</string>
+    <string name="settings_advanced_smb_cache_size_summary">远程 SMB 文件的在内存(memfd)中的缓存上限，越大保留的页面越多但占用内存越高。即时生效。</string>
     <string name="settings_advanced_app_language_title">App 界面语言</string>
     <string name="settings_advanced_enable_quic">QUIC 支持</string>
     <string name="settings_advanced_hardware_bitmap_threshold">硬件位图（性能更好）阈值</string>

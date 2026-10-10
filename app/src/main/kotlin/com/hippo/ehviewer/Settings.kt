@@ -125,6 +125,10 @@ object Settings : DataStorePreferences(null) {
     val saveParseErrorBody = boolPref("save_parse_error_body", true)
     val saveCrashLog = boolPref("save_crash_log", true)
     val readCacheSize = intPref("read_cache_size_2", 640)
+
+    // SMB in-memory (memfd) cache cap, in MiB. Bounds how much RAM the remote
+    // SMB file cache may retain; too large can OOM. Wired into the Rust LRU cap.
+    val smbCacheSize = intPref("smb_cache_size_mb_2", 256)
     val enableCronet = boolPref("enable_cronet", true)
     val enableQuic = boolPref("enable_quic", true)
     val hardwareBitmapThreshold = intPref("hardware_bitmap_threshold", 16384)

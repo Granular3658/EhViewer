@@ -49,7 +49,7 @@ abstract class PageLoader(val scope: CoroutineScope, val info: GalleryInfo?, sta
         } else {
             (OSUtils.appMaxMemory / 3 * 2).toInt()
         },
-        sizeOf = { _, v -> v.allocationSize.toInt() },
+        sizeOf = { _, v -> (v.allocationSize + v.sourceBufferSize).toInt() },
         onEntryRemoved = { k, o, n, _ -> if (o.unpin()) n ?: notifyPageWait(k) },
     )
 
