@@ -66,6 +66,7 @@ static bool archiveIsSmb = false;
 static uint64_t archiveSmbHandle = 0;
 static entry *entries = NULL;
 static size_t entryCount = 0;
+static size_t entries_capacity = 0;
 static ssize_t max_file_size = 0;
 
 /*
@@ -240,12 +241,24 @@ static bool fill_entry_zero_copy(struct archive *arc, entry *entry) {
     return zero_copy;
 }
 
-static void archive_map_entries_index(archive_ctx *ctx, bool sort) {
-    int count = 0;
+/*
+ * Fill `entries` with the playable entries, growing the array as it goes, and
+ * return how many there are.
+ *
+ * Growing rather than counting first matters over a share: counting meant a
+ * first walk of the whole archive, and every entry in a walk costs a round trip
+ * for its local header. One pass halves that.
+ */
+static size_t archive_map_entries_index(archive_ctx *ctx, bool sort) {
+    size_t count = 0;
     bool zero_copy = true;
     while (archive_read_next_header(ctx->arc, &ctx->entry) == ARCHIVE_OK) {
         const char *name = archive_entry_pathname(ctx->entry);
         if (archive_entry_is_file(ctx->entry) && filename_is_playable_file(name)) {
+            if (count == entries_capacity) {
+                entries_capacity = entries_capacity ? entries_capacity * 2 : 256;
+                entries = realloc(entries, entries_capacity * sizeof(entry));
+            }
             entries[count].filename = strdup(name);
             entries[count].index = count;
             ssize_t size = archive_entry_size(ctx->entry);
@@ -256,7 +269,8 @@ static void archive_map_entries_index(archive_ctx *ctx, bool sort) {
             count++;
         }
     }
-    if (sort) qsort(entries, entryCount, sizeof(entry), compare_entries);
+    if (sort) qsort(entries, count, sizeof(entry), compare_entries);
+    return count;
 }
 
 static void *acquire_decode_buffer() {
@@ -286,14 +300,6 @@ static void release_decode_buffer(void *buffer) {
     }
     pthread_mutex_unlock(&buffer_mutex);
     free(buffer);
-}
-
-static int archive_list_all_entries(archive_ctx *ctx) {
-    int count = 0;
-    while (archive_read_next_header(ctx->arc, &ctx->entry) == ARCHIVE_OK)
-        if (archive_entry_is_playable(ctx->entry))
-            count++;
-    return count;
 }
 
 static void archive_release_ctx(archive_ctx *ctx) {
@@ -421,7 +427,9 @@ static int archive_open_common(jboolean sort_entries) {
     ctx = archive_alloc_ctx();
     if (!ctx) return 0;
 
-    entryCount = archive_list_all_entries(ctx);
+    /* One walk for both the count and the map. Walking once to count and again
+     * to fill meant paying for every entry's local header twice. */
+    entryCount = archive_map_entries_index(ctx, sort_entries);
     LOGI("%s%zu%s", "Found ", entryCount, " images in archive");
     if (!entryCount) {
         LOGE("%s%s", "Archive read failed: ", archive_error_string(ctx->arc));
@@ -453,12 +461,6 @@ static int archive_open_common(jboolean sort_entries) {
             default:;
         }
     }
-    archive_release_ctx(ctx);
-
-    ctx = archive_alloc_ctx();
-    if (!ctx) return 0;
-    entries = calloc(entryCount, sizeof(entry));
-    archive_map_entries_index(ctx, sort_entries);
     archive_release_ctx(ctx);
     return (int) entryCount;
 }
@@ -556,6 +558,8 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_closeArchive(JNIEnv *env, jclass thiz) {
         free(entries);
         entries = NULL;
     }
+    entryCount = 0;
+    entries_capacity = 0;
 }
 
 JNIEXPORT jboolean JNICALL
