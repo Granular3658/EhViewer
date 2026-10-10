@@ -50,10 +50,18 @@ fun SmbLocationDialog(
     onDismiss: () -> Unit,
     onSaved: (SmbLocation) -> Unit,
     showMessage: (String) -> Unit,
+    initial: SmbLocation? = null,
 ) {
-    var path by remember { mutableStateOf("") }
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    // Prefill from the stored location when editing, so a tap can fix a typo
+    // without retyping the host, the share or the credentials.
+    val savedCredentials = remember(initial) { initial?.let(SmbCredentialStore::get) }
+    var path by remember { mutableStateOf(initial?.uriString?.removePrefix(SMB_PREFIX).orEmpty()) }
+    var username by remember {
+        mutableStateOf(
+            savedCredentials?.let { if (it.domain.isEmpty()) it.user else "${it.domain}\\${it.user}" }.orEmpty(),
+        )
+    }
+    var password by remember { mutableStateOf(savedCredentials?.password.orEmpty()) }
     var testing by remember { mutableStateOf(false) }
     var testedLocation by remember { mutableStateOf<SmbLocation?>(null) }
     var testedCredentials by remember { mutableStateOf<SmbCredentials?>(null) }
@@ -87,7 +95,7 @@ fun SmbLocationDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.settings_download_add_smb_location)) },
+        title = { Text(stringResource(if (initial == null) R.string.settings_download_add_smb_location else R.string.settings_download_edit_smb_location)) },
         text = {
             Column(
                 modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),

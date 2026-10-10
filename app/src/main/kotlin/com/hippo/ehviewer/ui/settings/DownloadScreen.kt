@@ -11,6 +11,7 @@ import android.provider.DocumentsContract
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -84,6 +85,7 @@ import com.hippo.ehviewer.ui.tools.observed
 import com.hippo.ehviewer.util.AppConfig
 import com.hippo.ehviewer.util.displayPath
 import com.hippo.ehviewer.util.displayString
+import com.hippo.ehviewer.util.downloadLocationLabel
 import com.hippo.ehviewer.util.requestPermission
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
@@ -116,6 +118,8 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
             val smbLocationsState by Settings.smbLocations.collectAsState()
             val defaultLocationUri by Settings.defaultDownloadLocationUri.collectAsState()
             var showSmbDialog by remember { mutableStateOf(false) }
+            // The SMB location whose URL is being edited, if any.
+            var editingSmb by remember { mutableStateOf<String?>(null) }
             val cannotGetDownloadLocation = stringResource(id = R.string.settings_download_cant_get_download_location)
             val defaultDownloadDirLabel = stringResource(id = R.string.settings_download_default_location)
             val extraLocationsLabel = stringResource(id = R.string.settings_download_extra_locations)
@@ -163,7 +167,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                 treeUri?.let { launchIO { onLocationPicked(it, false) } }
             }
 
-            val defaultSummary = defaultLocationUri?.let { Uri.parse(it).displayPath }
+            val defaultSummary = defaultLocationUri?.let(::downloadLocationLabel)
                 ?: downloadLocation.toUri().displayPath
             Preference(
                 title = defaultDownloadDirLabel,
@@ -242,7 +246,14 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     ) {
                         Text(
                             text = if (isSmb) uriStr else Uri.parse(uriStr).displayPath ?: "",
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .weight(1f)
+                                .then(
+                                    // An SMB location is a URL the user typed, so a tap
+                                    // reopens the dialog to fix it. A local one is backed
+                                    // by a SAF grant that has to be picked again instead.
+                                    if (isSmb) Modifier.clickable { editingSmb = uriStr } else Modifier,
+                                ),
                         )
                         if (isDefault) {
                             Text(
@@ -317,6 +328,34 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                             Settings.smbLocations.value = Settings.smbLocations.value + uriStr
                             invalidateDownloadLocationCache()
                             showSmbDialog = false
+                        }
+                    },
+                )
+            }
+            editingSmb?.let { oldUriStr ->
+                SmbLocationDialog(
+                    initial = SmbLocation.parse(oldUriStr),
+                    onDismiss = { editingSmb = null },
+                    showMessage = ::launchSnackbar,
+                    onSaved = { location ->
+                        val newUriStr = location.uriString
+                        if (newUriStr != oldUriStr && newUriStr in Settings.downloadLocations.value) {
+                            launchSnackbar(string(R.string.settings_download_location_already_added))
+                        } else {
+                            val oldLocation = SmbLocation.parse(oldUriStr)
+                            val wasDefault = defaultLocationUri == oldUriStr
+                            Settings.downloadLocations.value =
+                                Settings.downloadLocations.value - oldUriStr + newUriStr
+                            Settings.smbLocations.value = Settings.smbLocations.value - oldUriStr + newUriStr
+                            if (wasDefault) Settings.defaultDownloadLocationUri.value = newUriStr
+                            // The credential key is host + port + share, so editing only the
+                            // sub-path keeps the same entry; a changed key must not leave the
+                            // old credentials behind.
+                            if (oldLocation != null && oldLocation.credentialKey != location.credentialKey) {
+                                SmbCredentialStore.remove(oldLocation)
+                            }
+                            invalidateDownloadLocationCache()
+                            editingSmb = null
                         }
                     },
                 )
