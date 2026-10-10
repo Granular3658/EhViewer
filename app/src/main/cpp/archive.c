@@ -454,17 +454,24 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_releaseByteBuffer(JNIEnv *env, jclass thiz
     }
 }
 
-JNIEXPORT void JNICALL
-Java_com_hippo_ehviewer_jni_ArchiveKt_archiveFdBatch(JNIEnv *env, jclass clazz, jintArray fd_batch, jobjectArray names, jint arc_fd, jint size) {
+JNIEXPORT jint JNICALL
+Java_com_hippo_ehviewer_jni_ArchiveKt_archiveFdBatch(JNIEnv *env, jclass clazz, jintArray fd_batch, jlongArray sizes, jobjectArray names, jint arc_fd, jint size) {
     EH_UNUSED(clazz);
     struct archive *arc = archive_write_new();
     struct stat st;
     char buff[8192];
     jint fdBatch[size];
+    jlong sizeBatch[size];
     (*env)->GetIntArrayRegion(env, fd_batch, 0, size, fdBatch);
+    (*env)->GetLongArrayRegion(env, sizes, 0, size, sizeBatch);
     archive_write_set_format_zip(arc);
     archive_write_zip_set_compression_store(arc);
-    archive_write_open_fd(arc, arc_fd);
+    if (archive_write_open_fd(arc, arc_fd) != ARCHIVE_OK) {
+        LOGE("%s%s", "archive open failed: ", archive_error_string(arc));
+        archive_write_free(arc);
+        return -1;
+    }
+    int written = 0;
     struct archive_entry *entry = archive_entry_new();
     for (int i = 0; i < size; i++) {
         int fd = fdBatch[i];
@@ -472,19 +479,39 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_archiveFdBatch(JNIEnv *env, jclass clazz, 
         const char *cname = (*env)->GetStringUTFChars(env, name, false);
         archive_entry_set_pathname(entry, cname);
         (*env)->ReleaseStringUTFChars(env, name, cname);
-        fstat(fd, &st);
-        archive_entry_copy_stat(entry, &st);
+        if (sizeBatch[i] >= 0) {
+            // A descriptor for a remote file is a pipe, and a pipe's stat reports
+            // a FIFO of size 0. libarchive refuses to archive a FIFO at all
+            // ("zip format cannot archive named pipes"), which silently produced an
+            // empty archive. The caller knows the real length, so use it and skip
+            // the stat entirely.
+            archive_entry_set_filetype(entry, AE_IFREG);
+            archive_entry_set_size(entry, sizeBatch[i]);
+        } else {
+            fstat(fd, &st);
+            archive_entry_copy_stat(entry, &st);
+        }
         archive_entry_set_perm(entry, 0644);
-        archive_write_header(arc, entry);
-        size_t len;
+        if (archive_write_header(arc, entry) != ARCHIVE_OK) {
+            LOGE("%s%s", "archive header failed: ", archive_error_string(arc));
+            archive_entry_clear(entry);
+            continue;
+        }
+        ssize_t len;
         do {
             len = read(fd, buff, sizeof(buff));
-            archive_write_data(arc, buff, len);
+            if (len > 0 && archive_write_data(arc, buff, (size_t)len) < 0) {
+                LOGE("%s%s", "archive data failed: ", archive_error_string(arc));
+                break;
+            }
         } while (len > 0);
-        archive_write_finish_entry(arc);
+        if (archive_write_finish_entry(arc) == ARCHIVE_OK) {
+            written++;
+        }
         archive_entry_clear(entry);
     }
     archive_entry_free(entry);
     archive_write_close(arc);
     archive_write_free(arc);
+    return written;
 }
