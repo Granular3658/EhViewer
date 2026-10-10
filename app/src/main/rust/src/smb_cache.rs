@@ -28,6 +28,7 @@ use crate::smb::{self, Target};
 use anyhow::{Result, anyhow, ensure};
 use libc::{MAP_SHARED, PROT_READ, PROT_WRITE, mmap, munmap};
 use std::collections::HashMap;
+use std::ffi::CString;
 use std::io::Error;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -164,11 +165,60 @@ fn evict() {
     }
 }
 
-fn dup_fd(mem: &Memfd) -> Result<i32> {
-    // SAFETY: memfd fds are regular file descriptors and can be dup'd.
-    let fd = unsafe { libc::dup(mem.fd.as_raw_fd()) };
+/// Hand a consumer its own descriptor for a cached region.
+///
+/// Deliberately NOT `dup(2)`: `dup` shares the *file position* with the cached
+/// descriptor, and the consumers are not position-independent. Android only made
+/// `AssetFileDescriptor.AutoCloseInputStream` read with `pread` in 15; on
+/// Android 11-14 it reads with `read(2)`, which uses that shared position. With
+/// every consumer sharing one position, the first decode advances it past the
+/// header and each later decode of the same file reads from the wrong offset --
+/// which is what made the animated-WebP pre-check see garbage on the Android 11
+/// test device. (The mmap re-check hid it, because mmap ignores the position.)
+///
+/// Opening `/proc/self/fd/N` creates a fresh open file description, so every
+/// consumer starts at offset 0 with a position of its own. `O_RDONLY` also makes
+/// the descriptor read-only, which the seals cannot guarantee on kernels without
+/// `F_SEAL_FUTURE_WRITE` (Linux 4.4 returns EINVAL for it).
+fn open_for_consumer(mem: &Memfd) -> Result<i32> {
+    match reopen(mem) {
+        Ok(fd) => Ok(fd),
+        Err(e) => {
+            // Last resort: `dup` + rewind. Not race-free -- a concurrent consumer
+            // can move the shared position between the rewind and its read -- but
+            // still better than refusing to serve the file, because the caller
+            // would drop to the pipe, which cannot be mmap'd, and the
+            // animated-WebP decoder needs a real mmap-able descriptor. It also
+            // matches what the platform's own static decoder does before reading.
+            log::warn!(target: "memfd", "reopen /proc/self/fd failed, using dup+rewind: {e:#}");
+            // SAFETY: memfd fds are regular file descriptors and can be dup'd.
+            let fd = unsafe { libc::dup(mem.fd.as_raw_fd()) };
+            if fd < 0 {
+                return Err(anyhow!(
+                    "dup memfd failed: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            // SAFETY: plain lseek on an fd we own.
+            unsafe { libc::lseek(fd, 0, libc::SEEK_SET) };
+            Ok(fd)
+        }
+    }
+}
+
+/// Reopen a cached region through `/proc/self/fd`, yielding a new open file
+/// description: its own file position, and read-only.
+fn reopen(mem: &Memfd) -> Result<i32> {
+    let path = CString::new(format!("/proc/self/fd/{}", mem.fd.as_raw_fd()))?;
+    // SAFETY: `path` is a valid NUL-terminated C string; `open` takes no mode
+    // argument without O_CREAT.
+    let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
     if fd < 0 {
-        return Err(anyhow!("dup memfd failed"));
+        return Err(anyhow!(
+            "open {} failed: {}",
+            path.to_string_lossy(),
+            std::io::Error::last_os_error()
+        ));
     }
     Ok(fd)
 }
@@ -205,7 +255,7 @@ pub fn open_memfd(target: &Target) -> Result<(i32, u64, u64)> {
                 .by_id
                 .get(&id)
                 .ok_or_else(|| anyhow!("lost cache entry"))?;
-            let fd = dup_fd(&entry.mem)?;
+            let fd = open_for_consumer(&entry.mem)?;
             return Ok((fd, size, id));
         }
     }
@@ -303,7 +353,7 @@ pub fn open_memfd(target: &Target) -> Result<(i32, u64, u64)> {
         .by_id
         .get(&id)
         .ok_or_else(|| anyhow!("lost cache entry"))?;
-    let fd = dup_fd(&entry.mem)?;
+    let fd = open_for_consumer(&entry.mem)?;
     Ok((fd, size, id))
 }
 
