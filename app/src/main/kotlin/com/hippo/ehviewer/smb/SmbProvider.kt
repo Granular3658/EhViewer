@@ -28,7 +28,8 @@ class SmbProvider : ContentProvider() {
 
     /**
      * `.../smb/<location>` lists the children of a directory,
-     * `.../stat/<location>` describes the location itself.
+     * `.../stat/<location>` describes the location itself,
+     * `.../pipe/<location>` forces the streaming pipe instead of the cache.
      *
      * The location is taken as the whole remainder of the path rather than as a
      * fixed number of segments: it contains slashes itself, and whether a
@@ -40,12 +41,16 @@ class SmbProvider : ContentProvider() {
         // second decode would corrupt paths that contain a literal '%'.
         val encoded = uri.encodedPath.orEmpty().trimStart('/')
         val kind = encoded.substringBefore('/')
-        require(kind == "smb" || kind == "stat") { "Invalid SMB URI: $uri" }
+        require(kind == "smb" || kind == "stat" || kind == "pipe") { "Invalid SMB URI: $uri" }
         val location = encoded.removePrefix("$kind/")
         return requireNotNull(SmbLocation.parse(Uri.decode(location))) { "Invalid SMB location: $uri" }
     }
 
-    private fun Uri.isStatRequest() = encodedPath.orEmpty().trimStart('/').substringBefore('/') == "stat"
+    private fun Uri.kind() = encodedPath.orEmpty().trimStart('/').substringBefore('/')
+
+    private fun Uri.isStatRequest() = kind() == "stat"
+
+    private fun Uri.isPipeRequest() = kind() == "pipe"
 
     override fun onCreate() = true
 
@@ -124,7 +129,7 @@ class SmbProvider : ContentProvider() {
         // in-memory cache; every other read must keep the pipe's unknown
         // length. Serving everything from the cache breaks restoring SMB
         // downloads, which reads .ehviewer / ComicInfo.xml this way.
-        val useMemfd = isSmbImagePath(location(uri).subPath)
+        val useMemfd = !uri.isPipeRequest() && isSmbImagePath(location(uri).subPath)
         val (pfd, length) = openSmb(uri, mode, useMemfd = useMemfd)
         return AssetFileDescriptor(pfd, 0, length)
     }

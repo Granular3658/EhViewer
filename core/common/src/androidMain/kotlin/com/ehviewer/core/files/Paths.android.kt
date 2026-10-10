@@ -83,6 +83,19 @@ fun Path.toUri(): Uri {
 
 fun Path.toStatUri(): Uri = smbUri("stat")
 
+/**
+ * The SMB URI that always resolves to the streaming pipe, never to the in-memory
+ * cache.
+ *
+ * A consumer that asks for the whole file as a descriptor
+ * (`ContentResolver.openFileDescriptor`) needs the descriptor's declared length
+ * to be unknown: the platform rejects one that declares a length with
+ * `FileNotFoundException("Not a whole file")`. The cached descriptor declares the
+ * real length -- which is what the mmap-ing decoders want -- so this API has to
+ * ask for the pipe explicitly instead.
+ */
+fun Path.toPipeUri(): Uri = smbUri("pipe")
+
 private const val SMB_SCHEME = "smb://"
 
 fun Uri.toOkioPath() = if (scheme == ContentResolver.SCHEME_FILE) {
