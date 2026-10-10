@@ -62,6 +62,28 @@ val Uri.displayPath: String?
  */
 fun downloadLocationLabel(uriString: String): String = SmbLocation.parse(uriString)?.share ?: Uri.parse(uriString).displayPath.orEmpty()
 
+/**
+ * The compact label shown next to a download's own labels, identifying where it
+ * was saved: `primary:EhwViewer`, `primary:Download/EhViewer`,
+ * `smb:ehviewer/comics`. The last two path segments are kept -- enough to tell
+ * two locations apart without printing a whole URL -- and the prefix says what
+ * kind of location it is. A SAF path's leaf is the percent-encoded document id,
+ * so it has to be decoded before it is shown (`primary%3AEhwViewer`).
+ */
+fun downloadSourceLabel(location: Path): String {
+    val smb = SmbLocation.parse(location.toString())
+    if (smb != null) {
+        return "smb:" + lastTwoSegments(listOf(smb.share) + smb.subPath.split('/'))
+    }
+    val documentId = Uri.decode(location.name)
+    val parts = documentId.split(":", limit = 2)
+    // A plain file path has no document id, only a volume prefix on a SAF one.
+    if (parts.size < 2) return lastTwoSegments(location.segments)
+    return parts[0] + ":" + lastTwoSegments(parts[1].split('/'))
+}
+
+private fun lastTwoSegments(segments: List<String>): String = segments.filter(String::isNotEmpty).takeLast(2).joinToString("/")
+
 val Path.displayName: String
     get() {
         val uri = toUri()
