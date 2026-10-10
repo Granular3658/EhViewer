@@ -2,12 +2,9 @@ package com.hippo.ehviewer.coil
 
 import android.graphics.Bitmap
 import android.hardware.HardwareBuffer
-import android.os.Build
-import androidx.annotation.RequiresApi
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.toIntRect
-import arrow.fx.coroutines.autoCloseable
-import arrow.fx.coroutines.resourceScope
+import arrow.autoCloseScope
 import coil3.asImage
 import coil3.intercept.Interceptor
 import coil3.request.ImageResult
@@ -17,7 +14,6 @@ import com.ehviewer.core.util.logcat
 import com.hippo.ehviewer.image.copyBitmapToAHB
 import moe.tarsin.coroutines.runSuspendCatching
 
-@RequiresApi(Build.VERSION_CODES.O)
 private const val USAGE = HardwareBuffer.USAGE_CPU_WRITE_RARELY or HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE
 
 object CropBorderInterceptor : Interceptor {
@@ -45,8 +41,8 @@ object CropBorderInterceptor : Interceptor {
                                 Bitmap.Config.RGBA_F16 -> HardwareBuffer.RGBA_FP16
                                 else -> error("Unsupported bitmap config: $config")
                             }
-                            resourceScope {
-                                val buffer = autoCloseable { HardwareBuffer.create(w, h, format, 1, USAGE) }
+                            autoCloseScope {
+                                val buffer = install(HardwareBuffer.create(w, h, format, 1, USAGE))
                                 copyBitmapToAHB(src, buffer, x, y)
                                 Bitmap.wrapHardwareBuffer(buffer, src.colorSpace)
                             }
