@@ -34,6 +34,7 @@
 #define LOG_TAG "libarchive_wrapper"
 
 #include "natsort/strnatcmp.h"
+#include "zip_central_dir.h"
 #include "ehviewer.h"
 
 typedef struct {
@@ -242,6 +243,66 @@ static bool fill_entry_zero_copy(struct archive *arc, entry *entry) {
 }
 
 /*
+ * Read raw bytes from the archive source.
+ */
+static bool archive_read_at(void *ctx, uint64_t offset, void *buf, size_t len) {
+    EH_UNUSED(ctx);
+    if (offset > archiveSize || len > archiveSize - offset)
+        return false;
+    if (archiveIsSmb)
+        return smb_archive_read(archiveSmbHandle, offset, buf, len) == (ssize_t) len;
+    memcpy(buf, (const char *) archiveAddr + offset, len);
+    return true;
+}
+
+static int by_local_offset(const void *a, const void *b) {
+    uint64_t oa = ((const zip_cd_entry *) a)->offset;
+    uint64_t ob = ((const zip_cd_entry *) b)->offset;
+    return oa < ob ? -1 : oa > ob ? 1 : 0;
+}
+
+/*
+ * Build the entry list from the zip central directory instead of walking.
+ *
+ * Only worth doing for a remote archive. libarchive's walk reads each entry's
+ * local header, which over a share costs a round trip per entry -- 1985 of them
+ * for a 1985-page archive -- while the central directory is one contiguous
+ * region read in a handful of requests. Locally the walk is free, and it is what
+ * finds the zero-copy addresses, so it stays for that case.
+ *
+ * Returns 0 if the archive is not a zip this can read, leaving the caller to
+ * fall back to the walk.
+ */
+static size_t archive_map_entries_central_dir(bool sort) {
+    zip_cd cd;
+    if (!zip_cd_read(&cd, archive_read_at, NULL, archiveSize))
+        return 0;
+    /* libarchive walks entries ordered by local header offset, and `index` is
+     * the position in that order, so the same ordering has to be used here. */
+    qsort(cd.entries, cd.count, sizeof(zip_cd_entry), by_local_offset);
+    size_t count = 0;
+    for (size_t i = 0; i < cd.count; i++) {
+        const zip_cd_entry *e = &cd.entries[i];
+        if (zip_cd_is_directory(e) || !filename_is_playable_file(e->name))
+            continue;
+        if (count == entries_capacity) {
+            entries_capacity = entries_capacity ? entries_capacity * 2 : 256;
+            entries = realloc(entries, entries_capacity * sizeof(entry));
+        }
+        entries[count].filename = strdup(e->name);
+        entries[count].index = count;
+        entries[count].size = (ssize_t) e->usize;
+        /* No mapping to point at, so no zero copy here. */
+        entries[count].addr = NULL;
+        max_file_size = max((ssize_t) e->usize, max_file_size);
+        count++;
+    }
+    zip_cd_free(&cd);
+    if (sort) qsort(entries, count, sizeof(entry), compare_entries);
+    return count;
+}
+
+/*
  * Fill `entries` with the playable entries, growing the array as it goes, and
  * return how many there are.
  *
@@ -427,9 +488,16 @@ static int archive_open_common(jboolean sort_entries) {
     ctx = archive_alloc_ctx();
     if (!ctx) return 0;
 
-    /* One walk for both the count and the map. Walking once to count and again
-     * to fill meant paying for every entry's local header twice. */
-    entryCount = archive_map_entries_index(ctx, sort_entries);
+    /* A remote archive lists from its central directory; that is one contiguous
+     * read instead of a round trip per entry. Anything the parser cannot handle
+     * falls through to libarchive's walk, as does every local archive. */
+    if (archiveIsSmb)
+        entryCount = archive_map_entries_central_dir(sort_entries);
+    if (!entryCount) {
+        /* One walk for both the count and the map. Walking once to count and
+         * again to fill meant paying for every entry's local header twice. */
+        entryCount = archive_map_entries_index(ctx, sort_entries);
+    }
     LOGI("%s%zu%s", "Found ", entryCount, " images in archive");
     if (!entryCount) {
         LOGE("%s%s", "Archive read failed: ", archive_error_string(ctx->arc));
