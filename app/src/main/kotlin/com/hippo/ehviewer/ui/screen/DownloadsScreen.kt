@@ -133,6 +133,7 @@ import com.hippo.ehviewer.ui.tools.awaitInputText
 import com.hippo.ehviewer.ui.tools.awaitSelectAction
 import com.hippo.ehviewer.ui.tools.awaitSelectItemWithCheckBox
 import com.hippo.ehviewer.ui.tools.awaitSingleChoice
+import com.hippo.ehviewer.util.downloadSourceLabel
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
@@ -611,7 +612,7 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
                 ) {
                     items(list, key = { it.gid }) { info ->
                         val checked = info.gid in checkedInfoMap
-                        val source = if (showSource) info.downloadDir?.parent?.name else null
+                        val source = if (showSource) info.downloadDir?.parent?.let(::downloadSourceLabel) else null
                         CheckableItem(
                             checked = checked,
                             modifier = Modifier.thenIf(animateItems) { animateItem() },
