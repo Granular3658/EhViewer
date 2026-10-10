@@ -64,9 +64,16 @@ import splitties.init.appCtx
 class Image private constructor(image: CoilImage, private val src: ImageSource) {
     val refcnt = AtomicInt(1)
 
+    val isAnimatedDrawable: Boolean
+        get() = (innerImage as? DrawableImage)?.drawable is AnimatedWebPDrawable
+    val isDisposed: Boolean
+        get() = ((innerImage as? DrawableImage)?.drawable as? AnimatedWebPDrawable)?.isDisposed ?: false
+
     fun pin() = refcnt.updateAndFetch { if (it != 0) it + 1 else 0 } != 0
 
-    fun unpin() = (refcnt.decrementAndFetch() == 0).also { if (it) recycle() }
+    fun unpin() = (refcnt.decrementAndFetch() == 0).also { zero ->
+        if (zero) recycle()
+    }
 
     val intrinsicSize = with(image) { IntSize(width, height) }
     val allocationSize = image.size
@@ -92,7 +99,9 @@ class Image private constructor(image: CoilImage, private val src: ImageSource) 
                 (image.drawable as? AnimatedWebPDrawable)?.dispose()
                 src.close()
             }
-            is BitmapImage -> image.bitmap.recycle()
+            is BitmapImage -> {
+                image.bitmap.recycle()
+            }
         }
         innerImage = null
     }
