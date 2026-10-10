@@ -85,9 +85,20 @@ fn sessions() -> &'static AsyncMutex<HashMap<(String, u16, String, String, Strin
 type FileHandle = Arc<AsyncMutex<Option<FileReader>>>;
 type WriteHandle = Arc<AsyncMutex<Option<FileWriter>>>;
 
-fn handles() -> &'static Mutex<HashMap<u64, FileHandle>> {
-    static HANDLES: OnceLock<Mutex<HashMap<u64, FileHandle>>> = OnceLock::new();
+/// Open file handles, each with the target it was opened from. The target is
+/// kept so a handle can be reopened after its session dies.
+fn handles() -> &'static Mutex<HashMap<u64, (Target, FileHandle)>> {
+    static HANDLES: OnceLock<Mutex<HashMap<u64, (Target, FileHandle)>>> = OnceLock::new();
     HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn handle_entry(handle: u64) -> Result<(Target, FileHandle)> {
+    handles()
+        .lock()
+        .unwrap()
+        .get(&handle)
+        .cloned()
+        .ok_or_else(|| anyhow!("Invalid SMB handle {handle}"))
 }
 
 fn writers() -> &'static Mutex<HashMap<u64, WriteHandle>> {
@@ -211,23 +222,17 @@ pub fn open(target: &Target) -> Result<(u64, u64)> {
             let size = reader.size();
             static NEXT: AtomicU64 = AtomicU64::new(1);
             let handle = NEXT.fetch_add(1, Ordering::Relaxed);
-            handles()
-                .lock()
-                .unwrap()
-                .insert(handle, Arc::new(AsyncMutex::new(Some(reader))));
+            handles().lock().unwrap().insert(
+                handle,
+                (target.clone(), Arc::new(AsyncMutex::new(Some(reader)))),
+            );
             Ok((handle, size))
         })
     })
 }
 
-/// Read a range. Short reads only happen at EOF; a read past the end is empty.
-pub fn read(handle: u64, offset: u64, len: u64) -> Result<Vec<u8>> {
-    let reader = handles()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .cloned()
-        .ok_or_else(|| anyhow!("Invalid SMB handle {handle}"))?;
+fn read_once(handle: u64, offset: u64, len: u64) -> Result<Vec<u8>> {
+    let (_, reader) = handle_entry(handle)?;
     runtime().block_on(async {
         let guard = reader.lock().await;
         let reader = guard
@@ -240,11 +245,48 @@ pub fn read(handle: u64, offset: u64, len: u64) -> Result<Vec<u8>> {
     })
 }
 
+/// Reopen the file behind a handle on a fresh session.
+fn reopen(handle: u64, target: &Target) -> Result<()> {
+    runtime().block_on(async {
+        // Drop the cached session first. The handle died with it, and the
+        // session macro would otherwise hand back the same dead connection.
+        sessions().lock().await.remove(&target.key());
+        let reader = with_session!(target, |session| {
+            let Session { client, tree, .. } = session;
+            timeout(OP_TIMEOUT, client.open_file_reader(tree, &target.sub))
+                .await
+                .map_err(|_| anyhow!("Timed out reopening {:?}", target.sub))?
+        })?;
+        let (_, file) = handle_entry(handle)?;
+        *file.lock().await = Some(reader);
+        Ok(())
+    })
+}
+
+/// Read a range. Short reads only happen at EOF; a read past the end is empty.
+///
+/// A server drops idle sessions, and a handle belongs to the session that opened
+/// it, so reconnecting is not enough by itself -- the file has to be opened
+/// again. Without this, reading after an idle gap fails and callers see a
+/// truncated file: the archive reader reports a damaged zip and, before the
+/// null-context fix, crashed.
+pub fn read(handle: u64, offset: u64, len: u64) -> Result<Vec<u8>> {
+    match read_once(handle, offset, len) {
+        Ok(data) => Ok(data),
+        Err(first) => {
+            let (target, _) = handle_entry(handle)?;
+            log::debug!(target: "smb", "read of handle {handle} failed, reopening: {first:#}");
+            reopen(handle, &target)?;
+            read_once(handle, offset, len)
+        }
+    }
+}
+
 /// Explicitly close the remote file handle. Dropping FileReader is not enough:
 /// smb2 can only send SMB CLOSE from its async close method.
 pub fn close(handle: u64) -> Result<()> {
-    let reader = handles().lock().unwrap().remove(&handle);
-    let Some(reader) = reader else {
+    let entry = handles().lock().unwrap().remove(&handle);
+    let Some((_, reader)) = entry else {
         return Ok(());
     };
 
