@@ -344,8 +344,13 @@ pub fn delete(target: &Target) -> Result<()> {
             let path = &target.sub;
             let Session { client, tree, .. } = session;
             let conn = client.connection_mut();
+            // `timeout(..).await` yields Result<Result<(), Error>, Elapsed>, so the
+            // outer level only says whether it timed out. Testing that alone meant
+            // the directory branch was never reached: delete_file fails on a
+            // directory, which read as "fine, done", and the directory stayed
+            // behind after its contents had been removed.
             let as_file = timeout(OP_TIMEOUT, tree.delete_file(conn, path)).await;
-            if as_file.is_ok() {
+            if matches!(as_file, Ok(Ok(()))) {
                 return Ok(());
             }
             timeout(OP_TIMEOUT, tree.delete_directory(conn, path))
