@@ -4,8 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde::Serialize;
 use tl::{Parser, VDom};
 
-const ERROR_NEED_HATH_CLIENT: &str =
-    "You must have a H@H client assigned to your account to use this feature.";
+const ERROR_NEED_HATH_CLIENT: &str = "You must have a H@H client assigned to your account to use this feature.";
 const ERROR_INSUFFICIENT_FUNDS: &str = "You do not have enough funds to download this archive.";
 
 #[derive(Serialize, Debug)]
@@ -73,37 +72,17 @@ pub fn parse_archives(dom: &VDom, parser: &Parser, body: &str) -> Result<Vec<Arc
         })
         .collect::<Vec<_>>();
 
-    let hath_regex = regex!(
-        r#"<p><a href="[^"]*" onclick="return do_hathdl\('([0-9]+|org)'\)">([^<]+)</a></p>\s*<p>([\w. ]+)</p>\s*<p>([\w. ]+)</p>"#
-    );
+    let hath_regex = regex!(r#"<p><a href="[^"]*" onclick="return do_hathdl\('([0-9]+|org)'\)">([^<]+)</a></p>\s*<p>([\w. ]+)</p>\s*<p>([\w. ]+)</p>"#);
     for cap in hath_regex.captures_iter(body) {
-        archive_list.push(Archive {
-            res: cap[1].to_string(),
-            name: cap[2].to_string(),
-            size: cap[3].to_string(),
-            cost: cap[4].to_string(),
-            isHath: true,
-        });
+        archive_list.push(Archive { res: cap[1].to_string(), name: cap[2].to_string(), size: cap[3].to_string(), cost: cap[4].to_string(), isHath: true });
     }
 
     Ok(archive_list)
 }
 
-pub fn parse_archives_with_funds(
-    dom: &VDom,
-    parser: &Parser,
-    body: &str,
-) -> Result<ArchiveListResult> {
+pub fn parse_archives_with_funds(dom: &VDom, parser: &Parser, body: &str) -> Result<ArchiveListResult> {
     let archive_list = parse_archives(dom, parser, body)?;
-    let cap = regex!(r#"<p>([\d,]+) GP \[[^]]*] &nbsp; ([\d,]+) Credits \[[^]]*]</p>"#)
-        .captures(body)
-        .context("Failed to parse funds")?;
-    let funds = Funds {
-        gp: parse_int_lenient(&cap[1], 0) / 1000,
-        credit: parse_int_lenient(&cap[2], 0),
-    };
-    Ok(ArchiveListResult {
-        archiveList: archive_list,
-        funds,
-    })
+    let cap = regex!(r#"<p>([\d,]+) GP \[[^]]*] &nbsp; ([\d,]+) Credits \[[^]]*]</p>"#).captures(body).context("Failed to parse funds")?;
+    let funds = Funds { gp: parse_int_lenient(&cap[1], 0) / 1000, credit: parse_int_lenient(&cap[2], 0) };
+    Ok(ArchiveListResult { archiveList: archive_list, funds })
 }

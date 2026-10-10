@@ -22,11 +22,7 @@ impl CustomPixel for Rgba8888 {
 impl CustomPixel for Rgb565 {
     fn to_luma8(&self) -> Luma<u8> {
         let packed = self.channels()[0];
-        let rgb = Rgb([
-            l5_to_l8(packed >> 11),
-            l6_to_l8(packed >> 5),
-            l5_to_l8(packed),
-        ]);
+        let rgb = Rgb([l5_to_l8(packed >> 11), l6_to_l8(packed >> 5), l5_to_l8(packed)]);
         rgb.to_luma()
     }
 }
@@ -44,12 +40,7 @@ fn l6_to_l8(v: u16) -> u8 {
 impl CustomPixel for RgbaF16 {
     fn to_luma8(&self) -> Luma<u8> {
         let packed = self.channels()[0];
-        let rgba = Rgba([
-            f16_to_f32(packed),
-            f16_to_f32(packed >> 16),
-            f16_to_f32(packed >> 32),
-            f16_to_f32(packed >> 48),
-        ]);
+        let rgba = Rgba([f16_to_f32(packed), f16_to_f32(packed >> 16), f16_to_f32(packed >> 32), f16_to_f32(packed >> 48)]);
         let l = rgba.to_luma().channels()[0];
         Luma([(l.clamp(0.0, 1.0) * u8::MAX as f32).round() as u8])
     }

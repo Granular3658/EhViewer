@@ -7,9 +7,7 @@ use rxing::qrcode::detector::FinderPatternFinder;
 use rxing::{BinaryBitmap, DecodeHints, Luma8LuminanceSource, Point};
 use std::f32::consts::FRAC_1_SQRT_2;
 
-fn image_buffer_to_luma8<P: CustomPixel>(
-    src: &ImageBuffer<P, &[P::Subpixel]>,
-) -> Result<Luma8LuminanceSource> {
+fn image_buffer_to_luma8<P: CustomPixel>(src: &ImageBuffer<P, &[P::Subpixel]>) -> Result<Luma8LuminanceSource> {
     let (w, h) = src.dimensions();
     let mut dst = GrayImage::new(w, h);
     for (to, from) in dst.pixels_mut().zip(src.pixels()) {
@@ -32,8 +30,7 @@ impl ImageConsumer<bool> for QrCode {
                 let bottom_left = Point::from(info.getBottomLeft());
                 let length = top_right.distance(top_left);
                 let epsilon = length * 0.05;
-                Ok((bottom_left.distance(top_left) - length).abs() < epsilon
-                    && (bottom_left.distance(top_right) * FRAC_1_SQRT_2 - length).abs() < epsilon)
+                Ok((bottom_left.distance(top_left) - length).abs() < epsilon && (bottom_left.distance(top_right) * FRAC_1_SQRT_2 - length).abs() < epsilon)
             }
             Err(_) => Ok(false),
         }

@@ -25,22 +25,14 @@ pub fn parse_fav(dom: &VDom, parser: &Parser) -> Result<FavResult> {
             let children = top.top();
             let cat = children[5].get(parser)?.inner_text(parser);
             let name = unescape(&cat).ok()?.trim().to_string();
-            let count = children[1]
-                .get(parser)?
-                .inner_text(parser)
-                .parse::<i32>()
-                .ok()?;
+            let count = children[1].get(parser)?.inner_text(parser).parse::<i32>().ok()?;
             Some((name, count))
         })
         .collect();
     if vec.len() == 10 {
         let list = parse_info_list(dom, parser)?;
         let cat = vec.iter().cloned().unzip();
-        Ok(FavResult {
-            catArray: cat.0,
-            countArray: cat.1,
-            galleryListResult: list,
-        })
+        Ok(FavResult { catArray: cat.0, countArray: cat.1, galleryListResult: list })
     } else {
         bail!("Illegal fav cat count!")
     }

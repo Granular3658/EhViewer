@@ -31,18 +31,9 @@ pub fn parse_profile(dom: &VDom, parser: &Parser) -> Result<Profile> {
             let display_name = unescape(&str).as_deref().unwrap_or(&str).to_string();
             let avatar = iter.next().and_then(|n| {
                 let img = select_first(n.get(parser)?.as_tag()?, parser, "img")?;
-                get_tag_attr(img, "src").map(|src| {
-                    if src.starts_with("http") {
-                        src.to_string()
-                    } else {
-                        format!("{HOST_FORUMS}{src}")
-                    }
-                })
+                get_tag_attr(img, "src").map(|src| if src.starts_with("http") { src.to_string() } else { format!("{HOST_FORUMS}{src}") })
             });
-            Some(Profile {
-                displayName: display_name,
-                avatar,
-            })
+            Some(Profile { displayName: display_name, avatar })
         })
         .context("Failed to parse profile")
 }

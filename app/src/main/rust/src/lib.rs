@@ -24,11 +24,7 @@ fn get_vdom_first_element_by_class_name<'a>(dom: &'a VDom, name: &str) -> Option
     handle.get(dom.parser())
 }
 
-fn get_first_element_by_class_name<'a>(
-    node: &'a Node,
-    parser: &'a Parser,
-    id: &str,
-) -> Option<&'a Node<'a>> {
+fn get_first_element_by_class_name<'a>(node: &'a Node, parser: &'a Parser, id: &str) -> Option<&'a Node<'a>> {
     let handle = node.find_node(parser, &mut |n| match n.as_tag() {
         None => false,
         Some(tag) => tag.attributes().is_class_member(id),
@@ -49,10 +45,7 @@ fn select_first<'a>(tag: &'a HTMLTag, parser: &'a Parser, id: &str) -> Option<&'
 }
 
 fn get_first_child<'a>(tag: &'a HTMLTag, parser: &'a Parser) -> Option<&'a HTMLTag<'a>> {
-    tag.children()
-        .top()
-        .iter()
-        .find_map(|n| n.get(parser)?.as_tag())
+    tag.children().top().iter().find_map(|n| n.get(parser)?.as_tag())
 }
 
 fn get_element_by_id<'b, S>(node: &'b Node, parser: &'b Parser, id: S) -> Option<&'b Node<'b>>
@@ -102,9 +95,7 @@ impl Serialize for EhError {
         let mut tup = serializer.serialize_tuple(2)?;
         tup.serialize_element(self.variant_name())?;
         let payload = match self {
-            EhError::GalleryUnavailable(s) | EhError::IpBanned(s) | EhError::Error(s) => {
-                std::slice::from_ref(s)
-            }
+            EhError::GalleryUnavailable(s) | EhError::IpBanned(s) | EhError::Error(s) => std::slice::from_ref(s),
             _ => &[],
         };
         tup.serialize_element(payload)?;
@@ -118,11 +109,7 @@ impl Display for EhError {
     }
 }
 
-fn get_node_handle_attr<'a>(
-    node: &NodeHandle,
-    parser: &'a Parser,
-    attr: &'a str,
-) -> Option<&'a str> {
+fn get_node_handle_attr<'a>(node: &NodeHandle, parser: &'a Parser, attr: &'a str) -> Option<&'a str> {
     get_node_attr(node.get(parser)?, attr)
 }
 
@@ -135,11 +122,7 @@ fn get_tag_attr<'a>(tag: &'a HTMLTag<'_>, attr: &'a str) -> Option<&'a str> {
 }
 
 // Should not use it at too upper node, since it will do DFS?
-fn query_childs_first_match_attr<'a>(
-    node: &'a Node<'_>,
-    parser: &'a Parser,
-    attr: &'a str,
-) -> Option<&'a str> {
+fn query_childs_first_match_attr<'a>(node: &'a Node<'_>, parser: &'a Parser, attr: &'a str) -> Option<&'a str> {
     let selector = format!("[{attr}]");
     let mut iter = node.as_tag()?.query_selector(parser, &selector)?;
     get_node_handle_attr(&iter.next()?, parser, attr)

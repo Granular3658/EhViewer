@@ -1,21 +1,10 @@
-use libwebp_sys::{
-    MODE_rgbA, WebPAnimDecoder, WebPAnimDecoderGetInfo, WebPAnimDecoderGetNext,
-    WebPAnimDecoderHasMoreFrames, WebPAnimDecoderNew, WebPAnimDecoderOptions, WebPAnimDecoderReset,
-    WebPAnimInfo, WebPData,
-};
+use libwebp_sys::{MODE_rgbA, WebPAnimDecoder, WebPAnimDecoderGetInfo, WebPAnimDecoderGetNext, WebPAnimDecoderHasMoreFrames, WebPAnimDecoderNew, WebPAnimDecoderOptions, WebPAnimDecoderReset, WebPAnimInfo, WebPData};
 use std::mem::zeroed;
 use std::ptr::null_mut;
 
 pub fn create_decoder(data: &[u8]) -> *mut WebPAnimDecoder {
-    let webp_data = WebPData {
-        bytes: data.as_ptr(),
-        size: data.len(),
-    };
-    let dec_options = WebPAnimDecoderOptions {
-        color_mode: MODE_rgbA,
-        use_threads: 1,
-        padding: [0; 7],
-    };
+    let webp_data = WebPData { bytes: data.as_ptr(), size: data.len() };
+    let dec_options = WebPAnimDecoderOptions { color_mode: MODE_rgbA, use_threads: 1, padding: [0; 7] };
     unsafe { WebPAnimDecoderNew(&webp_data, &dec_options) }
 }
 

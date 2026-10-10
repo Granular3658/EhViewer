@@ -20,20 +20,12 @@ fn is_black(pixel: Luma<u8>) -> bool {
     pixel.0[0] < THRESHOLD_FOR_BLACK
 }
 
-fn line_not_filled_by<'pixel, P: CustomPixel + 'pixel>(
-    line: impl Iterator<Item = &'pixel P>,
-    white: bool,
-    limit: i32,
-) -> bool {
+fn line_not_filled_by<'pixel, P: CustomPixel + 'pixel>(line: impl Iterator<Item = &'pixel P>, white: bool, limit: i32) -> bool {
     let f = if white { is_black } else { is_white };
     line.step_by(2).filter(|p| f(p.to_luma8())).count() as i32 > limit
 }
 
-fn try_count_lines<'pixel, P: CustomPixel + 'pixel>(
-    iter: impl Iterator<Item = impl Iterator<Item = &'pixel P>>,
-    white: bool,
-    limit: i32,
-) -> i32 {
+fn try_count_lines<'pixel, P: CustomPixel + 'pixel>(iter: impl Iterator<Item = impl Iterator<Item = &'pixel P>>, white: bool, limit: i32) -> i32 {
     let mut count = 1;
     for line in iter {
         if line_not_filled_by(line, white, limit) {
@@ -45,10 +37,7 @@ fn try_count_lines<'pixel, P: CustomPixel + 'pixel>(
     count
 }
 
-fn detect_border_lines<'pixel, P: CustomPixel + 'pixel>(
-    mut iter: impl Iterator<Item = impl Iterator<Item = &'pixel P>>,
-    line_len: u32,
-) -> i32 {
+fn detect_border_lines<'pixel, P: CustomPixel + 'pixel>(mut iter: impl Iterator<Item = impl Iterator<Item = &'pixel P>>, line_len: u32) -> i32 {
     let first_row = iter.next().expect("Image is empty!");
     let filled_limit = (line_len as f32 * FILLED_RATIO_LIMIT / 2.0).round() as i32;
     let (mut black, mut white) = (0, 0);

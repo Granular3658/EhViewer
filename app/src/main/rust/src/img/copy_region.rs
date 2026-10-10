@@ -3,11 +3,7 @@ use anyhow::Result;
 use image::{GenericImage, GenericImageView, ImageBuffer};
 use std::ptr::slice_from_raw_parts_mut;
 
-pub fn cast_image_ptr<'a, P: CustomPixel>(
-    ptr: *mut !,
-    w: u32,
-    h: u32,
-) -> ImageBuffer<P, &'a mut [P::Subpixel]> {
+pub fn cast_image_ptr<'a, P: CustomPixel>(ptr: *mut !, w: u32, h: u32) -> ImageBuffer<P, &'a mut [P::Subpixel]> {
     let size = (w * h * P::CHANNEL_COUNT as u32) as usize;
     let buffer = unsafe { &mut *slice_from_raw_parts_mut(ptr as *mut P::Subpixel, size) };
     ImageBuffer::from_raw(w, h, buffer).unwrap()

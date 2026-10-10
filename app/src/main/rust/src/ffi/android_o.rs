@@ -19,11 +19,7 @@ pub fn copyBitmapToAHB(mut env: JNIEnv, _: JClass, bm: jobject, ahb: jobject, x:
         let desc = ahb.describe();
         let (w, h, stride) = (desc.width, desc.height, desc.stride);
         let ptr = ahb.lock(HardwareBufferUsage::CPU_WRITE_RARELY, None, None)?;
-        let s = CopyRegion {
-            ptr: ptr as *mut !,
-            target_dim: (stride, h),
-            src_rect: (x as u32, y as u32, w, h),
-        };
+        let s = CopyRegion { ptr: ptr as *mut !, target_dim: (stride, h), src_rect: (x as u32, y as u32, w, h) };
         let result = use_bitmap_content(env, bm, s);
         ahb.unlock()?;
         result
@@ -31,13 +27,7 @@ pub fn copyBitmapToAHB(mut env: JNIEnv, _: JClass, bm: jobject, ahb: jobject, x:
 }
 
 #[jni_fn("com.hippo.ehviewer.coil.AnimatedWebPDrawableKt")]
-pub fn nativeDecodeNextFrameZeroCopy(
-    mut env: JNIEnv,
-    _: JClass,
-    decoder: jlong,
-    reset: jboolean,
-    ahb: jobject,
-) -> jint {
+pub fn nativeDecodeNextFrameZeroCopy(mut env: JNIEnv, _: JClass, decoder: jlong, reset: jboolean, ahb: jobject) -> jint {
     let ahb = unsafe { HardwareBuffer::from_jni(env.get_raw(), ahb) };
     jni_throwing(&mut env, |_env| {
         let dec = decoder as *mut WebPAnimDecoder;

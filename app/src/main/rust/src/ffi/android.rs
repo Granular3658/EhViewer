@@ -27,19 +27,11 @@ pub fn detectBorder(mut env: JNIEnv, _class: JClass, object: jobject) -> jintArr
 
 #[jni_fn("com.hippo.ehviewer.image.ImageKt")]
 pub fn hasQrCode(mut env: JNIEnv, _class: JClass, object: jobject) -> jboolean {
-    jni_throwing(&mut env, |env| {
-        Ok(use_bitmap_content(env, object, QrCode)? as jboolean)
-    })
+    jni_throwing(&mut env, |env| Ok(use_bitmap_content(env, object, QrCode)? as jboolean))
 }
 
 #[jni_fn("com.hippo.ehviewer.coil.AnimatedWebPDrawableKt")]
-pub fn nativeDecodeNextFrame(
-    mut env: JNIEnv,
-    _: JClass,
-    decoder: jlong,
-    reset: jboolean,
-    bitmap: jobject,
-) -> jint {
+pub fn nativeDecodeNextFrame(mut env: JNIEnv, _: JClass, decoder: jlong, reset: jboolean, bitmap: jobject) -> jint {
     jni_throwing(&mut env, |env| {
         let dec = decoder as *mut WebPAnimDecoder;
         let (buf, timestamp) = unsafe { decode_next_frame(dec, reset != 0) };
@@ -55,21 +47,13 @@ pub fn nativeDecodeNextFrame(
     })
 }
 
-fn ptr_as_image<'local, P: CustomPixel>(
-    ptr: *const !,
-    w: u32,
-    h: u32,
-) -> ImageBuffer<P, &'local [P::Subpixel]> {
+fn ptr_as_image<'local, P: CustomPixel>(ptr: *const !, w: u32, h: u32) -> ImageBuffer<P, &'local [P::Subpixel]> {
     let size = (w * h * P::CHANNEL_COUNT as u32) as usize;
     let buffer = unsafe { &*slice_from_raw_parts(ptr as *const P::Subpixel, size) };
     ImageBuffer::from_raw(w, h, buffer).unwrap()
 }
 
-pub fn use_bitmap_content<R, F: ImageConsumer<R>>(
-    env: &mut JNIEnv,
-    bitmap: jobject,
-    f: F,
-) -> Result<R> {
+pub fn use_bitmap_content<R, F: ImageConsumer<R>>(env: &mut JNIEnv, bitmap: jobject, f: F) -> Result<R> {
     // SAFETY: kotlin caller must ensure bitmap is valid.
     let handle = unsafe { Bitmap::from_jni(env.get_raw(), bitmap) };
 

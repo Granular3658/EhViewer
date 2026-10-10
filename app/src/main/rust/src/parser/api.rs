@@ -9,10 +9,7 @@ pub fn parse_vote_tag(str: &str) -> Result<Vec<GalleryTagGroup>> {
     if let Some(error) = result.get("error").and_then(Value::as_str) {
         bail!(EhError::Error(error.to_string()))
     };
-    let tagpane = result
-        .get("tagpane")
-        .and_then(Value::as_str)
-        .context("Failed to get tagpane")?;
+    let tagpane = result.get("tagpane").and_then(Value::as_str).context("Failed to get tagpane")?;
     let dom = tl::parse(tagpane, ParserOptions::default())?;
     parse_tag_groups(&dom, dom.parser(), true)
 }

@@ -29,50 +29,35 @@ use tl::{ParserOptions, VDom};
 
 #[jni_fn("com.hippo.ehviewer.client.parser.FavoritesParserKt")]
 pub fn parseFav(mut env: JNIEnv, _class: JClass, input: JByteBuffer, limit: jint) -> jint {
-    parse_marshal_inplace(&mut env, input, limit, |dom, _| {
-        parse_fav(dom, dom.parser())
-    })
+    parse_marshal_inplace(&mut env, input, limit, |dom, _| parse_fav(dom, dom.parser()))
 }
 
 #[jni_fn("com.hippo.ehviewer.client.parser.HomeParserKt")]
 pub fn parseLimit(mut env: JNIEnv, _class: JClass, input: JByteBuffer, limit: jint) -> jint {
-    parse_marshal_inplace(&mut env, input, limit, |dom, _| {
-        parse_limit(dom, dom.parser()).context("Can't parse Limit")
-    })
+    parse_marshal_inplace(&mut env, input, limit, |dom, _| parse_limit(dom, dom.parser()).context("Can't parse Limit"))
 }
 
 #[jni_fn("com.hippo.ehviewer.client.parser.GalleryListParserKt")]
 pub fn parseGalleryInfoList(mut env: JNIEnv, _: JClass, buffer: JByteBuffer, limit: jint) -> jint {
-    parse_marshal_inplace(&mut env, buffer, limit, |dom, _| {
-        parse_info_list(dom, dom.parser())
-    })
+    parse_marshal_inplace(&mut env, buffer, limit, |dom, _| parse_info_list(dom, dom.parser()))
 }
 
 #[jni_fn("com.hippo.ehviewer.client.parser.GalleryDetailParser")]
 pub fn nativeParse(mut env: JNIEnv, _: JClass, buffer: JByteBuffer, limit: jint) -> jint {
     let options = ParserOptions::default().track_ids();
-    parse_marshal_inplace_with_options(&mut env, buffer, limit, options, |dom, html| {
-        parse_gallery_detail(dom, html).map(|detail| (detail, parse_event_pane(dom, dom.parser())))
-    })
+    parse_marshal_inplace_with_options(&mut env, buffer, limit, options, |dom, html| parse_gallery_detail(dom, html).map(|detail| (detail, parse_event_pane(dom, dom.parser()))))
 }
 
 #[jni_fn("com.hippo.ehviewer.client.parser.GalleryDetailParser")]
 pub fn nativeParseComments(mut env: JNIEnv, _: JClass, buffer: JByteBuffer, limit: jint) -> jint {
     let options = ParserOptions::default().track_ids();
-    parse_marshal_inplace_with_options(&mut env, buffer, limit, options, |dom, _| {
-        parse_comments(dom)
-    })
+    parse_marshal_inplace_with_options(&mut env, buffer, limit, options, |dom, _| parse_comments(dom))
 }
 
 #[jni_fn("com.hippo.ehviewer.client.parser.GalleryDetailParser")]
 pub fn nativeParsePreviews(mut env: JNIEnv, _: JClass, buffer: JByteBuffer, limit: jint) -> jint {
     let options = ParserOptions::default().track_ids();
-    parse_marshal_inplace_with_options(&mut env, buffer, limit, options, |dom, _| {
-        Ok((
-            parse_preview_list(dom, dom.parser())?,
-            parse_pages(dom, dom.parser())?,
-        ))
-    })
+    parse_marshal_inplace_with_options(&mut env, buffer, limit, options, |dom, _| Ok((parse_preview_list(dom, dom.parser())?, parse_pages(dom, dom.parser())?)))
 }
 
 #[jni_fn("com.hippo.ehviewer.client.parser.VoteTagParser")]
@@ -82,16 +67,12 @@ pub fn nativeParse(mut env: JNIEnv, _: JClass, buffer: JByteBuffer, limit: jint)
 
 #[jni_fn("com.hippo.ehviewer.client.parser.EventPaneParser")]
 pub fn parseEventPane(mut env: JNIEnv, _class: JClass, input: JByteBuffer, limit: jint) -> jint {
-    parse_marshal_inplace(&mut env, input, limit, |dom, _| {
-        Ok(parse_event_pane(dom, dom.parser()))
-    })
+    parse_marshal_inplace(&mut env, input, limit, |dom, _| Ok(parse_event_pane(dom, dom.parser())))
 }
 
 #[jni_fn("com.hippo.ehviewer.client.parser.TorrentParserKt")]
 pub fn parseTorrent(mut env: JNIEnv, _class: JClass, buffer: JByteBuffer, limit: jint) -> jint {
-    parse_marshal_inplace(&mut env, buffer, limit, |dom, _| {
-        parse_torrent_list(dom, dom.parser())
-    })
+    parse_marshal_inplace(&mut env, buffer, limit, |dom, _| parse_torrent_list(dom, dom.parser()))
 }
 
 #[jni_fn("com.hippo.ehviewer.client.parser.UserConfigParser")]
@@ -100,43 +81,27 @@ pub fn parseFavCat(mut env: JNIEnv, _class: JClass, buffer: JByteBuffer, limit: 
 }
 
 #[jni_fn("com.hippo.ehviewer.client.parser.ArchiveParserKt")]
-pub fn parseArchives(
-    mut env: JNIEnv,
-    _class: JClass,
-    buffer: JByteBuffer,
-    limit: jint,
-    parse_funds: jboolean,
-) -> jint {
+pub fn parseArchives(mut env: JNIEnv, _class: JClass, buffer: JByteBuffer, limit: jint, parse_funds: jboolean) -> jint {
     if parse_funds == JNI_TRUE {
-        parse_marshal_inplace(&mut env, buffer, limit, |dom, html| {
-            parse_archives_with_funds(dom, dom.parser(), html)
-        })
+        parse_marshal_inplace(&mut env, buffer, limit, |dom, html| parse_archives_with_funds(dom, dom.parser(), html))
     } else {
-        parse_marshal_inplace(&mut env, buffer, limit, |dom, html| {
-            parse_archives(dom, dom.parser(), html)
-        })
+        parse_marshal_inplace(&mut env, buffer, limit, |dom, html| parse_archives(dom, dom.parser(), html))
     }
 }
 
 #[jni_fn("com.hippo.ehviewer.client.parser.ArchiveParserKt")]
 pub fn parseArchiveUrl(mut env: JNIEnv, _class: JClass, buffer: JByteBuffer, limit: jint) -> jint {
-    parse_marshal_inplace(&mut env, buffer, limit, |dom, html| {
-        parse_archive_url(dom, dom.parser(), html)
-    })
+    parse_marshal_inplace(&mut env, buffer, limit, |dom, html| parse_archive_url(dom, dom.parser(), html))
 }
 
 #[jni_fn("com.hippo.ehviewer.client.parser.ProfileParser")]
 pub fn parseProfileUrl(mut env: JNIEnv, _class: JClass, buffer: JByteBuffer, limit: jint) -> jint {
-    parse_marshal_inplace(&mut env, buffer, limit, |dom, _| {
-        parse_profile_url(dom, dom.parser())
-    })
+    parse_marshal_inplace(&mut env, buffer, limit, |dom, _| parse_profile_url(dom, dom.parser()))
 }
 
 #[jni_fn("com.hippo.ehviewer.client.parser.ProfileParser")]
 pub fn parseProfile(mut env: JNIEnv, _class: JClass, buffer: JByteBuffer, limit: jint) -> jint {
-    parse_marshal_inplace(&mut env, buffer, limit, |dom, _| {
-        parse_profile(dom, dom.parser())
-    })
+    parse_marshal_inplace(&mut env, buffer, limit, |dom, _| parse_profile(dom, dom.parser()))
 }
 
 #[jni_fn("com.hippo.ehviewer.coil.AnimatedWebPDrawableKt")]
@@ -165,10 +130,7 @@ pub fn nativeDestroyDecoder(mut env: JNIEnv, _: JClass, decoder: jlong) {
     })
 }
 
-fn deref_mut_direct_bytebuffer<'local>(
-    env: &JNIEnv,
-    buffer: JByteBuffer<'local>,
-) -> Result<&'local mut [u8]> {
+fn deref_mut_direct_bytebuffer<'local>(env: &JNIEnv, buffer: JByteBuffer<'local>) -> Result<&'local mut [u8]> {
     let ptr = env.get_direct_buffer_address(&buffer)?;
     let cap = env.get_direct_buffer_capacity(&buffer)?;
 
@@ -232,13 +194,7 @@ where
     parse_marshal_inplace_with_options(env, str, limit, ParserOptions::default(), f)
 }
 
-pub fn parse_marshal_inplace_with_options<F, R>(
-    env: &mut JNIEnv,
-    str: JByteBuffer,
-    limit: jint,
-    options: ParserOptions,
-    f: F,
-) -> i32
+pub fn parse_marshal_inplace_with_options<F, R>(env: &mut JNIEnv, str: JByteBuffer, limit: jint, options: ParserOptions, f: F) -> i32
 where
     F: Fn(&mut VDom, &str) -> Result<R>,
     R: Serialize,
