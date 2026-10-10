@@ -85,7 +85,6 @@ import com.hippo.ehviewer.ui.tools.observed
 import com.hippo.ehviewer.util.AppConfig
 import com.hippo.ehviewer.util.displayPath
 import com.hippo.ehviewer.util.displayString
-import com.hippo.ehviewer.util.downloadLocationLabel
 import com.hippo.ehviewer.util.requestPermission
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
@@ -167,7 +166,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                 treeUri?.let { launchIO { onLocationPicked(it, false) } }
             }
 
-            val defaultSummary = defaultLocationUri?.let(::downloadLocationLabel)
+            val defaultSummary = defaultLocationUri?.let { Uri.parse(it).displayPath }
                 ?: downloadLocation.toUri().displayPath
             Preference(
                 title = defaultDownloadDirLabel,
