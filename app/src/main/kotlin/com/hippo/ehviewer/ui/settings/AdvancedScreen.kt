@@ -46,7 +46,6 @@ import com.hippo.ehviewer.client.EhEngine
 import com.hippo.ehviewer.client.data.FavListUrlBuilder
 import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.ktor.isCronetAvailable
-import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.main.NavigationIcon
 import com.hippo.ehviewer.ui.showRestartDialog
@@ -174,11 +173,15 @@ fun AnimatedVisibilityScope.AdvancedScreen(navigator: DestinationsNavigator) = S
                 entryValueRes = com.hippo.ehviewer.R.array.read_cache_size_entry_values,
                 state = Settings.readCacheSize.asMutableState(),
             )
-            SimpleMenuPreferenceInt(
+            // A slider, not a menu: the chosen size is the point of this setting
+            // and a dropdown hides it until you open it. 64 MB to 2 GB in 64 MB
+            // steps, so every value the old menu offered is still reachable.
+            IntSliderPreference(
+                minValue = 64,
+                maxValue = 2048,
+                step = 30,
                 title = stringResource(id = R.string.settings_advanced_smb_cache_size),
                 summary = stringResource(id = R.string.settings_advanced_smb_cache_size_summary),
-                entry = com.hippo.ehviewer.R.array.smb_cache_size_entries,
-                entryValueRes = com.hippo.ehviewer.R.array.smb_cache_size_entry_values,
                 state = Settings.smbCacheSize.asMutableState(),
             )
             var currentLanguage by remember { mutableStateOf(getAppLanguage()) }
@@ -213,11 +216,6 @@ fun AnimatedVisibilityScope.AdvancedScreen(navigator: DestinationsNavigator) = S
                         Settings.enableQuic.changesFlow(),
                     ).collectLatest {
                         showRestartDialog()
-                    }
-                }
-                LaunchedEffect(Unit) {
-                    Settings.smbCacheSize.changesFlow().collect {
-                        runCatching { SmbRepository.setCacheLimitMb(Settings.smbCacheSize.value) }
                     }
                 }
             }

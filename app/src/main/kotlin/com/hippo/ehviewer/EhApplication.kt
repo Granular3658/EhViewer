@@ -118,6 +118,15 @@ class EhApplication : Application(), SingletonImageLoader.Factory {
         // only exists in builds with the android-26 feature, so swallow a missing-link
         // error the same way the provider's fallback path does.
         runCatching { SmbRepository.setCacheLimitMb(Settings.smbCacheSize.value) }
+        // Keep the cap in sync while the app runs. This belongs here rather than
+        // in the settings screen: a LaunchedEffect there only lives while that
+        // screen is composed, and it used to sit inside the Cronet branch, so on
+        // builds without Cronet the setting never reached Rust at all.
+        launch {
+            Settings.smbCacheSize.changesFlow().collect {
+                runCatching { SmbRepository.setCacheLimitMb(Settings.smbCacheSize.value) }
+            }
+        }
         launch {
             FavouriteStatusRouter.collect { info ->
                 detailCache[info.gid]?.apply {
