@@ -305,13 +305,6 @@ class SpiderDen(val info: GalleryInfo) {
         resolve(archiveName).let { file ->
             runCatching {
                 archiveTo(file)
-                // The native writer reports failures only through logcat, so the
-                // written file is the one signal available here. An empty archive
-                // must not count as success: postArchive() deletes the loose images
-                // once this returns true.
-                check(file.exists() && (file.metadataOrNull()?.size ?: 0) > 0) {
-                    "Archive was not written: $file"
-                }
             }.onFailure {
                 file.delete()
                 logcat(it)
@@ -343,23 +336,45 @@ class SpiderDen(val info: GalleryInfo) {
         downloadDir!!.find(archiveName)?.sendTo(file) ?: archiveTo(file)
     }
 
+    /**
+     * One source for the archive: a descriptor, the length to declare for it, and
+     * the entry name. The length has to be passed in rather than left to the native
+     * writer's `fstat`: a descriptor for a remote file is a pipe, and a pipe's stat
+     * reports a FIFO of size 0, which libarchive refuses to archive at all.
+     */
+    private class ArchiveSource(val fd: Int, val size: Long, val name: String)
+
     private suspend fun archiveTo(file: Path) = resourceScope {
+        val comicInfoFile = downloadDir!! / COMIC_INFO_FILE
         val comicInfo = closeable {
-            val f = downloadDir!! / COMIC_INFO_FILE
-            if (!f.exists()) {
+            if (!comicInfoFile.exists()) {
                 writeComicInfo()
             } else if (info.pages == 0) {
-                info.pages = readComicInfo(f)!!.pageCount
+                info.pages = readComicInfo(comicInfoFile)!!.pageCount
             }
-            f.openFileDescriptor("r")
+            comicInfoFile.openFileDescriptor("r")
         }
         val pages = info.pages
-        val (fdBatch, names) = (0 until pages).parMap { idx ->
+        val sources = (0 until pages).parMap { idx ->
             val f = autoCloseable { getImageSource(idx) }
-            closeable { f.source.openFileDescriptor("r") }.fd to perFilename(idx, f.type)
-        }.run { plus(comicInfo.fd to COMIC_INFO_FILE) }.unzip()
+            val source = f.source
+            ArchiveSource(
+                fd = closeable { source.openFileDescriptor("r") }.fd,
+                size = source.metadataOrNull()?.size ?: -1L,
+                name = perFilename(idx, f.type),
+            )
+        } + ArchiveSource(comicInfo.fd, comicInfoFile.metadataOrNull()?.size ?: -1L, COMIC_INFO_FILE)
         val arcFd = closeable { file.openFileDescriptor("rw") }
-        archiveFdBatch(fdBatch.toIntArray(), names.toTypedArray(), arcFd.fd, pages + 1)
+        val written = archiveFdBatch(
+            sources.map(ArchiveSource::fd).toIntArray(),
+            sources.map(ArchiveSource::size).toLongArray(),
+            sources.map(ArchiveSource::name).toTypedArray(),
+            arcFd.fd,
+            sources.size,
+        )
+        // The writer reports failures only through logcat, and a silently empty
+        // archive is exactly what a FIFO source used to produce.
+        check(written == sources.size) { "Archive wrote $written of ${sources.size} entries" }
     }
 
     suspend fun initDownloadDirIfExist() {
