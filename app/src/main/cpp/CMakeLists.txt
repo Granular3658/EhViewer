@@ -96,10 +96,7 @@ option(ENABLE_CAT OFF)
 option(ENABLE_UNZIP OFF)
 option(ENABLE_TEST OFF)
 
-set(LIBARCHIVE_PATCH
-        ${CMAKE_CURRENT_LIST_DIR}/0001-Fix-zip_time-performance.patch
-        ${CMAKE_CURRENT_LIST_DIR}/0002-Use-UTF-8-as-default-charset-on-bionic.patch
-)
+set(LIBARCHIVE_PATCH ${CMAKE_CURRENT_LIST_DIR}/0001-Fix-zip_time-performance.patch)
 FetchContent_Declare(
         libarchive
         GIT_REPOSITORY https://github.com/libarchive/libarchive.git
