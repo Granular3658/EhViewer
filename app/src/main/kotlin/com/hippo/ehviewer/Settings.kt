@@ -129,6 +129,10 @@ object Settings : DataStorePreferences(null) {
     // SMB in-memory (memfd) cache cap, in MiB. Bounds how much RAM the remote
     // SMB file cache may retain; too large can OOM. Wired into the Rust LRU cap.
     val smbCacheSize = intPref("smb_cache_size_mb_2", 256)
+
+    // Drop the SMB cache when the last gallery using it closes. Matches what the
+    // bitmap cache does, which is the behaviour long-time users expect.
+    val smbCacheClearOnExit = boolPref("smb_cache_clear_on_exit", true)
     val enableCronet = boolPref("enable_cronet", true)
     val enableQuic = boolPref("enable_quic", true)
     val hardwareBitmapThreshold = intPref("hardware_bitmap_threshold", 16384)

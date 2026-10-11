@@ -348,6 +348,16 @@ pub fn smbSetCacheLimitMb(mut env: JNIEnv, _: JClass, mb: jint) {
     }
 }
 
+/// Drop everything the SMB cache is holding.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbClearCache(mut env: JNIEnv, _: JClass) {
+    let _ = &mut env;
+    #[cfg(feature = "android-26")]
+    {
+        crate::smb_cache::clear();
+    }
+}
+
 /// Map a file descriptor into a direct `ByteBuffer` of exactly `size`, with no
 /// copy.
 ///

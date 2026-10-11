@@ -185,6 +185,11 @@ fun AnimatedVisibilityScope.AdvancedScreen(navigator: DestinationsNavigator) = S
                 summary = stringResource(id = R.string.settings_advanced_smb_cache_size_summary),
                 state = Settings.smbCacheSize.asMutableState(),
             )
+            SwitchPreference(
+                title = stringResource(id = R.string.settings_advanced_smb_cache_clear_on_exit),
+                summary = stringResource(id = R.string.settings_advanced_smb_cache_clear_on_exit_summary),
+                state = Settings.smbCacheClearOnExit.asMutableState(),
+            )
             var currentLanguage by remember { mutableStateOf(getAppLanguage()) }
             val languages = remember { getLanguages() }
             DropdownListPreference(

@@ -149,3 +149,4 @@ external fun smbMunmap(buffer: java.nio.ByteBuffer)
 
 /** Configure the SMB in-memory (memfd) cache cap, in MiB. */
 external fun smbSetCacheLimitMb(mb: Int)
+external fun smbClearCache()
