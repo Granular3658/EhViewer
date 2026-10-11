@@ -440,6 +440,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     // would send us back through the provider for nothing.
                     val smb = if (file.isSmb) SmbLocation.parse(file) else null
                     if (smb == null && !file.isDirectory) return null
+                    com.hippo.ehviewer.debug.RestoreTrace.event("item.begin", "dir=${file.name} smb=${smb != null}")
 
                     /**
                      * gid/token of an SMB directory, read straight from the
@@ -451,6 +452,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                      */
                     suspend fun readSmbIds(location: SmbLocation): GalleryDetailUrlParser.Result? {
                         val entries = SmbRepository.list(location)
+                        com.hippo.ehviewer.debug.RestoreTrace.event("smb.list", "sub=${location.subPath} n=${entries.size}")
                         entries.firstOrNull { it.name == SPIDER_INFO_FILENAME }?.let { marker ->
                             SmbRepository.readAll(location.child(marker.name), MAX_RESTORE_MARKER_BYTES)?.let { bytes ->
                                 readCompatFromBytes(bytes)?.run { GalleryDetailUrlParser.Result(gid, token) }
@@ -489,7 +491,9 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                         RestoreItem(dirname, gid, token)
                     }.onFailure {
                         logcat(it)
-                    }.getOrNull()
+                    }.getOrNull().also {
+                        com.hippo.ehviewer.debug.RestoreTrace.event("item.end", "dir=${file.name} item=${it != null}")
+                    }
                 }
                 runSuspendCatching {
                     // SMB locations are listed through the client directly: one
@@ -509,19 +513,31 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                                 .getOrDefault(emptyList())
                         }
                     }
-                    val result = candidates.parMapNotNull { getRestoreItem(it) }.also {
-                        fillGalleryListByApi(it, EhUrl.referer)
-                    }
+                    com.hippo.ehviewer.debug.RestoreTrace.event("candidates", "count=${candidates.size}")
+                    val result = candidates.parMapNotNull { getRestoreItem(it) }
+                    com.hippo.ehviewer.debug.RestoreTrace.event("read.done", "items=${result.size}")
+                    fillGalleryListByApi(result, EhUrl.referer)
+                    com.hippo.ehviewer.debug.RestoreTrace.event("fillApi.done", "items=${result.size}")
                     if (result.isEmpty()) {
                         launchSnackbar(RESTORE_COUNT_MSG(restoreDirCount))
                     } else {
-                        val count = result.parMap {
+                        // The write-back fans out over every restored directory. Each
+                        // one writes its ComicInfo.xml through the content provider,
+                        // whose synchronous bridge blocks the calling thread while the
+                        // work it waits for needs a second thread of the same pool --
+                        // unbounded, that empties the pool and the coroutine never
+                        // returns. Keep it small: this is a metadata write, not a
+                        // throughput path.
+                        val count = result.parMap(concurrency = 4) {
                             if (it.pages != 0) {
+                                com.hippo.ehviewer.debug.RestoreTrace.event("write.begin", "dir=${it.dirname} gid=${it.gid}")
                                 EhDB.putDownloadDirname(it.gid, it.dirname)
                                 DownloadManager.restoreDownload(it.galleryInfo, it.dirname)
                                 SpiderDen(it.galleryInfo, it.dirname).writeComicInfo(false)
+                                com.hippo.ehviewer.debug.RestoreTrace.event("write.end", "dir=${it.dirname}")
                             }
                         }.size
+                        com.hippo.ehviewer.debug.RestoreTrace.event("writeback.done", "count=$count")
                         launchSnackbar(RESTORE_COUNT_MSG(count + restoreDirCount))
                     }
                 }.onFailure {

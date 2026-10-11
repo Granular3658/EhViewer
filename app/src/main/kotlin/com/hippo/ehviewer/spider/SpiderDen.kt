@@ -105,8 +105,10 @@ class SpiderDen(val info: GalleryInfo) {
         }
 
     constructor(info: GalleryInfo, dirname: String) : this(info) {
+        com.hippo.ehviewer.debug.RestoreTrace.event("spiderDen.resolve.begin", "dirname=$dirname")
         downloadDir = allDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
             ?: (defaultDownloadLocation / dirname)
+        com.hippo.ehviewer.debug.RestoreTrace.event("spiderDen.resolve.end", "dirname=$dirname dir=$downloadDir")
     }
 
     @Volatile
@@ -387,13 +389,16 @@ class SpiderDen(val info: GalleryInfo) {
     }
 
     suspend fun writeComicInfo(fetchMetadata: Boolean = true) {
+        com.hippo.ehviewer.debug.RestoreTrace.event("writeComicInfo.begin", "gid=$gid dir=$downloadDir fetch=$fetchMetadata")
         downloadDir?.run {
             resolve(COMIC_INFO_FILE).also {
                 if (info !is GalleryDetail && fetchMetadata) {
                     EhEngine.fillGalleryListByApi([info])
                 }
                 info.getComicInfo().apply {
+                    com.hippo.ehviewer.debug.RestoreTrace.event("writeComicInfo.file.begin", "file=$it")
                     writeComicInfo(this, it)
+                    com.hippo.ehviewer.debug.RestoreTrace.event("writeComicInfo.file.end", "file=$it")
                     DownloadManager.getDownloadInfo(gid)?.let { downloadInfo ->
                         downloadInfo.artistInfoList = DownloadArtist.from(gid, penciller.orEmpty())
                         EhDB.putDownloadArtist(gid, downloadInfo.artistInfoList)
@@ -401,6 +406,7 @@ class SpiderDen(val info: GalleryInfo) {
                 }
             }
         }
+        com.hippo.ehviewer.debug.RestoreTrace.event("writeComicInfo.end", "gid=$gid")
     }
 }
 
