@@ -231,6 +231,16 @@ pub fn open(target: &Target) -> Result<(u64, u64)> {
     })
 }
 
+/// The target an open handle belongs to, so the window cache can key by file
+/// rather than by handle and survive a close and reopen.
+pub fn target_of(handle: u64) -> Option<Target> {
+    handles()
+        .lock()
+        .unwrap()
+        .get(&handle)
+        .map(|(target, _)| target.clone())
+}
+
 fn read_once(handle: u64, offset: u64, len: u64) -> Result<Vec<u8>> {
     let (_, reader) = handle_entry(handle)?;
     runtime().block_on(async {
