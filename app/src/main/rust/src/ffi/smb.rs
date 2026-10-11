@@ -38,7 +38,11 @@ fn marshal_entries(env: &mut JNIEnv, entries: Vec<smb::Entry>) -> Result<jobject
     let array = env.new_object_array(entries.len() as i32, "java/lang/String", JObject::null())?;
     for (i, entry) in entries.iter().enumerate() {
         let flag = if entry.is_directory { '1' } else { '0' };
-        let value = env.new_string(format!("{flag}:{}", entry.name))?;
+        // `<dir>:<size>:<name>`. The size rides along so a caller that needs it
+        // does not have to stat every child -- on a gallery of thousands of
+        // images that was one round trip each. The name stays last so it may
+        // contain anything, colons included.
+        let value = env.new_string(format!("{flag}:{}:{}", entry.size, entry.name))?;
         env.set_object_array_element(&array, i as i32, value)?;
     }
     Ok(array.into_raw())

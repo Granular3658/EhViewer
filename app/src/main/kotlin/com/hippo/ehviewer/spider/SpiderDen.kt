@@ -49,8 +49,12 @@ import com.hippo.ehviewer.download.defaultDownloadLocation
 import com.hippo.ehviewer.download.tempDownloadDir
 import com.hippo.ehviewer.download.writableDownloadLocations
 import com.hippo.ehviewer.image.PathSource
-import com.hippo.ehviewer.jni.archiveFdBatch
+import com.hippo.ehviewer.jni.archiveWriterAppend
+import com.hippo.ehviewer.jni.archiveWriterClose
+import com.hippo.ehviewer.jni.archiveWriterOpen
 import com.hippo.ehviewer.ktbuilder.diskCache
+import com.hippo.ehviewer.smb.SmbLocation
+import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.util.FileUtils
 import com.hippo.ehviewer.util.copyTo
 import com.hippo.ehviewer.util.sha1
@@ -355,26 +359,54 @@ class SpiderDen(val info: GalleryInfo) {
             comicInfoFile.openFileDescriptor("r")
         }
         val pages = info.pages
-        val sources = (0 until pages).parMap { idx ->
-            val f = autoCloseable { getImageSource(idx) }
-            val source = f.source
-            ArchiveSource(
-                fd = closeable { source.openFileDescriptor("r") }.fd,
-                size = source.metadataOrNull()?.size ?: -1L,
-                name = perFilename(idx, f.type),
-            )
-        } + ArchiveSource(comicInfo.fd, comicInfoFile.metadataOrNull()?.size ?: -1L, COMIC_INFO_FILE)
+        // A share answers one listing with every child's size, so take the sizes
+        // from it rather than stat-ing each image: on a gallery of thousands of
+        // images that was one round trip per image.
+        val smbSizes = downloadDir?.takeIf { it.isSmb }
+            ?.let(SmbLocation::parse)
+            ?.let { location -> runCatching { SmbRepository.list(location) }.getOrNull() }
+            ?.associate { it.name to it.size }
+            .orEmpty()
         val arcFd = closeable { file.openFileDescriptor("rw") }
-        val written = archiveFdBatch(
-            sources.map(ArchiveSource::fd).toIntArray(),
-            sources.map(ArchiveSource::size).toLongArray(),
-            sources.map(ArchiveSource::name).toTypedArray(),
-            arcFd.fd,
-            sources.size,
-        )
+        check(archiveWriterOpen(arcFd.fd) == 0) { "Failed to open archive for writing" }
+        var written = 0
+        try {
+            // Every source keeps an open descriptor until its entry is written,
+            // and on a share that descriptor is a pipe with a worker thread
+            // behind it. Opening a whole gallery up front is what it cannot
+            // afford, so write it in bounded chunks.
+            for (start in 0 until pages step ARCHIVE_CHUNK) {
+                val end = minOf(start + ARCHIVE_CHUNK, pages)
+                resourceScope {
+                    val sources = (start until end).parMap { idx ->
+                        val f = autoCloseable { getImageSource(idx) }
+                        val source = f.source
+                        ArchiveSource(
+                            fd = closeable { source.openFileDescriptor("r") }.fd,
+                            size = smbSizes[source.name] ?: source.metadataOrNull()?.size ?: -1L,
+                            name = perFilename(idx, f.type),
+                        )
+                    }
+                    written += archiveWriterAppend(
+                        sources.map(ArchiveSource::fd).toIntArray(),
+                        sources.map(ArchiveSource::size).toLongArray(),
+                        sources.map(ArchiveSource::name).toTypedArray(),
+                        sources.size,
+                    )
+                }
+            }
+            written += archiveWriterAppend(
+                intArrayOf(comicInfo.fd),
+                longArrayOf(smbSizes[COMIC_INFO_FILE] ?: comicInfoFile.metadataOrNull()?.size ?: -1L),
+                arrayOf(COMIC_INFO_FILE),
+                1,
+            )
+        } finally {
+            archiveWriterClose()
+        }
         // The writer reports failures only through logcat, and a silently empty
         // archive is exactly what a FIFO source used to produce.
-        check(written == sources.size) { "Archive wrote $written of ${sources.size} entries" }
+        check(written == pages + 1) { "Archive wrote $written of ${pages + 1} entries" }
     }
 
     suspend fun initDownloadDirIfExist() {
@@ -411,6 +443,14 @@ private val sCache by lazy {
     }
 }
 private const val TEMP_SUFFIX = ".tmp"
+
+/**
+ * How many images are opened at once while writing an archive. Every source
+ * holds an open descriptor until its entry is written, and on a share that
+ * descriptor is a pipe with a worker thread behind it, so this bounds threads
+ * and descriptors -- it is not a throughput knob.
+ */
+private const val ARCHIVE_CHUNK = 32
 private val FileNameRegex = Regex("^\\d{8}\\.\\w{3,4}")
 private val FileHashRegex = Regex("/h/([0-9a-f]{40})")
 

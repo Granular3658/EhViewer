@@ -207,8 +207,16 @@ object SmbRepository {
     fun invalidateSessions() = smbInvalidate()
 
     private fun parseEntries(raw: Array<String>): List<Entry> = raw.mapNotNull { encoded ->
-        if (encoded.length < 2 || encoded[1] != ':') return@mapNotNull null
-        Entry(encoded.substring(2), encoded[0] == '1', 0L)
+        // `<dir>:<size>:<name>` -- the name is everything after the second
+        // colon, so it may contain colons itself.
+        if (encoded.length < 4 || encoded[1] != ':') return@mapNotNull null
+        val separator = encoded.indexOf(':', startIndex = 2)
+        if (separator < 0) return@mapNotNull null
+        Entry(
+            name = encoded.substring(separator + 1),
+            isDirectory = encoded[0] == '1',
+            size = encoded.substring(2, separator).toLongOrNull() ?: 0L,
+        )
     }
 }
 
