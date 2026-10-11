@@ -350,6 +350,24 @@ pub fn forget_handle(handle: u64) {
     cache().lock().unwrap().sizes.remove(&handle);
 }
 
+/// Drop everything: every memfd region, every window, every remembered size.
+///
+/// The user can ask for this as a gallery closes, which is what the bitmap cache
+/// does. It is also the only way to get this memory back without spending swap:
+/// the regions are tmpfs, so the kernel can only reclaim them by writing them to
+/// swap -- and already-compressed image data does not compress again there, so
+/// that frees almost nothing while costing CPU.
+pub fn clear() {
+    let mut guard = cache().lock().unwrap();
+    guard.by_id.clear();
+    guard.by_key.clear();
+    guard.windows.clear();
+    guard.window_by_id.clear();
+    guard.sizes.clear();
+    guard.lru.clear();
+    guard.total = 0;
+}
+
 /// Whether `/proc/self/fd/N` may be reopened on this device.
 ///
 /// The `open` hook checks the memfd's label -- `appdomain_tmpfs` -- against the

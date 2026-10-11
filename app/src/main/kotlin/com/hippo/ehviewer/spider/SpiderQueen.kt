@@ -33,6 +33,7 @@ import com.hippo.ehviewer.client.EhUrl.referer
 import com.hippo.ehviewer.client.EhUtils
 import com.hippo.ehviewer.client.exception.FatalException
 import com.hippo.ehviewer.client.exception.QuotaExceededException
+import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.util.displayString
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.decrementAndFetch
@@ -453,6 +454,11 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
                 if (mReadReference == 0 && mDownloadReference == 0) {
                     stop()
                     sQueenMap.remove(galleryInfo.gid)
+                    // Nothing is using the share any more, so let go of what was
+                    // cached from it -- the same thing the bitmap cache does.
+                    if (Settings.smbCacheClearOnExit.value) {
+                        runCatching { SmbRepository.clearCache() }.onFailure { logcat(it) }
+                    }
                 } else {
                     launch { updateMode() }
                 }

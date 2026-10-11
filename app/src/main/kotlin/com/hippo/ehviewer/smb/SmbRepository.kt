@@ -1,5 +1,6 @@
 package com.hippo.ehviewer.smb
 
+import com.hippo.ehviewer.jni.smbClearCache
 import com.hippo.ehviewer.jni.smbClose
 import com.hippo.ehviewer.jni.smbCreate
 import com.hippo.ehviewer.jni.smbDelete
@@ -93,6 +94,9 @@ object SmbRepository {
 
     /** Configure the SMB in-memory (memfd) cache cap, in MiB. */
     fun setCacheLimitMb(mb: Int) = smbSetCacheLimitMb(mb)
+
+    /** Drop everything the SMB cache is holding. */
+    fun clearCache() = smbClearCache()
 
     fun read(handle: Long, buffer: ByteBuffer, fileOffset: Long, bufferOffset: Int, length: Int): Int = smbRead(handle, buffer, fileOffset, bufferOffset, length)
 
