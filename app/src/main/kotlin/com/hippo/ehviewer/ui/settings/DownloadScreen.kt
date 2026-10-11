@@ -451,15 +451,17 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                      * their own work on the IO dispatcher instead.
                      */
                     suspend fun readSmbIds(location: SmbLocation): GalleryDetailUrlParser.Result? {
-                        val entries = SmbRepository.list(location)
-                        com.hippo.ehviewer.debug.RestoreTrace.event("smb.list", "sub=${location.subPath} n=${entries.size}")
-                        entries.firstOrNull { it.name == SPIDER_INFO_FILENAME }?.let { marker ->
-                            SmbRepository.readAll(location.child(marker.name), MAX_RESTORE_MARKER_BYTES)?.let { bytes ->
+                        // Probe the two known marker names instead of listing the
+                        // directory. A gallery holds thousands of images, and
+                        // enumerating them to look for a 280-byte marker is what
+                        // turns one restore into megabytes of traffic.
+                        if (SmbRepository.statOrNull(location.child(SPIDER_INFO_FILENAME)) != null) {
+                            SmbRepository.readAll(location.child(SPIDER_INFO_FILENAME), MAX_RESTORE_MARKER_BYTES)?.let { bytes ->
                                 readCompatFromBytes(bytes)?.run { GalleryDetailUrlParser.Result(gid, token) }
                             }?.let { return it }
                         }
-                        entries.firstOrNull { it.name == COMIC_INFO_FILE }?.let { marker ->
-                            SmbRepository.readAll(location.child(marker.name), MAX_RESTORE_MARKER_BYTES)?.let { bytes ->
+                        if (SmbRepository.statOrNull(location.child(COMIC_INFO_FILE)) != null) {
+                            SmbRepository.readAll(location.child(COMIC_INFO_FILE), MAX_RESTORE_MARKER_BYTES)?.let { bytes ->
                                 readComicInfoFromBytes(bytes)?.run { GalleryDetailUrlParser.parse(web) }
                             }?.let { return it }
                         }

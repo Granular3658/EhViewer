@@ -48,6 +48,15 @@ object SmbRepository {
         }
     }
 
+    /**
+     * [stat], but `null` when the path does not exist (or cannot be read).
+     *
+     * One round trip, and it does not enumerate the children. A gallery holds
+     * thousands of images, so testing for one small marker file with a listing
+     * costs megabytes; this costs a packet.
+     */
+    suspend fun statOrNull(location: SmbLocation): Stat? = runCatching { stat(location) }.getOrNull()
+
     /** Opens a remote file for the ContentProvider and returns an opaque handle + size. */
     suspend fun open(location: SmbLocation): SmbHandle = withContext(Dispatchers.IO) {
         withTarget(location) { credentials ->
