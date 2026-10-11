@@ -788,16 +788,25 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_releaseByteBuffer(JNIEnv *env, jclass thiz
     }
 }
 
+// The archive writer is opened once and fed in chunks. A gallery can hold
+// thousands of images, and every source descriptor has to stay open until its
+// entry is written -- on a share that is a pipe with a worker thread behind it,
+// so opening them all up front exhausts threads and descriptors. The caller
+// therefore opens a bounded chunk, appends it, closes it, and repeats.
+static pthread_mutex_t archive_writer_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct archive *archive_writer = NULL;
+
 JNIEXPORT jint JNICALL
-Java_com_hippo_ehviewer_jni_ArchiveKt_archiveFdBatch(JNIEnv *env, jclass clazz, jintArray fd_batch, jlongArray sizes, jobjectArray names, jint arc_fd, jint size) {
+Java_com_hippo_ehviewer_jni_ArchiveKt_archiveWriterOpen(JNIEnv *env, jclass clazz, jint arc_fd) {
+    EH_UNUSED(env);
     EH_UNUSED(clazz);
+    pthread_mutex_lock(&archive_writer_lock);
+    if (archive_writer != NULL) {
+        pthread_mutex_unlock(&archive_writer_lock);
+        LOGE("%s", "an archive is already being written");
+        return -1;
+    }
     struct archive *arc = archive_write_new();
-    struct stat st;
-    char buff[8192];
-    jint fdBatch[size];
-    jlong sizeBatch[size];
-    (*env)->GetIntArrayRegion(env, fd_batch, 0, size, fdBatch);
-    (*env)->GetLongArrayRegion(env, sizes, 0, size, sizeBatch);
     archive_write_set_format_zip(arc);
     archive_write_zip_set_compression_store(arc);
     // libarchive pads the last block of a non-seekable output, which for a
@@ -808,8 +817,35 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_archiveFdBatch(JNIEnv *env, jclass clazz, 
     if (archive_write_open_fd(arc, arc_fd) != ARCHIVE_OK) {
         LOGE("%s%s", "archive open failed: ", archive_error_string(arc));
         archive_write_free(arc);
+        pthread_mutex_unlock(&archive_writer_lock);
         return -1;
     }
+    archive_writer = arc;
+    pthread_mutex_unlock(&archive_writer_lock);
+    return 0;
+}
+
+/// Appends one chunk of entries to the archive opened by archiveWriterOpen.
+/// Returns the number of entries written, or -1 when no archive is open.
+JNIEXPORT jint JNICALL
+Java_com_hippo_ehviewer_jni_ArchiveKt_archiveWriterAppend(JNIEnv *env, jclass clazz, jintArray fd_batch, jlongArray sizes, jobjectArray names, jint size) {
+    EH_UNUSED(clazz);
+    pthread_mutex_lock(&archive_writer_lock);
+    struct archive *arc = archive_writer;
+    if (arc == NULL) {
+        pthread_mutex_unlock(&archive_writer_lock);
+        return -1;
+    }
+    if (size <= 0) {
+        pthread_mutex_unlock(&archive_writer_lock);
+        return 0;
+    }
+    struct stat st;
+    char buff[8192];
+    jint fdBatch[size];
+    jlong sizeBatch[size];
+    (*env)->GetIntArrayRegion(env, fd_batch, 0, size, fdBatch);
+    (*env)->GetLongArrayRegion(env, sizes, 0, size, sizeBatch);
     int written = 0;
     struct archive_entry *entry = archive_entry_new();
     for (int i = 0; i < size; i++) {
@@ -818,6 +854,9 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_archiveFdBatch(JNIEnv *env, jclass clazz, 
         const char *cname = (*env)->GetStringUTFChars(env, name, false);
         archive_entry_set_pathname(entry, cname);
         (*env)->ReleaseStringUTFChars(env, name, cname);
+        // One local reference per entry would overflow the table on a large
+        // gallery; release it as soon as the name has been copied.
+        (*env)->DeleteLocalRef(env, name);
         if (sizeBatch[i] >= 0) {
             // A descriptor for a remote file is a pipe, and a pipe's stat reports
             // a FIFO of size 0. libarchive refuses to archive a FIFO at all
@@ -850,7 +889,24 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_archiveFdBatch(JNIEnv *env, jclass clazz, 
         archive_entry_clear(entry);
     }
     archive_entry_free(entry);
+    pthread_mutex_unlock(&archive_writer_lock);
+    return written;
+}
+
+/// Closes the archive opened by archiveWriterOpen, writing its central
+/// directory. Returns 0 on success, -1 when none was open.
+JNIEXPORT jint JNICALL
+Java_com_hippo_ehviewer_jni_ArchiveKt_archiveWriterClose(JNIEnv *env, jclass clazz) {
+    EH_UNUSED(env);
+    EH_UNUSED(clazz);
+    pthread_mutex_lock(&archive_writer_lock);
+    struct archive *arc = archive_writer;
+    archive_writer = NULL;
+    pthread_mutex_unlock(&archive_writer_lock);
+    if (arc == NULL) {
+        return -1;
+    }
     archive_write_close(arc);
     archive_write_free(arc);
-    return written;
+    return 0;
 }
