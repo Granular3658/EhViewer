@@ -440,6 +440,8 @@ static int archive_get_ctx(archive_ctx **ctxptr, int idx) {
         int victimIdx = 0;
         int replace = 1;
         ctx = archive_alloc_ctx();
+        if (!ctx)
+            return ARCHIVE_FATAL;
         pthread_mutex_lock(&ctx_pool_mutex);
         for (int i = 0; i < CTX_POOL_SIZE; i++) {
             if (!ctx_pool[i]) {
@@ -462,6 +464,15 @@ static int archive_get_ctx(archive_ctx **ctxptr, int idx) {
     if (ret != idx) {
         ret = archive_errno(ctx->arc);
         LOGE("Skip to index failed: %s", archive_error_string(ctx->arc));
+        /* Take it out of the pool before releasing it. The slot still pointed
+         * at this context, so the next caller could pick a freed one and read
+         * through a dangling `arc` -- which is what a SIGSEGV deep inside
+         * libarchive looks like. */
+        pthread_mutex_lock(&ctx_pool_mutex);
+        for (int i = 0; i < CTX_POOL_SIZE; i++)
+            if (ctx_pool[i] == ctx)
+                ctx_pool[i] = NULL;
+        pthread_mutex_unlock(&ctx_pool_mutex);
         archive_release_ctx(ctx);
         return ret;
     }
