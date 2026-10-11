@@ -176,7 +176,10 @@ pub fn smbClose(mut env: JNIEnv, _: JClass, handle: jlong) {
     jni_throwing(&mut env, |_| {
         smb::close(handle as u64)?;
         // The handle's cached windows can never be hit again.
-        crate::smb_cache::drop_windows(handle as u64);
+        #[cfg(feature = "android-26")]
+        {
+            crate::smb_cache::drop_windows(handle as u64);
+        }
         Ok(())
     })
 }
