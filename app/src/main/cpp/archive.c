@@ -342,10 +342,22 @@ static void *acquire_decode_buffer() {
 }
 
 static void release_decode_buffer(void *buffer) {
+    /* Two slots holding one pointer is a double free in closeArchive, so a
+     * buffer that is already in the pool must not be stored again. Java can
+     * hand the same direct buffer back more than once, and a failed
+     * GetDirectBufferAddress yields a null or sentinel value that must never
+     * reach the pool at all. */
+    if (!buffer)
+        return;
     pthread_mutex_lock(&buffer_mutex);
     for (int i = 0; i < MAX_PARALLEL_DECOMP; ++i) {
-        void *addr = decode_buffer[i];
-        if (!addr) {
+        if (decode_buffer[i] == buffer) {
+            pthread_mutex_unlock(&buffer_mutex);
+            return;
+        }
+    }
+    for (int i = 0; i < MAX_PARALLEL_DECOMP; ++i) {
+        if (!decode_buffer[i]) {
             decode_buffer[i] = buffer;
             pthread_mutex_unlock(&buffer_mutex);
             return;
@@ -682,6 +694,12 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_closeArchive(JNIEnv *env, jclass thiz) {
         archiveAddr = MAP_FAILED;
     }
     for (int i = 0; i < MAX_PARALLEL_DECOMP; ++i) {
+        /* Belt and braces: a duplicate in the pool would be freed twice here,
+         * and Scudo turns that into a process abort. */
+        for (int j = i + 1; j < MAX_PARALLEL_DECOMP; ++j) {
+            if (decode_buffer[j] && decode_buffer[j] == decode_buffer[i])
+                decode_buffer[j] = NULL;
+        }
         free(decode_buffer[i]);
         decode_buffer[i] = NULL;
     }
@@ -765,7 +783,7 @@ JNIEXPORT void JNICALL
 Java_com_hippo_ehviewer_jni_ArchiveKt_releaseByteBuffer(JNIEnv *env, jclass thiz, jobject buffer) {
     EH_UNUSED(thiz);
     void *addr = (*env)->GetDirectBufferAddress(env, buffer);
-    if (!ADDR_IN_FILE_MAPPING(addr)) {
+    if (addr && !ADDR_IN_FILE_MAPPING(addr)) {
         release_decode_buffer(addr);
     }
 }
