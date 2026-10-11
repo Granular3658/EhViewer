@@ -19,6 +19,7 @@ import com.ehviewer.core.model.TagNamespace.Mixed
 import com.ehviewer.core.model.TagNamespace.Other
 import com.ehviewer.core.model.TagNamespace.Parody
 import com.hippo.ehviewer.client.EhUrl
+import kotlinx.io.Buffer
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -112,6 +113,14 @@ fun readComicInfo(file: Path): ComicInfo? = runCatching {
     file.read {
         xml.decodeFromSource<ComicInfo>(this)
     }
+}.getOrNull()
+
+/**
+ * Same as [readComicInfo], but for bytes that were already fetched -- an SMB
+ * `ComicInfo.xml` is read straight from the share, never through a descriptor.
+ */
+fun readComicInfoFromBytes(bytes: ByteArray): ComicInfo? = runCatching {
+    xml.decodeFromSource<ComicInfo>(Buffer().apply { write(bytes) })
 }.getOrNull()
 
 @Suppress("ktlint:standard:annotation")

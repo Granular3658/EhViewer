@@ -75,6 +75,8 @@ import com.hippo.ehviewer.spider.MIN_SPEED_LEVEL
 import com.hippo.ehviewer.spider.SpiderDen
 import com.hippo.ehviewer.spider.SpiderQueen.Companion.SPIDER_INFO_FILENAME
 import com.hippo.ehviewer.spider.readComicInfo
+import com.hippo.ehviewer.spider.readComicInfoFromBytes
+import com.hippo.ehviewer.spider.readCompatFromBytes
 import com.hippo.ehviewer.spider.readCompatFromPath
 import com.hippo.ehviewer.spider.speedLevelToSpeed
 import com.hippo.ehviewer.ui.Screen
@@ -433,17 +435,47 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
             ) {
                 var restoreDirCount = 0
                 suspend fun getRestoreItem(file: Path): RestoreItem? {
-                    if (!file.isDirectory) return null
+                    // An SMB candidate was listed through the client, so it is
+                    // already known to be a directory; asking `file.isDirectory`
+                    // would send us back through the provider for nothing.
+                    val smb = if (file.isSmb) SmbLocation.parse(file) else null
+                    if (smb == null && !file.isDirectory) return null
+
+                    /**
+                     * gid/token of an SMB directory, read straight from the
+                     * repository. The provider's synchronous query/open bridge
+                     * blocks the calling thread while it waits for a *second*
+                     * thread of the same bounded pool, so scanning enough
+                     * directories at once deadlocks it; these suspend calls do
+                     * their own work on the IO dispatcher instead.
+                     */
+                    suspend fun readSmbIds(location: SmbLocation): GalleryDetailUrlParser.Result? {
+                        val entries = SmbRepository.list(location)
+                        entries.firstOrNull { it.name == SPIDER_INFO_FILENAME }?.let { marker ->
+                            SmbRepository.readAll(location.child(marker.name), MAX_RESTORE_MARKER_BYTES)?.let { bytes ->
+                                readCompatFromBytes(bytes)?.run { GalleryDetailUrlParser.Result(gid, token) }
+                            }?.let { return it }
+                        }
+                        entries.firstOrNull { it.name == COMIC_INFO_FILE }?.let { marker ->
+                            SmbRepository.readAll(location.child(marker.name), MAX_RESTORE_MARKER_BYTES)?.let { bytes ->
+                                readComicInfoFromBytes(bytes)?.run { GalleryDetailUrlParser.parse(web) }
+                            }?.let { return it }
+                        }
+                        return null
+                    }
+
+                    suspend fun readPathIds(file: Path): GalleryDetailUrlParser.Result? = file.find(SPIDER_INFO_FILENAME)?.let {
+                        readCompatFromPath(it)?.run {
+                            GalleryDetailUrlParser.Result(gid, token)
+                        }
+                    } ?: file.find(COMIC_INFO_FILE)?.let {
+                        readComicInfo(it)?.run {
+                            GalleryDetailUrlParser.parse(web)
+                        }
+                    }
+
                     return runSuspendCatching {
-                        val (gid, token) = file.find(SPIDER_INFO_FILENAME)?.let {
-                            readCompatFromPath(it)?.run {
-                                GalleryDetailUrlParser.Result(gid, token)
-                            }
-                        } ?: file.find(COMIC_INFO_FILE)?.let {
-                            readComicInfo(it)?.run {
-                                GalleryDetailUrlParser.parse(web)
-                            }
-                        } ?: return null
+                        val (gid, token) = (if (smb != null) readSmbIds(smb) else readPathIds(file)) ?: return null
                         val dirname = file.name
                         if (DownloadManager.containDownloadInfo(gid)) {
                             // Restore download dir to avoid redownload
@@ -538,3 +570,6 @@ private val RESTORE_COUNT_MSG = { cnt: Int -> if (cnt == 0) RESTORE_NOT_FOUND el
 private val NO_REDUNDANCY = appCtx.getString(R.string.settings_download_clean_redundancy_no_redundancy)
 private val CLEAR_REDUNDANCY_DONE = { cnt: Int -> appCtx.getString(R.string.settings_download_clean_redundancy_done, cnt) }
 private val FINAL_CLEAR_REDUNDANCY_MSG = { cnt: Int -> if (cnt == 0) NO_REDUNDANCY else CLEAR_REDUNDANCY_DONE(cnt) }
+
+/** Upper bound for the `.ehviewer` / `ComicInfo.xml` markers read while restoring. */
+private const val MAX_RESTORE_MARKER_BYTES = 1 shl 20
