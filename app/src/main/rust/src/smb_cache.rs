@@ -32,7 +32,7 @@ use std::ffi::CString;
 use std::io::Error;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// (host, port, share, sub, user, domain, pass, size) — `size` is part of the
 /// key so a changed file is re-fetched rather than served stale.
@@ -108,9 +108,26 @@ struct Entry {
     accessed: bool,
 }
 
+/// A window of a remote file, kept for the archive reader.
+///
+/// Keyed by the open handle rather than by the file, so a window can never be
+/// served for a file that changed underneath it; the price is that closing and
+/// reopening the same archive starts cold. Nothing holds a window across a
+/// call -- it is only ever copied out under the cache lock -- so windows carry
+/// no pin count, unlike the memfd regions, which are handed out as descriptors.
+struct Window {
+    handle: u64,
+    offset: u64,
+    bytes: Arc<[u8]>,
+    accessed: bool,
+}
+
 struct Cache {
     by_id: HashMap<u64, Entry>,
     by_key: HashMap<Key, u64>,
+    /// (handle, window index) -> id, for the archive reader's windows.
+    windows: HashMap<(u64, u64), u64>,
+    window_by_id: HashMap<u64, Window>,
     lru: Vec<u64>,
     total: u64,
 }
@@ -123,6 +140,8 @@ fn cache() -> &'static Mutex<Cache> {
         Mutex::new(Cache {
             by_id: HashMap::new(),
             by_key: HashMap::new(),
+            windows: HashMap::new(),
+            window_by_id: HashMap::new(),
             lru: Vec::new(),
             total: 0,
         })
@@ -177,15 +196,19 @@ fn evict() {
     let cap = MAX_BYTES.load(Ordering::Relaxed);
     let mut guard = cache().lock().unwrap();
     while guard.total > cap {
-        let victim = guard
-            .lru
-            .iter()
-            .copied()
-            .find(|&id| guard.by_id.get(&id).is_some_and(|e| e.pins == 0));
+        // A window is always evictable; a memfd region only once nothing maps it.
+        let victim = guard.lru.iter().copied().find(|&id| {
+            guard.by_id.get(&id).is_some_and(|e| e.pins == 0)
+                || guard.window_by_id.contains_key(&id)
+        });
         let Some(id) = victim else { break };
         let reprieved = if let Some(e) = guard.by_id.get_mut(&id) {
             let was_accessed = e.accessed;
             e.accessed = false;
+            was_accessed
+        } else if let Some(w) = guard.window_by_id.get_mut(&id) {
+            let was_accessed = w.accessed;
+            w.accessed = false;
             was_accessed
         } else {
             false
@@ -197,9 +220,116 @@ fn evict() {
         if let Some(entry) = guard.by_id.remove(&id) {
             guard.by_key.remove(&entry.key);
             guard.total = guard.total.saturating_sub(entry.size);
-            guard.lru.retain(|&x| x != id);
             drop(entry); // closes the memfd
+        } else if let Some(window) = guard.window_by_id.remove(&id) {
+            // Offsets are window-aligned, so the division recovers the index.
+            guard
+                .windows
+                .remove(&(window.handle, window.offset / WINDOW));
+            guard.total = guard.total.saturating_sub(window.bytes.len() as u64);
         }
+        guard.lru.retain(|&x| x != id);
+    }
+}
+
+/// Window size for the archive reader's read-through cache.
+///
+/// Larger than one libarchive block, so a sequential pass costs one round trip
+/// per window, and small enough that a seek-heavy pass keeps many of them.
+const WINDOW: u64 = 256 * 1024;
+
+/// Read `len` bytes at `offset` from an open handle, serving whole windows out
+/// of the cache.
+///
+/// The archive reader walks a file by seeking, and every seek used to throw away
+/// the single window the C side kept, so returning to an area cost a fresh round
+/// trip. Windows live in the same cache, under the same cap and the same
+/// eviction, as the whole-file memfd regions, so an archive pass and a gallery
+/// of images cannot each claim the whole budget.
+pub fn read_window(handle: u64, offset: u64, len: u64) -> Result<Vec<u8>> {
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    let end = offset.saturating_add(len);
+    let mut out = Vec::with_capacity(len as usize);
+    let mut pos = offset;
+    while pos < end {
+        let index = pos / WINDOW;
+        let bytes = window(handle, index)?;
+        let from = (pos - index * WINDOW) as usize;
+        if from >= bytes.len() {
+            break; // end of file
+        }
+        let take = ((bytes.len() - from) as u64).min(end - pos) as usize;
+        out.extend_from_slice(&bytes[from..from + take]);
+        pos += take as u64;
+    }
+    Ok(out)
+}
+
+/// One window, from the cache or from the share. A short result means the
+/// offset reached the end of the file, which is how the SMB layer reports EOF.
+fn window(handle: u64, index: u64) -> Result<Arc<[u8]>> {
+    let offset = index * WINDOW;
+    {
+        let mut guard = cache().lock().unwrap();
+        let hit = guard.windows.get(&(handle, index)).copied();
+        if let Some(id) = hit {
+            if let Some(entry) = guard.window_by_id.get_mut(&id) {
+                entry.accessed = true;
+            }
+            bump(&mut guard.lru, id);
+            if let Some(entry) = guard.window_by_id.get(&id) {
+                return Ok(entry.bytes.clone());
+            }
+        }
+    }
+    let fetched: Arc<[u8]> = smb::read(handle, offset, WINDOW)?.into();
+    let mut guard = cache().lock().unwrap();
+    // Another reader may have filled it while the lock was released; keep one.
+    let raced = guard.windows.get(&(handle, index)).copied();
+    if let Some(id) = raced {
+        bump(&mut guard.lru, id);
+        if let Some(entry) = guard.window_by_id.get(&id) {
+            return Ok(entry.bytes.clone());
+        }
+    }
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    guard.total = guard.total.saturating_add(fetched.len() as u64);
+    guard.windows.insert((handle, index), id);
+    guard.window_by_id.insert(
+        id,
+        Window {
+            handle,
+            offset,
+            bytes: fetched.clone(),
+            accessed: true,
+        },
+    );
+    guard.lru.push(id);
+    drop(guard);
+    evict();
+    Ok(fetched)
+}
+
+/// Drop every window of a closed handle, so the cache does not carry entries
+/// that can never be hit again.
+pub fn drop_windows(handle: u64) {
+    let mut guard = cache().lock().unwrap();
+    let ids: Vec<u64> = guard
+        .window_by_id
+        .iter()
+        .filter(|(_, window)| window.handle == handle)
+        .map(|(&id, _)| id)
+        .collect();
+    for id in ids {
+        if let Some(window) = guard.window_by_id.remove(&id) {
+            guard
+                .windows
+                .remove(&(window.handle, window.offset / WINDOW));
+            guard.total = guard.total.saturating_sub(window.bytes.len() as u64);
+        }
+        guard.lru.retain(|&x| x != id);
     }
 }
 

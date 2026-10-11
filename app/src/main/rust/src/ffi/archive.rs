@@ -11,7 +11,7 @@
 //! the opposite of the `dup` mistake documented in `smb_cache`: there is no
 //! shared file position here for a second reader to disturb.
 
-use crate::smb;
+use crate::smb_cache;
 use log::error;
 
 /// Read up to `len` bytes at `offset` into `buf`.
@@ -36,7 +36,7 @@ pub unsafe extern "C" fn smb_archive_read(
     if len == 0 {
         return 0;
     }
-    match smb::read(handle, offset, len as u64) {
+    match smb_cache::read_window(handle, offset, len as u64) {
         Ok(data) => {
             let n = data.len().min(len);
             unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), buf, n) };
