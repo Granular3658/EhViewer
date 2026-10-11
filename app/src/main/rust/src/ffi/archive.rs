@@ -11,6 +11,9 @@
 //! the opposite of the `dup` mistake documented in `smb_cache`: there is no
 //! shared file position here for a second reader to disturb.
 
+#[cfg(not(feature = "android-26"))]
+use crate::smb;
+#[cfg(feature = "android-26")]
 use crate::smb_cache;
 use log::error;
 
@@ -36,7 +39,13 @@ pub unsafe extern "C" fn smb_archive_read(
     if len == 0 {
         return 0;
     }
-    match smb_cache::read_window(handle, offset, len as u64) {
+    // The window cache only exists where the in-memory cache does; on the older
+    // build this goes straight to the share, exactly as it did before.
+    #[cfg(feature = "android-26")]
+    let read = smb_cache::read_window(handle, offset, len as u64);
+    #[cfg(not(feature = "android-26"))]
+    let read = smb::read(handle, offset, len as u64);
+    match read {
         Ok(data) => {
             let n = data.len().min(len);
             unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), buf, n) };
