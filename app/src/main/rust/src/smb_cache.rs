@@ -110,14 +110,14 @@ struct Entry {
 
 /// A window of a remote file, kept for the archive reader.
 ///
-/// Keyed by the open handle rather than by the file, so a window can never be
-/// served for a file that changed underneath it; the price is that closing and
-/// reopening the same archive starts cold. Nothing holds a window across a
-/// call -- it is only ever copied out under the cache lock -- so windows carry
-/// no pin count, unlike the memfd regions, which are handed out as descriptors.
+/// Keyed by file identity -- target plus size -- rather than by handle, so
+/// closing and reopening the same archive keeps hitting it. Nothing holds a
+/// window across a call: it is only ever copied out under the cache lock, never
+/// handed out as a descriptor, so windows carry no pin count, unlike the memfd
+/// regions.
 struct Window {
-    handle: u64,
-    offset: u64,
+    key: Key,
+    index: u64,
     bytes: Arc<[u8]>,
     accessed: bool,
 }
@@ -125,9 +125,11 @@ struct Window {
 struct Cache {
     by_id: HashMap<u64, Entry>,
     by_key: HashMap<Key, u64>,
-    /// (handle, window index) -> id, for the archive reader's windows.
-    windows: HashMap<(u64, u64), u64>,
+    /// (file identity, window index) -> id, for the archive reader's windows.
+    windows: HashMap<(Key, u64), u64>,
     window_by_id: HashMap<u64, Window>,
+    /// Size per open handle, resolved once so a window can be keyed by file.
+    sizes: HashMap<u64, u64>,
     lru: Vec<u64>,
     total: u64,
 }
@@ -142,6 +144,7 @@ fn cache() -> &'static Mutex<Cache> {
             by_key: HashMap::new(),
             windows: HashMap::new(),
             window_by_id: HashMap::new(),
+            sizes: HashMap::new(),
             lru: Vec::new(),
             total: 0,
         })
@@ -222,10 +225,7 @@ fn evict() {
             guard.total = guard.total.saturating_sub(entry.size);
             drop(entry); // closes the memfd
         } else if let Some(window) = guard.window_by_id.remove(&id) {
-            // Offsets are window-aligned, so the division recovers the index.
-            guard
-                .windows
-                .remove(&(window.handle, window.offset / WINDOW));
+            guard.windows.remove(&(window.key, window.index));
             guard.total = guard.total.saturating_sub(window.bytes.len() as u64);
         }
         guard.lru.retain(|&x| x != id);
@@ -234,9 +234,12 @@ fn evict() {
 
 /// Window size for the archive reader's read-through cache.
 ///
-/// Larger than one libarchive block, so a sequential pass costs one round trip
-/// per window, and small enough that a seek-heavy pass keeps many of them.
-const WINDOW: u64 = 256 * 1024;
+/// One window is one round trip, so this is the bandwidth-delay product of the
+/// link: 1 Gbit/s is 125 MB/s, and at 3 ms that is ~375 KiB. 512 KiB covers a
+/// gigabit LAN with headroom while keeping a seek's first byte quick -- a window
+/// is fetched synchronously, so a much larger one trades seek latency for bulk
+/// throughput.
+const WINDOW: u64 = 512 * 1024;
 
 /// Read `len` bytes at `offset` from an open handle, serving whole windows out
 /// of the cache.
@@ -250,12 +253,13 @@ pub fn read_window(handle: u64, offset: u64, len: u64) -> Result<Vec<u8>> {
     if len == 0 {
         return Ok(Vec::new());
     }
+    let key = identity(handle)?;
     let end = offset.saturating_add(len);
     let mut out = Vec::with_capacity(len as usize);
     let mut pos = offset;
     while pos < end {
         let index = pos / WINDOW;
-        let bytes = window(handle, index)?;
+        let bytes = window(&key, handle, index)?;
         let from = (pos - index * WINDOW) as usize;
         if from >= bytes.len() {
             break; // end of file
@@ -267,13 +271,41 @@ pub fn read_window(handle: u64, offset: u64, len: u64) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// One window, from the cache or from the share. A short result means the
-/// offset reached the end of the file, which is how the SMB layer reports EOF.
-fn window(handle: u64, index: u64) -> Result<Arc<[u8]>> {
+/// The identity a handle's file is cached under: its target plus its size, so a
+/// changed file is never served from an older file's windows. The size costs one
+/// `stat` per open handle, which is why it is remembered rather than re-read.
+fn identity(handle: u64) -> Result<Key> {
+    let known = cache().lock().unwrap().sizes.get(&handle).copied();
+    let target = smb::target_of(handle).ok_or_else(|| anyhow!("unknown handle {handle}"))?;
+    let size = match known {
+        Some(size) => size,
+        None => {
+            let size = smb::stat(&target)?.size;
+            cache().lock().unwrap().sizes.insert(handle, size);
+            size
+        }
+    };
+    Ok((
+        target.host,
+        target.port,
+        target.share,
+        target.sub,
+        target.user,
+        target.domain,
+        target.pass,
+        size,
+    ))
+}
+
+/// One window, from the cache or from the share. A short result means the offset
+/// reached the end of the file, which is how the SMB layer reports EOF.
+fn window(key: &Key, handle: u64, index: u64) -> Result<Arc<[u8]>> {
     let offset = index * WINDOW;
     {
         let mut guard = cache().lock().unwrap();
-        let hit = guard.windows.get(&(handle, index)).copied();
+        // Cloning the key for the lookup is a few small allocations against a
+        // network round trip, which is what a miss costs.
+        let hit = guard.windows.get(&(key.clone(), index)).copied();
         if let Some(id) = hit {
             if let Some(entry) = guard.window_by_id.get_mut(&id) {
                 entry.accessed = true;
@@ -287,7 +319,7 @@ fn window(handle: u64, index: u64) -> Result<Arc<[u8]>> {
     let fetched: Arc<[u8]> = smb::read(handle, offset, WINDOW)?.into();
     let mut guard = cache().lock().unwrap();
     // Another reader may have filled it while the lock was released; keep one.
-    let raced = guard.windows.get(&(handle, index)).copied();
+    let raced = guard.windows.get(&(key.clone(), index)).copied();
     if let Some(id) = raced {
         bump(&mut guard.lru, id);
         if let Some(entry) = guard.window_by_id.get(&id) {
@@ -296,12 +328,12 @@ fn window(handle: u64, index: u64) -> Result<Arc<[u8]>> {
     }
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     guard.total = guard.total.saturating_add(fetched.len() as u64);
-    guard.windows.insert((handle, index), id);
+    guard.windows.insert((key.clone(), index), id);
     guard.window_by_id.insert(
         id,
         Window {
-            handle,
-            offset,
+            key: key.clone(),
+            index,
             bytes: fetched.clone(),
             accessed: true,
         },
@@ -312,25 +344,10 @@ fn window(handle: u64, index: u64) -> Result<Arc<[u8]>> {
     Ok(fetched)
 }
 
-/// Drop every window of a closed handle, so the cache does not carry entries
-/// that can never be hit again.
-pub fn drop_windows(handle: u64) {
-    let mut guard = cache().lock().unwrap();
-    let ids: Vec<u64> = guard
-        .window_by_id
-        .iter()
-        .filter(|(_, window)| window.handle == handle)
-        .map(|(&id, _)| id)
-        .collect();
-    for id in ids {
-        if let Some(window) = guard.window_by_id.remove(&id) {
-            guard
-                .windows
-                .remove(&(window.handle, window.offset / WINDOW));
-            guard.total = guard.total.saturating_sub(window.bytes.len() as u64);
-        }
-        guard.lru.retain(|&x| x != id);
-    }
+/// Forget a closed handle's resolved size. Its windows stay: they are keyed by
+/// file, so reopening the same archive still hits them.
+pub fn forget_handle(handle: u64) {
+    cache().lock().unwrap().sizes.remove(&handle);
 }
 
 /// Whether `/proc/self/fd/N` may be reopened on this device.

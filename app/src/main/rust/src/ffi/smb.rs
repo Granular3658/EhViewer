@@ -175,10 +175,11 @@ pub fn smbRead(
 pub fn smbClose(mut env: JNIEnv, _: JClass, handle: jlong) {
     jni_throwing(&mut env, |_| {
         smb::close(handle as u64)?;
-        // The handle's cached windows can never be hit again.
+        // The handle is gone, so drop its remembered size. Its windows stay:
+        // they are keyed by file, so reopening the same archive still hits them.
         #[cfg(feature = "android-26")]
         {
-            crate::smb_cache::drop_windows(handle as u64);
+            crate::smb_cache::forget_handle(handle as u64);
         }
         Ok(())
     })
