@@ -7,6 +7,7 @@ import com.hippo.ehviewer.coil.edit
 import com.hippo.ehviewer.coil.read
 import com.hippo.ehviewer.ktbuilder.diskCache
 import com.hippo.ehviewer.legacy.readLegacySpiderInfo
+import kotlinx.io.Buffer
 import kotlinx.io.readByteArray
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.cbor.Cbor
@@ -65,4 +66,14 @@ fun readCompatFromPath(file: Path): SpiderInfo? = runCatching {
     file.read { cbor.decodeFromByteArray<SpiderInfo>(readByteArray()) }
 }.getOrNull() ?: runCatching {
     file.readLegacySpiderInfo()
+}.getOrNull()
+
+/**
+ * Same as [readCompatFromPath], but for bytes that were already fetched -- an
+ * SMB `.ehviewer` is read straight from the share, never through a descriptor.
+ */
+fun readCompatFromBytes(bytes: ByteArray): SpiderInfo? = runCatching {
+    cbor.decodeFromByteArray<SpiderInfo>(bytes)
+}.getOrNull() ?: runCatching {
+    Buffer().apply { write(bytes) }.readLegacySpiderInfo()
 }.getOrNull()

@@ -87,6 +87,40 @@ object SmbRepository {
 
     fun read(handle: Long, buffer: ByteBuffer, fileOffset: Long, bufferOffset: Int, length: Int): Int = smbRead(handle, buffer, fileOffset, bufferOffset, length)
 
+    /**
+     * Reads a whole remote file into memory, or `null` when it cannot be opened
+     * or is larger than [maxBytes].
+     *
+     * This is the suspend counterpart of the provider's pipe: it does its own
+     * work on the IO dispatcher instead of blocking one thread while another
+     * thread is asked to do that work. A caller may therefore fan out over many
+     * files at once without exhausting the shared pool -- the failure mode that
+     * `ContentResolver` reads suffer once enough directories are scanned
+     * concurrently.
+     */
+    suspend fun readAll(location: SmbLocation, maxBytes: Int): ByteArray? = withContext(Dispatchers.IO) {
+        val handle = runCatching { open(location) }.getOrNull() ?: return@withContext null
+        try {
+            if (handle.size < 0 || handle.size > maxBytes) return@withContext null
+            val size = handle.size.toInt()
+            // The native side copies through GetDirectBufferAddress, so the
+            // buffer must be direct; a heap buffer would be rejected.
+            val buffer = ByteBuffer.allocateDirect(size)
+            var offset = 0
+            while (offset < size) {
+                val n = read(handle.value, buffer, offset.toLong(), offset, size - offset)
+                if (n <= 0) break
+                offset += n
+            }
+            ByteArray(offset).also {
+                buffer.position(0)
+                buffer.get(it)
+            }
+        } finally {
+            close(handle.value)
+        }
+    }
+
     /** Creates (truncating) the remote file and returns an opaque write handle. */
     suspend fun create(location: SmbLocation): SmbWriteHandle = withContext(Dispatchers.IO) {
         withTarget(location) { credentials ->
