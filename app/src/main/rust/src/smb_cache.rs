@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::io::Error;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// (host, port, share, sub, user, domain, pass, size) — `size` is part of the
@@ -203,10 +203,24 @@ fn evict() {
     }
 }
 
+/// Whether `/proc/self/fd/N` may be reopened on this device.
+///
+/// The `open` hook checks the memfd's label -- `appdomain_tmpfs` -- against the
+/// app domain, and no AOSP policy grants `open` on that type to an app: the only
+/// domain that has it is `shell`, for `fexecve`. So the answer is a property of
+/// the device, not of the file, and it is probed once. Retrying per file pays a
+/// failed syscall and a kernel audit record for every image opened, which also
+/// floods the audit log.
+static REOPEN: AtomicU8 = AtomicU8::new(REOPEN_UNKNOWN);
+const REOPEN_UNKNOWN: u8 = 0;
+const REOPEN_YES: u8 = 1;
+const REOPEN_NO: u8 = 2;
+
 /// Hand a consumer its own descriptor for a cached region.
 ///
-/// Deliberately NOT `dup(2)`: `dup` shares the *file position* with the cached
-/// descriptor, and the consumers are not position-independent. Android only made
+/// Deliberately NOT `dup(2)` when it can be helped: `dup` shares the *file
+/// position* with the cached descriptor, and the consumers are not
+/// position-independent. Android only made
 /// `AssetFileDescriptor.AutoCloseInputStream` read with `pread` in 15; on
 /// Android 11-14 it reads with `read(2)`, which uses that shared position. With
 /// every consumer sharing one position, the first decode advances it past the
@@ -217,31 +231,47 @@ fn evict() {
 /// Opening `/proc/self/fd/N` creates a fresh open file description, so every
 /// consumer starts at offset 0 with a position of its own. `O_RDONLY` also makes
 /// the descriptor read-only, which the seals cannot guarantee on kernels without
-/// `F_SEAL_FUTURE_WRITE` (Linux 4.4 returns EINVAL for it).
+/// `F_SEAL_FUTURE_WRITE` (Linux 4.4 returns EINVAL for it). It is a privilege
+/// though, and most devices do not grant it -- see [REOPEN].
 fn open_for_consumer(mem: &Memfd) -> Result<i32> {
-    match reopen(mem) {
-        Ok(fd) => Ok(fd),
-        Err(e) => {
-            // Last resort: `dup` + rewind. Not race-free -- a concurrent consumer
-            // can move the shared position between the rewind and its read -- but
-            // still better than refusing to serve the file, because the caller
-            // would drop to the pipe, which cannot be mmap'd, and the
-            // animated-WebP decoder needs a real mmap-able descriptor. It also
-            // matches what the platform's own static decoder does before reading.
-            log::warn!(target: "memfd", "reopen /proc/self/fd failed, using dup+rewind: {e:#}");
-            // SAFETY: memfd fds are regular file descriptors and can be dup'd.
-            let fd = unsafe { libc::dup(mem.fd.as_raw_fd()) };
-            if fd < 0 {
-                return Err(anyhow!(
-                    "dup memfd failed: {}",
-                    std::io::Error::last_os_error()
-                ));
+    if REOPEN.load(Ordering::Relaxed) != REOPEN_NO {
+        match reopen(mem) {
+            Ok(fd) => {
+                REOPEN.store(REOPEN_YES, Ordering::Relaxed);
+                return Ok(fd);
             }
-            // SAFETY: plain lseek on an fd we own.
-            unsafe { libc::lseek(fd, 0, libc::SEEK_SET) };
-            Ok(fd)
+            Err(e) => {
+                if REOPEN.swap(REOPEN_NO, Ordering::Relaxed) != REOPEN_NO {
+                    log::warn!(
+                        target: "memfd",
+                        "cannot reopen /proc/self/fd on this device, using dup+rewind from now on: {e:#}"
+                    );
+                }
+            }
         }
     }
+    dup_rewind(mem)
+}
+
+/// `dup` + rewind, the fallback when `/proc/self/fd` may not be reopened.
+///
+/// Not race-free -- a concurrent consumer can move the shared position between
+/// the rewind and its read -- but still better than refusing to serve the file,
+/// because the caller would drop to the pipe, which cannot be mmap'd, and the
+/// animated-WebP decoder needs a real mmap-able descriptor. It also matches what
+/// the platform's own static decoder does before reading.
+fn dup_rewind(mem: &Memfd) -> Result<i32> {
+    // SAFETY: memfd fds are regular file descriptors and can be dup'd.
+    let fd = unsafe { libc::dup(mem.fd.as_raw_fd()) };
+    if fd < 0 {
+        return Err(anyhow!(
+            "dup memfd failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: plain lseek on an fd we own.
+    unsafe { libc::lseek(fd, 0, libc::SEEK_SET) };
+    Ok(fd)
 }
 
 /// Reopen a cached region through `/proc/self/fd`, yielding a new open file
