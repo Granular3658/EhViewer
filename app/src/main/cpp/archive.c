@@ -782,6 +782,11 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_archiveFdBatch(JNIEnv *env, jclass clazz, 
     (*env)->GetLongArrayRegion(env, sizes, 0, size, sizeBatch);
     archive_write_set_format_zip(arc);
     archive_write_zip_set_compression_store(arc);
+    // libarchive pads the last block of a non-seekable output, which for a
+    // share means the file ends up with zeroes after the end-of-central-
+    // directory record and is larger than the archive it holds. One byte in
+    // the last block turns that off and the result matches a plain file.
+    archive_write_set_bytes_in_last_block(arc, 1);
     if (archive_write_open_fd(arc, arc_fd) != ARCHIVE_OK) {
         LOGE("%s%s", "archive open failed: ", archive_error_string(arc));
         archive_write_free(arc);
