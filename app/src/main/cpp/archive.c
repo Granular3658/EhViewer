@@ -24,6 +24,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <sys/mman.h>
+#include <limits.h>
 #include <unistd.h>
 
 #include <jni.h>
@@ -35,6 +36,8 @@
 #define LOG_TAG "libarchive_wrapper"
 
 #include "natsort/strnatcmp.h"
+#include <zlib.h>
+
 #include "zip_central_dir.h"
 #include "ehviewer.h"
 
@@ -578,14 +581,43 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_openArchiveSmb(JNIEnv *env, jclass thiz, j
  * read fails, leaving the caller to fall back to the walk.
  */
 static bool archive_read_stored_entry(const entry *entry, void *buf, size_t size) {
-    if (entry->method != 0 || entry->offset == 0 || entry->csize != (uint64_t) entry->size)
+    /* Stored (copied straight through) and deflated (inflated here) are both
+     * reachable without walking. Anything else still needs libarchive. */
+    if (entry->offset == 0 || entry->csize == 0 || entry->csize > UINT_MAX || size > UINT_MAX)
+        return false;
+    if (entry->method != 0 && entry->method != 8)
         return false;
     uint8_t hdr[30];
     if (!archive_read_at(NULL, entry->offset, hdr, sizeof(hdr)))
         return false;
     uint16_t name_len = (uint16_t) (hdr[26] | (hdr[27] << 8));
     uint16_t extra_len = (uint16_t) (hdr[28] | (hdr[29] << 8));
-    return archive_read_at(NULL, entry->offset + 30 + name_len + extra_len, buf, size);
+    uint64_t data_offset = entry->offset + 30 + name_len + extra_len;
+
+    if (entry->method == 0)
+        return entry->csize == (uint64_t) size && archive_read_at(NULL, data_offset, buf, size);
+
+    /* Deflate is a raw stream inside a zip, so a negative window size tells zlib
+     * not to expect a zlib header. */
+    uint8_t *compressed = malloc(entry->csize);
+    if (!compressed)
+        return false;
+    bool ok = archive_read_at(NULL, data_offset, compressed, entry->csize);
+    if (ok) {
+        z_stream strm;
+        memset(&strm, 0, sizeof(strm));
+        strm.next_in = compressed;
+        strm.avail_in = (uInt) entry->csize;
+        strm.next_out = buf;
+        strm.avail_out = (uInt) size;
+        ok = inflateInit2(&strm, -15) == Z_OK;
+        if (ok) {
+            ok = inflate(&strm, Z_FINISH) == Z_STREAM_END && strm.total_out == size;
+            inflateEnd(&strm);
+        }
+    }
+    free(compressed);
+    return ok;
 }
 
 JNIEXPORT jobject JNICALL
@@ -599,7 +631,7 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_extractToByteBuffer(JNIEnv *env, jclass th
     }
     /* Stored entries are reachable directly, which is what keeps a resumed read
      * from walking the whole archive to get to a late page. */
-    if (entry->method == 0 && entry->offset != 0) {
+    if ((entry->method == 0 || entry->method == 8) && entry->offset != 0) {
         void *direct = acquire_decode_buffer();
         if (archive_read_stored_entry(entry, direct, size)) {
             return (*env)->NewDirectByteBuffer(env, direct, size);
@@ -712,7 +744,7 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_extractToFd(JNIEnv *env, jclass thiz, jint
     EH_UNUSED(env);
     EH_UNUSED(thiz);
     entry *e = &entries[index];
-    if (e->method == 0 && e->offset != 0) {
+    if ((e->method == 0 || e->method == 8) && e->offset != 0) {
         void *buf = acquire_decode_buffer();
         bool ok = archive_read_stored_entry(e, buf, e->size) && write(fd, buf, e->size) == e->size;
         release_decode_buffer(buf);
