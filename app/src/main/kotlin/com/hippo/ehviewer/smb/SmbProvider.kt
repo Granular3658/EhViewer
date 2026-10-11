@@ -73,13 +73,8 @@ class SmbProvider : ContentProvider() {
         val row = MatrixCursor(columns)
         // An unreachable share or a missing path is "no metadata", not a crash:
         // callers use this to test existence.
-        com.hippo.ehviewer.debug.RestoreTrace.event("query.begin", "sub=${location.subPath} kind=${uri.kind()}")
         val stat = runCatching { runBlocking { SmbRepository.stat(location) } }.getOrNull()
-        com.hippo.ehviewer.debug.RestoreTrace.event("query.stat.end", "sub=${location.subPath} ok=${stat != null}")
-        if (stat == null) {
-            com.hippo.ehviewer.debug.RestoreTrace.event("query.end.empty", "sub=${location.subPath}")
-            return row
-        }
+            ?: return row
         if (stat.isDirectory && !uri.isStatRequest()) {
             runCatching { runBlocking { SmbRepository.list(location) } }.getOrDefault(emptyList()).forEach { entry ->
                 row.addRow(
@@ -106,7 +101,6 @@ class SmbProvider : ContentProvider() {
                 }.map { it as Any? }.toTypedArray(),
             )
         }
-        com.hippo.ehviewer.debug.RestoreTrace.event("query.end", "sub=${location.subPath} rows=${row.count}")
         return row
     }
 
@@ -230,31 +224,20 @@ class SmbProvider : ContentProvider() {
             // with exclusive share access until it is closed.
             val finished = CountDownLatch(1)
             val failure = AtomicReference<Throwable?>(null)
-            com.hippo.ehviewer.debug.RestoreTrace.event("w.open", "uri=$uri")
             executor.execute {
                 var handle: SmbWriteHandle? = null
                 try {
-                    com.hippo.ehviewer.debug.RestoreTrace.event("w.create.begin", "uri=$uri")
                     handle = runBlocking { SmbRepository.create(location) }
-                    com.hippo.ehviewer.debug.RestoreTrace.event("w.create.end", "uri=$uri")
                     ParcelFileDescriptor.AutoCloseInputStream(readSide).use { input ->
                         val buffer = ByteArray(64 * 1024)
                         var n: Int
-                        var total = 0L
                         while (input.read(buffer).also { n = it } != -1) {
-                            if (n > 0) {
-                                SmbRepository.write(handle.value, buffer.copyOf(n))
-                                total += n
-                            }
+                            if (n > 0) SmbRepository.write(handle.value, buffer.copyOf(n))
                         }
-                        com.hippo.ehviewer.debug.RestoreTrace.event("w.drain.end", "uri=$uri bytes=$total")
                     }
-                    com.hippo.ehviewer.debug.RestoreTrace.event("w.close.begin", "uri=$uri")
                     runBlocking { SmbRepository.writeClose(handle.value) }
-                    com.hippo.ehviewer.debug.RestoreTrace.event("w.close.end", "uri=$uri")
                 } catch (t: Throwable) {
                     failure.set(t)
-                    com.hippo.ehviewer.debug.RestoreTrace.event("w.failed", "uri=$uri err=${t.message}")
                     Log.e(TAG, "SMB write failed: $uri", t)
                 } finally {
                     handle?.let { smbHandle ->
@@ -263,7 +246,6 @@ class SmbProvider : ContentProvider() {
                     runCatching { readSide.close() }
                     runCatching { writeSide.close() }
                     finished.countDown()
-                    com.hippo.ehviewer.debug.RestoreTrace.event("w.done", "uri=$uri")
                 }
             }
             val pfd = object : ParcelFileDescriptor(writeSide) {
@@ -271,9 +253,7 @@ class SmbProvider : ContentProvider() {
                     try {
                         super.close()
                     } finally {
-                        com.hippo.ehviewer.debug.RestoreTrace.event("w.await.begin", "uri=$uri")
-                        val ok = finished.await(120, TimeUnit.SECONDS)
-                        com.hippo.ehviewer.debug.RestoreTrace.event("w.await.end", "uri=$uri ok=$ok")
+                        finished.await(120, TimeUnit.SECONDS)
                         failure.get()?.let { throw IOException("SMB write failed: $uri", it) }
                     }
                 }

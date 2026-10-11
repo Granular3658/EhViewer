@@ -440,7 +440,6 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     // would send us back through the provider for nothing.
                     val smb = if (file.isSmb) SmbLocation.parse(file) else null
                     if (smb == null && !file.isDirectory) return null
-                    com.hippo.ehviewer.debug.RestoreTrace.event("item.begin", "dir=${file.name} smb=${smb != null}")
 
                     /**
                      * gid/token of an SMB directory, read straight from the
@@ -493,9 +492,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                         RestoreItem(dirname, gid, token)
                     }.onFailure {
                         logcat(it)
-                    }.getOrNull().also {
-                        com.hippo.ehviewer.debug.RestoreTrace.event("item.end", "dir=${file.name} item=${it != null}")
-                    }
+                    }.getOrNull()
                 }
                 runSuspendCatching {
                     // SMB locations are listed through the client directly: one
@@ -515,11 +512,9 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                                 .getOrDefault(emptyList())
                         }
                     }
-                    com.hippo.ehviewer.debug.RestoreTrace.event("candidates", "count=${candidates.size}")
-                    val result = candidates.parMapNotNull { getRestoreItem(it) }
-                    com.hippo.ehviewer.debug.RestoreTrace.event("read.done", "items=${result.size}")
-                    fillGalleryListByApi(result, EhUrl.referer)
-                    com.hippo.ehviewer.debug.RestoreTrace.event("fillApi.done", "items=${result.size}")
+                    val result = candidates.parMapNotNull { getRestoreItem(it) }.also {
+                        fillGalleryListByApi(it, EhUrl.referer)
+                    }
                     if (result.isEmpty()) {
                         launchSnackbar(RESTORE_COUNT_MSG(restoreDirCount))
                     } else {
@@ -532,14 +527,11 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                         // throughput path.
                         val count = result.parMap(concurrency = 4) {
                             if (it.pages != 0) {
-                                com.hippo.ehviewer.debug.RestoreTrace.event("write.begin", "dir=${it.dirname} gid=${it.gid}")
                                 EhDB.putDownloadDirname(it.gid, it.dirname)
                                 DownloadManager.restoreDownload(it.galleryInfo, it.dirname)
                                 SpiderDen(it.galleryInfo, it.dirname).writeComicInfo(false)
-                                com.hippo.ehviewer.debug.RestoreTrace.event("write.end", "dir=${it.dirname}")
                             }
                         }.size
-                        com.hippo.ehviewer.debug.RestoreTrace.event("writeback.done", "count=$count")
                         launchSnackbar(RESTORE_COUNT_MSG(count + restoreDirCount))
                     }
                 }.onFailure {
