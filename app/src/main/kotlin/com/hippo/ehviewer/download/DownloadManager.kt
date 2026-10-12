@@ -926,5 +926,15 @@ val DownloadInfo.downloadDir: Path?
             resolved
         }
     }
-val DownloadInfo.archiveFile get() = downloadDir?.run { find("$gid.cbz") ?: find("$gid.zip") }
+
+/**
+ * The gallery's single-file archive, if it has one.
+ *
+ * An image comes first: it is the one a user built themselves, and if both are
+ * somehow present the one they made deliberately is the one to read. A `.zip`
+ * is last because it is the only one this app never writes.
+ */
+val DownloadInfo.archiveFile get() = downloadDir?.run {
+    find("$gid.dwarfs") ?: find("$gid.cbz") ?: find("$gid.zip")
+}
 val GalleryInfo.tempDownloadDir get() = AppConfig.externalTempPersistDir?.let { it / "$gid" }
