@@ -17,6 +17,7 @@ package com.hippo.ehviewer.gallery
 
 import android.os.Process
 import arrow.autoCloseScope
+import com.ehviewer.core.files.isSmb
 import com.ehviewer.core.files.openFileDescriptor
 import com.ehviewer.core.model.GalleryInfo
 import com.ehviewer.core.util.logcat
@@ -26,11 +27,14 @@ import com.hippo.ehviewer.image.ImageSource
 import com.hippo.ehviewer.image.byteBufferSource
 import com.hippo.ehviewer.jni.dwarfsClose
 import com.hippo.ehviewer.jni.dwarfsOpen
+import com.hippo.ehviewer.jni.dwarfsOpenSmb
 import com.hippo.ehviewer.jni.dwarfsPageCount
 import com.hippo.ehviewer.jni.dwarfsPageName
 import com.hippo.ehviewer.jni.dwarfsReadPage
 import com.hippo.ehviewer.jni.dwarfsReadPageToFd
 import com.hippo.ehviewer.jni.dwarfsReleaseByteBuffer
+import com.hippo.ehviewer.smb.SmbLocation
+import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.util.FileUtils
 import com.hippo.ehviewer.util.displayName
 import kotlinx.coroutines.coroutineScope
@@ -62,11 +66,27 @@ suspend inline fun <T> useDwarfsPageLoader(
     crossinline block: suspend (PageLoader) -> T,
 ) = autoCloseScope {
     coroutineScope {
-        val pfd = install(file.openFileDescriptor("r"))
-        val handle = install(
-            { dwarfsOpen(pfd.fd, Settings.dwarfsCacheSize.value) },
-            { h, _ -> dwarfsClose(h) },
-        )
+        // An image on a share is read through an SMB handle, not a descriptor:
+        // the descriptor for a remote file is a pipe, and a pipe cannot serve
+        // the positional reads an image is made of. The handle reads through the
+        // same window cache an archive on a share reads through.
+        val location = if (file.isSmb) SmbLocation.parse(file) else null
+        val handle = if (location != null) {
+            val smb = SmbRepository.open(location)
+            install(
+                { dwarfsOpenSmb(smb.value, smb.size, Settings.dwarfsCacheSize.value) },
+                { h, _ ->
+                    dwarfsClose(h)
+                    SmbRepository.close(smb.value)
+                },
+            )
+        } else {
+            val pfd = install(file.openFileDescriptor("r"))
+            install(
+                { dwarfsOpen(pfd.fd, Settings.dwarfsCacheSize.value) },
+                { h, _ -> dwarfsClose(h) },
+            )
+        }
         val size = dwarfsPageCount(handle)
         check(size > 0) { "DwarFS image have no content!" }
         val loader = install(

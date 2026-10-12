@@ -4,8 +4,10 @@
 //!
 //! DwarFS is a deduplicating, compressed read-only filesystem, and its reader is
 //! an ordinary library that asks for positional reads. Nothing has to be mounted:
-//! the image is read through a descriptor the caller already holds, so this needs
-//! neither root nor `/dev/fuse`.
+//! the image is read through a descriptor the caller already holds -- or, on a
+//! share, through an SMB handle, because the descriptor for a remote file is a
+//! pipe and a pipe cannot serve positional reads. Either way this needs neither
+//! root nor `/dev/fuse`.
 //!
 //! Two numbers decide how it behaves, and both are baked in when the image is
 //! built, not here:
@@ -74,6 +76,61 @@ impl Size for FdSource {
     }
 }
 
+/// Positional reads through an SMB handle.
+///
+/// A descriptor for a remote file is a pipe, and a pipe cannot serve positional
+/// reads at all, so an image on a share is read through the SMB layer instead.
+/// Its windows live in the same cache, under the same cap and the same eviction,
+/// as the whole-file regions a gallery of images uses.
+struct SmbSource {
+    handle: u64,
+    size: u64,
+}
+
+impl ReadAt for SmbSource {
+    fn read_at(&self, pos: u64, buf: &mut [u8]) -> io::Result<usize> {
+        if buf.is_empty() || pos >= self.size {
+            return Ok(0);
+        }
+        let len = (buf.len() as u64).min(self.size - pos);
+        let data = crate::smb_cache::read_window(self.handle, pos, len)
+            .map_err(|err| io::Error::other(format!("{err:#}")))?;
+        let n = data.len().min(buf.len());
+        buf[..n].copy_from_slice(&data[..n]);
+        Ok(n)
+    }
+}
+
+impl Size for SmbSource {
+    fn size(&self) -> io::Result<Option<u64>> {
+        Ok(Some(self.size))
+    }
+}
+
+/// Where an image's bytes come from: a descriptor, or a share.
+enum Source {
+    Fd(FdSource),
+    Smb(SmbSource),
+}
+
+impl ReadAt for Source {
+    fn read_at(&self, pos: u64, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Source::Fd(source) => source.read_at(pos, buf),
+            Source::Smb(source) => source.read_at(pos, buf),
+        }
+    }
+}
+
+impl Size for Source {
+    fn size(&self) -> io::Result<Option<u64>> {
+        match self {
+            Source::Fd(source) => source.size(),
+            Source::Smb(source) => source.size(),
+        }
+    }
+}
+
 struct Entry {
     path: String,
     size: u64,
@@ -81,7 +138,7 @@ struct Entry {
 
 struct Image {
     index: ArchiveIndex,
-    archive: Archive<FdSource>,
+    archive: Archive<Source>,
     entries: Vec<Entry>,
 }
 
@@ -170,32 +227,60 @@ pub fn dwarfsOpen(mut env: JNIEnv, _: JClass, fd: jint, cache_mb: jint) -> jlong
         ensure!(unsafe { libc::fstat(fd, &mut st) } == 0, "fstat failed");
         let size = st.st_size as u64;
         ensure!(size > 0, "the image is empty");
-
-        let mut config = Config::default();
-        // The default is 512 MiB, a desktop number, so the caller decides. It has
-        // to stay at or above one block or the library refuses the image outright,
-        // which is why a failure here is reported rather than swallowed.
-        let cache_mb = cache_mb.clamp(16, 4096) as usize;
-        config.block_cache_size_limit(cache_mb << 20);
-
-        let (index, archive) = Archive::new_with_config(FdSource { fd, size }, &config)?;
-        let mut entries = Vec::new();
-        collect(index.root(), "", &mut entries);
-        ensure!(!entries.is_empty(), "the image holds no regular files");
-        entries.sort_by(|a, b| a.path.cmp(&b.path));
-
-        let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
-        let image = Arc::new(Mutex::new(Image {
-            index,
-            archive,
-            entries,
-        }));
-        images()
-            .lock()
-            .map_err(|_| anyhow!("the image table is poisoned"))?
-            .insert(handle, image);
-        Ok(handle as jlong)
+        open(Source::Fd(FdSource { fd, size }), cache_mb)
     })
+}
+
+/// Opens an image kept on a share, through a handle rather than a descriptor.
+///
+/// The size comes from the caller because the handle cannot be stat'ed cheaply
+/// and it already had to be read to open the file.
+#[jni_fn("com.hippo.ehviewer.jni.DwarfsKt")]
+pub fn dwarfsOpenSmb(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    size: jlong,
+    cache_mb: jint,
+) -> jlong {
+    jni_throwing(&mut env, |_| {
+        let size = size as u64;
+        ensure!(size > 0, "the image is empty");
+        open(
+            Source::Smb(SmbSource {
+                handle: handle as u64,
+                size,
+            }),
+            cache_mb,
+        )
+    })
+}
+
+fn open(source: Source, cache_mb: jint) -> Result<jlong> {
+    let mut config = Config::default();
+    // The default is 512 MiB, a desktop number, so the caller decides. It has
+    // to stay at or above one block or the library refuses the image outright,
+    // which is why a failure here is reported rather than swallowed.
+    let cache_mb = cache_mb.clamp(16, 4096) as usize;
+    config.block_cache_size_limit(cache_mb << 20);
+
+    let (index, archive) = Archive::new_with_config(source, &config)?;
+    let mut entries = Vec::new();
+    collect(index.root(), "", &mut entries);
+    ensure!(!entries.is_empty(), "the image holds no regular files");
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+
+    let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
+    let image = Arc::new(Mutex::new(Image {
+        index,
+        archive,
+        entries,
+    }));
+    images()
+        .lock()
+        .map_err(|_| anyhow!("the image table is poisoned"))?
+        .insert(handle, image);
+    Ok(handle as jlong)
 }
 
 #[jni_fn("com.hippo.ehviewer.jni.DwarfsKt")]

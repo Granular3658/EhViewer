@@ -15,6 +15,14 @@ import java.nio.ByteBuffer
  * blocks larger than this refuses to open, and says so.
  */
 external fun dwarfsOpen(fd: Int, cacheMb: Int): Long
+
+/**
+ * Opens an image kept on a share, through a handle rather than a descriptor.
+ *
+ * A descriptor for a remote file is a pipe, and a pipe cannot serve positional
+ * reads, which is all an image is read with.
+ */
+external fun dwarfsOpenSmb(handle: Long, size: Long, cacheMb: Int): Long
 external fun dwarfsPageCount(handle: Long): Int
 external fun dwarfsPageName(handle: Long, page: Int): String
 external fun dwarfsReadPage(handle: Long, page: Int): ByteBuffer
