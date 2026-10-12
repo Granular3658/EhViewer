@@ -14,8 +14,6 @@ android-26 = ["android", "ndk/api-level-26"]
 [dependencies]
 regex-lite = "0.1"
 smb2 = "0.27"
-dwarfs = { version = "0.2", default-features = false, features = ["zstd"] }
-positioned-io = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync"] }
 jni = { version = "0.21", optional = true }
 jni_fn = { version = "0.1", optional = true }
@@ -37,6 +35,14 @@ libwebp-sys2 = { git = "https://github.com/FooIbar/libwebp-sys2-rs.git", feature
 [dev-dependencies]
 reqwest = "0.13"
 tokio = { version = "1", features = ["macros"] }
+
+# The DwarFS reader is built on xxhash-rust's xxh3, which does not compile for
+# 32-bit ARM: it names `core::arch::aarch64` unconditionally, and every version
+# of it fails the same way. Keeping it to 64-bit targets leaves the armeabi-v7a
+# build alone, and `ffi/dwarfs_stub.rs` keeps the symbols present there.
+[target.'cfg(target_pointer_width = "64")'.dependencies]
+dwarfs = { version = "0.2", default-features = false, features = ["zstd"] }
+positioned-io = "0.3"
 
 [profile.release]
 panic = "abort"
