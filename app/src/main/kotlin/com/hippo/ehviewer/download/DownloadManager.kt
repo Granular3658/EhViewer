@@ -687,9 +687,11 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
     }
 
     override fun onArchiveProgress(done: Int, total: Int) {
-        launch {
-            mDownloadListener?.onArchiveProgress(done, total)
-        }
+        // Straight through, not via launch. The service posts this on a conflated
+        // channel behind a one-second throttle, so an async hop can easily land
+        // after onFinish has cancelled the notification -- and then the progress
+        // is never seen at all.
+        mDownloadListener?.onArchiveProgress(done, total)
     }
 
     override fun onFinish(finished: Int, downloaded: Int, total: Int, failed: Boolean) {
