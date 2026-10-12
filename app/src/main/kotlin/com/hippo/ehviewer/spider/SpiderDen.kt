@@ -436,7 +436,9 @@ class SpiderDen(val info: GalleryInfo) {
                     coroutineContext.ensureActive()
                     val end = minOf(start + ARCHIVE_CHUNK, pages)
                     resourceScope {
-                        val staged = (start until end).parMap { idx ->
+                        // Bounded by the chunk: `end - start` is at most
+                        // ARCHIVE_CHUNK, so this is the widest the fan-out can be.
+                        val staged = (start until end).parMap(concurrency = ARCHIVE_CHUNK) { idx ->
                             val extension = loader.imageExtension(idx) ?: "webp"
                             val tmp = stage / perFilename(idx, extension)
                             check(loader.save(idx, tmp)) { "Extract archive content $idx failed!" }
@@ -556,7 +558,9 @@ class SpiderDen(val info: GalleryInfo) {
                 progress(start, pages)
                 val end = minOf(start + ARCHIVE_CHUNK, pages)
                 resourceScope {
-                    val sources = (start until end).parMap { idx ->
+                    // Bounded by the chunk: `end - start` is at most ARCHIVE_CHUNK,
+                    // so this is the widest the fan-out can be.
+                    val sources = (start until end).parMap(concurrency = ARCHIVE_CHUNK) { idx ->
                         val f = autoCloseable { getImageSource(idx) }
                         val source = f.source
                         ArchiveSource(

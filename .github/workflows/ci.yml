@@ -65,6 +65,9 @@ jobs:
       - name: Spotless Check
         run: ./gradlew spotlessCheck
 
+      - name: Par Fanout Check
+        run: python3 scripts/check_par_fanout.py
+
       - name: Lint Check
         run: ./gradlew lintMarshmallowRelease
 
