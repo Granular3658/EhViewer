@@ -410,6 +410,12 @@ class SpiderDen(val info: GalleryInfo) {
                 // abandon here because the archive is still under a name nobody
                 // reads, and the loose images are untouched.
                 coroutineContext.ensureActive()
+                // Report before the chunk as well as after it. A gallery smaller
+                // than one chunk would otherwise get a single callback once the
+                // work is already done, which is indistinguishable from no
+                // progress at all -- and that is the common case for a small
+                // gallery.
+                progress(start, pages)
                 val end = minOf(start + ARCHIVE_CHUNK, pages)
                 resourceScope {
                     val sources = (start until end).parMap { idx ->
