@@ -373,7 +373,10 @@
     <string name="settings_download_preload_image_summary">Preload next %s image</string>
     <string name="settings_download_download_origin_image">Download original image</string>
     <string name="settings_download_download_origin_image_summary">Caution! May require GP</string>
-    <string name="settings_download_save_as_cbz">Save as CBZ archive</string>
+    <string name="settings_download_save_as_archive">Save as archive file</string>
+    <string name="settings_download_save_as_archive_off">Off</string>
+    <string name="settings_download_save_as_archive_cbz">CBZ archive</string>
+    <string name="settings_download_save_as_archive_dwarfs">DwarFS image</string>
     <string name="settings_download_archive_metadata">Archive metadata</string>
     <string name="settings_download_archive_metadata_summary">Generate ComicInfo.xml on archive download</string>
     <string name="settings_download_reload_metadata">Reload metadata</string>
@@ -563,7 +566,8 @@
     <string name="already_latest_version">Already the latest version</string>
     <string name="permission_denied">Permission denied</string>
     <string name="download_gallery_first">Please download the gallery first!</string>
-    <string name="export_as_archive">Export as archive</string>
+    <string name="export_as_cbz">Export as CBZ</string>
+    <string name="export_as_dwarfs">Export as DwarFS image</string>
     <string name="export_as_archive_success">Export succeed</string>
     <string name="export_as_archive_failed">Export failed</string>
     <!-- Tachiyomi Reader Start-->

@@ -52,6 +52,9 @@ import com.hippo.ehviewer.image.PathSource
 import com.hippo.ehviewer.jni.archiveWriterAppend
 import com.hippo.ehviewer.jni.archiveWriterClose
 import com.hippo.ehviewer.jni.archiveWriterOpen
+import com.hippo.ehviewer.jni.dwarfsWriterAppend
+import com.hippo.ehviewer.jni.dwarfsWriterClose
+import com.hippo.ehviewer.jni.dwarfsWriterOpen
 import com.hippo.ehviewer.ktbuilder.diskCache
 import com.hippo.ehviewer.smb.SmbLocation
 import com.hippo.ehviewer.smb.SmbRepository
@@ -84,8 +87,9 @@ class SpiderDen(val info: GalleryInfo) {
         }
 
     private var tempDownloadDir: Path? = null
-    private val saveAsCbz = Settings.saveAsCbz.value
-    private val archiveName = "$gid.cbz"
+    private val archiveFormat = Settings.archiveFormat.value
+    private val saveAsCbz = archiveFormat != Settings.ARCHIVE_OFF
+    private val archiveName = "$gid." + archiveSuffix(archiveFormat)
 
     /**
      * Where the archive is built before it is published.
@@ -95,7 +99,7 @@ class SpiderDen(val info: GalleryInfo) {
      * an archive can ever open a half-written one. Debris under this name is
      * removed when the gallery is next opened.
      */
-    private val archivePartName = "$gid.cbz$ARCHIVE_PART_SUFFIX"
+    private val archivePartName = "$archiveName$ARCHIVE_PART_SUFFIX"
 
     private val lock = ReentrantReadWriteLock()
 
@@ -332,7 +336,7 @@ class SpiderDen(val info: GalleryInfo) {
         val target = resolve(archiveName)
         val part = resolve(archivePartName)
         runCatching {
-            archiveTo(part, progress)
+            archiveTo(part, archiveFormat, progress)
             part moveTo target
         }.onFailure {
             part.delete()
@@ -367,8 +371,15 @@ class SpiderDen(val info: GalleryInfo) {
         return archived
     }
 
-    suspend fun exportAsCbz(file: Path) {
-        downloadDir!!.find(archiveName)?.sendTo(file) ?: archiveTo(file)
+    /**
+     * Writes the gallery out as the given format.
+     *
+     * The format is a parameter rather than the setting, because the export menu
+     * offers both at once: needing to change a setting before each export is not
+     * how anyone uses a menu.
+     */
+    suspend fun exportAsArchive(file: Path, format: Int) {
+        downloadDir!!.find("$gid." + archiveSuffix(format))?.sendTo(file) ?: archiveTo(file, format)
     }
 
     /**
@@ -379,7 +390,39 @@ class SpiderDen(val info: GalleryInfo) {
      */
     private class ArchiveSource(val fd: Int, val size: Long, val name: String)
 
-    private suspend fun archiveTo(file: Path, progress: suspend (Int, Int) -> Unit = { _, _ -> }) = resourceScope {
+    /**
+     * The two writers take different things, so the calls are dispatched here
+     * rather than forced into one shape.
+     *
+     * The zip writer needs each source's length, because a descriptor for a
+     * remote file is a pipe and a pipe cannot be stat'ed. The image writer reads
+     * each source to its end and derives the length itself, so it takes none.
+     */
+    private class ArchiveWriter(val dwarfs: Boolean, val handle: Long) {
+        fun append(sources: List<ArchiveSource>): Int = if (dwarfs) {
+            dwarfsWriterAppend(
+                handle,
+                sources.map(ArchiveSource::fd).toIntArray(),
+                sources.map(ArchiveSource::name).toTypedArray(),
+                sources.size,
+            )
+        } else {
+            archiveWriterAppend(
+                sources.map(ArchiveSource::fd).toIntArray(),
+                sources.map(ArchiveSource::size).toLongArray(),
+                sources.map(ArchiveSource::name).toTypedArray(),
+                sources.size,
+            )
+        }
+
+        fun close() = if (dwarfs) dwarfsWriterClose(handle) else archiveWriterClose()
+    }
+
+    private suspend fun archiveTo(
+        file: Path,
+        format: Int,
+        progress: suspend (Int, Int) -> Unit = { _, _ -> },
+    ) = resourceScope {
         val comicInfoFile = downloadDir!! / COMIC_INFO_FILE
         val comicInfo = closeable {
             if (!comicInfoFile.exists()) {
@@ -399,7 +442,12 @@ class SpiderDen(val info: GalleryInfo) {
             ?.associate { it.name to it.size }
             .orEmpty()
         val arcFd = closeable { file.openFileDescriptor("rw") }
-        check(archiveWriterOpen(arcFd.fd) == 0) { "Failed to open archive for writing" }
+        val writer = if (format == Settings.ARCHIVE_DWARFS) {
+            ArchiveWriter(dwarfs = true, handle = dwarfsWriterOpen(arcFd.fd))
+        } else {
+            check(archiveWriterOpen(arcFd.fd) == 0) { "Failed to open archive for writing" }
+            ArchiveWriter(dwarfs = false, handle = 0)
+        }
         var written = 0
         try {
             // Every source keeps an open descriptor until its entry is written,
@@ -428,23 +476,21 @@ class SpiderDen(val info: GalleryInfo) {
                             name = perFilename(idx, f.type),
                         )
                     }
-                    written += archiveWriterAppend(
-                        sources.map(ArchiveSource::fd).toIntArray(),
-                        sources.map(ArchiveSource::size).toLongArray(),
-                        sources.map(ArchiveSource::name).toTypedArray(),
-                        sources.size,
-                    )
+                    written += writer.append(sources)
                 }
                 progress(end, pages)
             }
-            written += archiveWriterAppend(
-                intArrayOf(comicInfo.fd),
-                longArrayOf(smbSizes[COMIC_INFO_FILE] ?: comicInfoFile.metadataOrNull()?.size ?: -1L),
-                arrayOf(COMIC_INFO_FILE),
-                1,
+            written += writer.append(
+                listOf(
+                    ArchiveSource(
+                        fd = comicInfo.fd,
+                        size = smbSizes[COMIC_INFO_FILE] ?: comicInfoFile.metadataOrNull()?.size ?: -1L,
+                        name = COMIC_INFO_FILE,
+                    ),
+                ),
             )
         } finally {
-            archiveWriterClose()
+            writer.close()
         }
         // The writer reports failures only through logcat, and a silently empty
         // archive is exactly what a FIFO source used to produce.
@@ -490,6 +536,9 @@ private val sCache by lazy {
     }
 }
 private const val TEMP_SUFFIX = ".tmp"
+
+/** The extension a format writes. The two differ only in that. */
+private fun archiveSuffix(format: Int) = if (format == Settings.ARCHIVE_DWARFS) "dwarfs" else "cbz"
 
 /**
  * Suffix for an archive that is still being written. Distinct from [TEMP_SUFFIX]

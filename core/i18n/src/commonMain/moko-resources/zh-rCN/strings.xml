@@ -351,7 +351,10 @@
     <string name="settings_download_preload_image_summary">向后预载 %s 张图片</string>
     <string name="settings_download_download_origin_image">下载原图</string>
     <string name="settings_download_download_origin_image_summary">警告！可能需要 GP</string>
-    <string name="settings_download_save_as_cbz">保存为 CBZ 压缩包</string>
+    <string name="settings_download_save_as_archive">保存为归档文件</string>
+    <string name="settings_download_save_as_archive_off">关</string>
+    <string name="settings_download_save_as_archive_cbz">CBZ 压缩包</string>
+    <string name="settings_download_save_as_archive_dwarfs">DwarFS 镜像</string>
     <string name="settings_download_archive_metadata">压缩包元数据</string>
     <string name="settings_download_archive_metadata_summary">下载压缩包时生成 ComicInfo.xml</string>
     <string name="settings_download_reload_metadata">重新加载元数据</string>
@@ -544,7 +547,8 @@
     <string name="already_latest_version">已是最新版本</string>
     <string name="permission_denied">权限被拒</string>
     <string name="download_gallery_first">请先下载画廊！</string>
-    <string name="export_as_archive">导出为归档文件</string>
+    <string name="export_as_cbz">导出为 CBZ</string>
+    <string name="export_as_dwarfs">导出为 DwarFS 镜像</string>
     <string name="export_as_archive_success">导出成功</string>
     <string name="export_as_archive_failed">导出失败</string>
     <!-- Tachiyomi Reader Start-->

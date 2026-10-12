@@ -166,7 +166,8 @@ fun AnimatedVisibilityScope.GalleryDetailScreen(args: GalleryDetailScreenArgs, n
     val clearCache = stringResource(id = R.string.clear_image_cache)
     val cacheCleared = stringResource(R.string.image_cache_cleared)
     val openInBrowser = stringResource(id = R.string.open_in_other_app)
-    val exportArchive = stringResource(id = R.string.export_as_archive)
+    val exportArchiveCbz = stringResource(id = R.string.export_as_cbz)
+    val exportArchiveDwarfs = stringResource(id = R.string.export_as_dwarfs)
     val exportSuccess = stringResource(id = R.string.export_as_archive_success)
     val exportFailed = stringResource(id = R.string.export_as_archive_failed)
     val windowSizeClass = LocalWindowSizeClass.current
@@ -262,44 +263,54 @@ fun AnimatedVisibilityScope.GalleryDetailScreen(args: GalleryDetailScreenArgs, n
                             icon = {},
                             label = openInBrowser,
                         )
-                        clickableItem(
-                            onClick = {
-                                launchIO {
-                                    val downloadInfo = DownloadManager.getDownloadInfo(gid)
-                                    val canExport = downloadInfo?.state == DownloadInfo.STATE_FINISH
-                                    if (!canExport) {
-                                        awaitConfirmationOrCancel(
-                                            showCancelButton = false,
-                                            text = { Text(text = stringResource(id = R.string.download_gallery_first)) },
-                                        )
-                                    } else {
-                                        val info = galleryInfo!!
-                                        val uri = awaitActivityResult(
-                                            CreateDocument("application/vnd.comicbook+zip"),
-                                            EhUtils.getSuitableTitle(info) + ".cbz",
-                                        )
-                                        val dirname = downloadInfo.dirname
-                                        if (uri != null && dirname != null) {
-                                            val file = uri.toOkioPath()
-                                            val msg = runCatching {
-                                                bgWork {
-                                                    withIOContext {
-                                                        SpiderDen(info, dirname).exportAsCbz(file)
-                                                    }
+                        // Two entries rather than one that follows a setting:
+                        // exporting a gallery as a zip and as an image are
+                        // separate intentions, and changing a setting before each
+                        // export is not how a menu gets used.
+                        val exportAs: (Int, String, String) -> Unit = { format, mime, extension ->
+                            launchIO {
+                                val downloadInfo = DownloadManager.getDownloadInfo(gid)
+                                val canExport = downloadInfo?.state == DownloadInfo.STATE_FINISH
+                                if (!canExport) {
+                                    awaitConfirmationOrCancel(
+                                        showCancelButton = false,
+                                        text = { Text(text = stringResource(id = R.string.download_gallery_first)) },
+                                    )
+                                } else {
+                                    val info = galleryInfo!!
+                                    val uri = awaitActivityResult(
+                                        CreateDocument(mime),
+                                        EhUtils.getSuitableTitle(info) + extension,
+                                    )
+                                    val dirname = downloadInfo.dirname
+                                    if (uri != null && dirname != null) {
+                                        val file = uri.toOkioPath()
+                                        val msg = runCatching {
+                                            bgWork {
+                                                withIOContext {
+                                                    SpiderDen(info, dirname).exportAsArchive(file, format)
                                                 }
-                                                exportSuccess
-                                            }.getOrElse {
-                                                logcat(it)
-                                                file.delete()
-                                                exportFailed
                                             }
-                                            snackbar(message = msg)
+                                            exportSuccess
+                                        }.getOrElse {
+                                            logcat(it)
+                                            file.delete()
+                                            exportFailed
                                         }
+                                        snackbar(message = msg)
                                     }
                                 }
-                            },
+                            }
+                        }
+                        clickableItem(
+                            onClick = { exportAs(Settings.ARCHIVE_CBZ, "application/vnd.comicbook+zip", ".cbz") },
                             icon = {},
-                            label = exportArchive,
+                            label = exportArchiveCbz,
+                        )
+                        clickableItem(
+                            onClick = { exportAs(Settings.ARCHIVE_DWARFS, "application/octet-stream", ".dwarfs") },
+                            icon = {},
+                            label = exportArchiveDwarfs,
                         )
                     }
                 },
