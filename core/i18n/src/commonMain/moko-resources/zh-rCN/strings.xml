@@ -384,6 +384,8 @@
     <string name="settings_advanced_smb_cache_size_summary">用于常驻已打开过的远程 SMB 文件的内存上限。设小省内存；设大能留住更多翻过的页面，回看时不必重新从网络读取——换取更流畅的浏览和更少的网络 IO。0 表示除当前打开的页面外不保留任何内容。设得过大可能导致 OOM。即时生效。</string>
     <string name="settings_advanced_smb_cache_clear_on_exit">离开画廊时清空 SMB 缓存</string>
     <string name="settings_advanced_smb_cache_clear_on_exit_summary">最后一个使用该共享的画廊关闭后，释放缓存中的全部内容。这与位图缓存的行为一致；关闭后已读过的内容会保留，重新进入同一画廊时无需再次从网络读取。</string>
+    <string name="settings_advanced_dwarfs_cache_size">DwarFS 缓存大小</string>
+    <string name="settings_advanced_dwarfs_cache_size_summary">DwarFS 镜像解压后保留多少在内存里。读一个块的任何一字节都要整块，所以缓存越大越省重复读取、越占内存。块大小超过此值的镜像无法打开。</string>
     <string name="settings_advanced_app_language_title">App 界面语言</string>
     <string name="settings_advanced_enable_quic">QUIC 支持</string>
     <string name="settings_advanced_hardware_bitmap_threshold">硬件位图（性能更好）阈值</string>

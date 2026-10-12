@@ -133,6 +133,12 @@ object Settings : DataStorePreferences(null) {
     // Drop the SMB cache when the last gallery using it closes. Matches what the
     // bitmap cache does, which is the behaviour long-time users expect.
     val smbCacheClearOnExit = boolPref("smb_cache_clear_on_exit", true)
+
+    // DwarFS block cache cap, in MiB. A decompressed block is what reading any
+    // one page costs -- in I/O and in resident memory -- so this bounds how many
+    // of them stay around. The library refuses an image whose blocks are larger
+    // than this, so it cannot go arbitrarily low.
+    val dwarfsCacheSize = intPref("dwarfs_cache_size_mb", 128)
     val enableCronet = boolPref("enable_cronet", true)
     val enableQuic = boolPref("enable_quic", true)
     val hardwareBitmapThreshold = intPref("hardware_bitmap_threshold", 16384)
