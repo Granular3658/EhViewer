@@ -189,6 +189,16 @@ fun AnimatedVisibilityScope.AdvancedScreen(navigator: DestinationsNavigator) = S
                 summary = stringResource(id = R.string.settings_advanced_smb_cache_clear_on_exit_summary),
                 state = Settings.smbCacheClearOnExit.asMutableState(),
             )
+            // 128 to 1024 MB in 128 MB steps: seven intervals, so six stops
+            // between the ends.
+            IntSliderPreference(
+                minValue = 128,
+                maxValue = 1024,
+                step = 6,
+                title = stringResource(id = R.string.settings_advanced_dwarfs_cache_size),
+                summary = stringResource(id = R.string.settings_advanced_dwarfs_cache_size_summary),
+                state = Settings.dwarfsCacheSize.asMutableState(),
+            )
             var currentLanguage by remember { mutableStateOf(getAppLanguage()) }
             val languages = remember { getLanguages() }
             DropdownListPreference(

@@ -72,9 +72,11 @@ import com.hippo.ehviewer.download.archiveFile
 import com.hippo.ehviewer.gallery.Page
 import com.hippo.ehviewer.gallery.PageLoader
 import com.hippo.ehviewer.gallery.PageStatus
+import com.hippo.ehviewer.gallery.isDwarfs
 import com.hippo.ehviewer.gallery.status
 import com.hippo.ehviewer.gallery.unblock
 import com.hippo.ehviewer.gallery.useArchivePageLoader
+import com.hippo.ehviewer.gallery.useDwarfsPageLoader
 import com.hippo.ehviewer.gallery.useEhPageLoader
 import com.hippo.ehviewer.ui.MainActivity
 import com.hippo.ehviewer.ui.Screen
@@ -388,20 +390,29 @@ suspend inline fun <T> usePageLoader(args: ReaderScreenArgs, crossinline block: 
             useEhPageLoader(info, page, block)
         }
     }
-    is ReaderScreenArgs.Archive -> useArchivePageLoader(
-        args.path.toPath(),
-        passwdProvider = { invalidator ->
-            awaitInputText(
-                title = string(R.string.archive_need_passwd),
-                hint = string(R.string.archive_passwd),
-                onUserDismiss = { nav.popBackStack() },
-            ) { text ->
-                ensure(text.isNotBlank()) { string(R.string.passwd_cannot_be_empty) }
-                ensure(invalidator(text)) { string(R.string.passwd_wrong) }
-            }
-        },
-        block = block,
-    )
+    is ReaderScreenArgs.Archive -> {
+        val path = args.path.toPath()
+        // An image is not an archive: it is a filesystem, and it is read through
+        // its own reader rather than through libarchive.
+        if (path.isDwarfs()) {
+            useDwarfsPageLoader(path, block = block)
+        } else {
+            useArchivePageLoader(
+                path,
+                passwdProvider = { invalidator ->
+                    awaitInputText(
+                        title = string(R.string.archive_need_passwd),
+                        hint = string(R.string.archive_passwd),
+                        onUserDismiss = { nav.popBackStack() },
+                    ) { text ->
+                        ensure(text.isNotBlank()) { string(R.string.passwd_cannot_be_empty) }
+                        ensure(invalidator(text)) { string(R.string.passwd_wrong) }
+                    }
+                },
+                block = block,
+            )
+        }
+    }
 }
 
 @Composable

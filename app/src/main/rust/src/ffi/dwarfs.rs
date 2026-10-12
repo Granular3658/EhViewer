@@ -28,7 +28,7 @@ use dwarfs::archive::Config;
 use dwarfs::{Archive, ArchiveIndex, AsChunks, Dir};
 use jni::JNIEnv;
 use jni::objects::{JByteBuffer, JClass};
-use jni::sys::{jint, jlong, jobject};
+use jni::sys::{jboolean, jint, jlong, jobject};
 use jni_fn::jni_fn;
 use positioned_io::{ReadAt, Size};
 
@@ -150,7 +150,7 @@ unsafe extern "C" {
 }
 
 #[jni_fn("com.hippo.ehviewer.jni.DwarfsKt")]
-pub fn dwarfsOpen(mut env: JNIEnv, _: JClass, fd: jint) -> jlong {
+pub fn dwarfsOpen(mut env: JNIEnv, _: JClass, fd: jint, cache_mb: jint) -> jlong {
     jni_throwing(&mut env, |_| {
         let fd = fd as RawFd;
         let mut st: libc::stat = unsafe { std::mem::zeroed() };
@@ -159,10 +159,11 @@ pub fn dwarfsOpen(mut env: JNIEnv, _: JClass, fd: jint) -> jlong {
         ensure!(size > 0, "the image is empty");
 
         let mut config = Config::default();
-        // The defaults are desktop ones: a 512 MiB block cache is not something a
-        // phone hands over. It has to stay at or above one block, so an image
-        // built with the 16 MiB default simply gets a bigger cache than this.
-        config.block_cache_size_limit(64 << 20);
+        // The default is 512 MiB, a desktop number, so the caller decides. It has
+        // to stay at or above one block or the library refuses the image outright,
+        // which is why a failure here is reported rather than swallowed.
+        let cache_mb = cache_mb.clamp(16, 4096) as usize;
+        config.block_cache_size_limit(cache_mb << 20);
 
         let (index, archive) = Archive::new_with_config(FdSource { fd, size }, &config)?;
         let mut entries = Vec::new();
@@ -239,6 +240,44 @@ pub fn dwarfsReadPage(mut env: JNIEnv, _: JClass, handle: jlong, page: jint) -> 
                 Err(err)
             }
         }
+    })
+}
+
+#[jni_fn("com.hippo.ehviewer.jni.DwarfsKt")]
+pub fn dwarfsReadPageToFd(
+    mut env: JNIEnv,
+    _: JClass,
+    handle: jlong,
+    page: jint,
+    fd: jint,
+) -> jboolean {
+    jni_throwing(&mut env, |_| {
+        let image = lookup(handle)?;
+        let mut image = image.lock().map_err(|_| anyhow!("the image is poisoned"))?;
+        let size = image
+            .entries
+            .get(page as usize)
+            .ok_or_else(|| anyhow!("page {page} out of range"))?
+            .size as usize;
+        ensure!(size > 0, "page {page} is empty");
+
+        let mut buf = vec![0u8; size];
+        image.read_into(page as usize, &mut buf)?;
+
+        let fd = fd as RawFd;
+        let mut written = 0;
+        while written < buf.len() {
+            let n = unsafe { libc::write(fd, buf[written..].as_ptr().cast(), buf.len() - written) };
+            if n < 0 {
+                let err = io::Error::last_os_error();
+                if err.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(err.into());
+            }
+            written += n as usize;
+        }
+        Ok(1 as jboolean)
     })
 }
 
