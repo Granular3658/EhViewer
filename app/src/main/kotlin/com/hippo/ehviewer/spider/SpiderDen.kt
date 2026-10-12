@@ -48,7 +48,10 @@ import com.hippo.ehviewer.download.allDownloadLocations
 import com.hippo.ehviewer.download.defaultDownloadLocation
 import com.hippo.ehviewer.download.tempDownloadDir
 import com.hippo.ehviewer.download.writableDownloadLocations
+import com.hippo.ehviewer.gallery.PageLoader
+import com.hippo.ehviewer.gallery.isDwarfs
 import com.hippo.ehviewer.gallery.useArchivePageLoader
+import com.hippo.ehviewer.gallery.useDwarfsPageLoader
 import com.hippo.ehviewer.image.PathSource
 import com.hippo.ehviewer.jni.archiveWriterAppend
 import com.hippo.ehviewer.jni.archiveWriterClose
@@ -410,7 +413,10 @@ class SpiderDen(val info: GalleryInfo) {
      * the chunk size, which matters because a gallery is thousands of images.
      */
     private suspend fun repack(source: Path, file: Path, format: Int) = resourceScope {
-        useArchivePageLoader(source, info, passwdProvider = { "" }) { loader ->
+        // The source can be either format, so it is read the way its own format is
+        // read -- the same distinction the reader has to make, for the same
+        // reason: libarchive cannot read an image.
+        val body: suspend (PageLoader) -> Unit = { loader ->
             val stage = info.tempDownloadDir!!.apply { mkdirs() }
             val comicInfoFile = downloadDir!! / COMIC_INFO_FILE
             val comicInfo = closeable {
@@ -462,6 +468,11 @@ class SpiderDen(val info: GalleryInfo) {
                 writer.close()
             }
             check(written == pages + 1) { "Archive wrote $written of ${pages + 1} entries" }
+        }
+        if (source.isDwarfs()) {
+            useDwarfsPageLoader(source, info, block = body)
+        } else {
+            useArchivePageLoader(source, info, passwdProvider = { "" }, block = body)
         }
     }
 
