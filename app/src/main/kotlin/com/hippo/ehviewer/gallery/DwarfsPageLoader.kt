@@ -15,6 +15,7 @@
  */
 package com.hippo.ehviewer.gallery
 
+import android.os.Process
 import arrow.autoCloseScope
 import com.ehviewer.core.files.openFileDescriptor
 import com.ehviewer.core.model.GalleryInfo
@@ -36,8 +37,14 @@ import kotlinx.coroutines.coroutineScope
 import moe.tarsin.kt.install
 import okio.Path
 
-/** Whether a path names a DwarFS image, which is how the reader picks a loader. */
-fun Path.isDwarfs() = name.endsWith(".dwarfs", ignoreCase = true)
+/**
+ * Whether a path names a DwarFS image, which is how the reader picks a loader.
+ *
+ * Also requires a 64-bit process: the reader is built on `xxhash-rust`'s xxh3,
+ * which does not compile for 32-bit ARM at all, so on a 32-bit build the file
+ * falls through to the archive reader rather than reaching a missing symbol.
+ */
+fun Path.isDwarfs() = name.endsWith(".dwarfs", ignoreCase = true) && Process.is64Bit()
 
 /**
  * Opens a DwarFS image as a gallery, the way an archive is opened.
