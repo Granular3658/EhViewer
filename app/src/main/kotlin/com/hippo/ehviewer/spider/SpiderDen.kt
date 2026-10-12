@@ -342,17 +342,18 @@ class SpiderDen(val info: GalleryInfo) {
 
     // Postpone this to `SpiderQueen.stop` because files may still be in use by reader
     suspend fun postArchive(archiveWritten: Boolean): Boolean {
-        // An SMB archive is written but not cleaned up yet: reading one back needs a
-        // mmap-able descriptor, which the share cannot provide, so the loose images
-        // are still the only copy the app can open. Drop this guard once the archive
-        // reader can take its input from the in-memory cache instead.
-        //
-        // `archiveWritten` guards the other direction: if this session tried to
-        // rewrite the archive and did not finish, what is under [archiveName] is
+        // `archiveWritten` guards the direction that matters: if this session tried
+        // to rewrite the archive and did not finish, what is under [archiveName] is
         // the previous one, and the loose images are the copy this session
         // produced. Deleting them in its favour would throw away the pages that
         // were just downloaded.
-        val dir = downloadDir?.takeUnless { it.isSmb }
+        //
+        // A share used to be excluded here as well, because reading an archive back
+        // needed a mmap-able descriptor and a descriptor for a remote file is a
+        // pipe. That is no longer true: the reader goes through an SMB handle
+        // (openArchiveSmb), and it prefers the archive whenever one is present, so
+        // the loose images stopped being read the moment the archive appeared.
+        val dir = downloadDir
         val archived = saveAsCbz && archiveWritten && dir?.find(archiveName) != null
         if (archived) {
             dir.list().parMap(concurrency = 10) {
