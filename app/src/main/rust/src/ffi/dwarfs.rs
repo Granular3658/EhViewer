@@ -17,7 +17,7 @@
 //!   has to be at least one block, so the two knobs move together.
 
 use std::collections::HashMap;
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void};
 use std::io::{self, Read};
 use std::os::fd::RawFd;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -119,7 +119,9 @@ fn collect(dir: Dir<'_>, prefix: &str, out: &mut Vec<Entry>) {
         let inode = entry.inode();
         if let Some(inner) = inode.as_dir() {
             collect(inner, &path, out);
-        } else if let Some(file) = inode.as_file() {
+        } else if let Some(file) = inode.as_file()
+            && is_playable(name)
+        {
             out.push(Entry {
                 path,
                 size: file.as_chunks().total_size(),
@@ -147,6 +149,17 @@ fn lookup(handle: jlong) -> Result<Arc<Mutex<Image>>> {
 unsafe extern "C" {
     fn malloc(size: usize) -> *mut c_void;
     fn free(ptr: *mut c_void);
+
+    /// The archive reader's list of playable extensions, so an image shows the
+    /// same pages a zip of the same files would. `ComicInfo.xml` and `.ehviewer`
+    /// sit beside the images and are not pages; counting them adds a page that
+    /// cannot decode. The list lives there rather than here so the two readers
+    /// cannot drift apart.
+    fn ehFilenameIsPlayable(name: *const c_char, len: usize) -> bool;
+}
+
+fn is_playable(name: &str) -> bool {
+    unsafe { ehFilenameIsPlayable(name.as_ptr().cast(), name.len()) }
 }
 
 #[jni_fn("com.hippo.ehviewer.jni.DwarfsKt")]

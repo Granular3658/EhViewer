@@ -188,17 +188,35 @@ const char supportExt[SUPPORT_EXT_COUNT][5] = {
         "avif"
 };
 
-static inline int filename_is_playable_file(const char *name) {
+/*
+ * Whether a name ends in one of the extensions the reader plays.
+ *
+ * Length-aware and exported because the DwarFS reader filters entries on the
+ * Rust side and has to agree with this one: an image built from the same files
+ * as a zip must show the same pages, and a single list is the only way that
+ * stays true.
+ */
+bool ehFilenameIsPlayable(const char *name, size_t len) {
     if (!name)
         return false;
-    const char *dotptr = strrchr(name, '.');
-    if (!dotptr++)
+    const char *end = name + len;
+    const char *dot = NULL;
+    for (const char *p = name; p < end; ++p)
+        if (*p == '.')
+            dot = p;
+    if (!dot)
         return false;
-    int i;
-    for (i = 0; i < SUPPORT_EXT_COUNT; i++)
-        if (strcmp(dotptr, supportExt[i]) == 0)
+    const char *ext = dot + 1;
+    size_t ext_len = (size_t) (end - ext);
+    for (int i = 0; i < SUPPORT_EXT_COUNT; i++) {
+        if (strlen(supportExt[i]) == ext_len && memcmp(ext, supportExt[i], ext_len) == 0)
             return true;
+    }
     return false;
+}
+
+static inline int filename_is_playable_file(const char *name) {
+    return name && ehFilenameIsPlayable(name, strlen(name));
 }
 
 static inline bool archive_entry_is_file(struct archive_entry *entry) {
