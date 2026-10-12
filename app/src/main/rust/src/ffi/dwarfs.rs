@@ -88,6 +88,7 @@ struct SmbSource {
 }
 
 impl ReadAt for SmbSource {
+    #[cfg(feature = "android-26")]
     fn read_at(&self, pos: u64, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() || pos >= self.size {
             return Ok(0);
@@ -98,6 +99,14 @@ impl ReadAt for SmbSource {
         let n = data.len().min(buf.len());
         buf[..n].copy_from_slice(&data[..n]);
         Ok(n)
+    }
+
+    /// A build below API 26 has no SMB at all -- `smb_cache` is not compiled
+    /// into it -- so a share can never be reached. Failing here keeps the type
+    /// the same shape in both builds rather than splitting the enum.
+    #[cfg(not(feature = "android-26"))]
+    fn read_at(&self, _pos: u64, _buf: &mut [u8]) -> io::Result<usize> {
+        Err(io::Error::other("this build has no SMB support"))
     }
 }
 
