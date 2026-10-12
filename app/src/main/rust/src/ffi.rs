@@ -7,5 +7,7 @@ mod archive;
 // before choosing this loader, so nothing here is ever called without it.
 #[cfg(target_pointer_width = "64")]
 mod dwarfs;
+#[cfg(target_pointer_width = "64")]
+mod dwarfs_writer;
 mod jvm;
 mod smb;
