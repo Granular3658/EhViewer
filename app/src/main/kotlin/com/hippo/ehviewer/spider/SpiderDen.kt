@@ -48,6 +48,7 @@ import com.hippo.ehviewer.download.allDownloadLocations
 import com.hippo.ehviewer.download.defaultDownloadLocation
 import com.hippo.ehviewer.download.tempDownloadDir
 import com.hippo.ehviewer.download.writableDownloadLocations
+import com.hippo.ehviewer.gallery.useArchivePageLoader
 import com.hippo.ehviewer.image.PathSource
 import com.hippo.ehviewer.jni.archiveWriterAppend
 import com.hippo.ehviewer.jni.archiveWriterClose
@@ -378,8 +379,90 @@ class SpiderDen(val info: GalleryInfo) {
      * offers both at once: needing to change a setting before each export is not
      * how anyone uses a menu.
      */
+    private fun openWriter(fd: Int, format: Int) = if (format == Settings.ARCHIVE_DWARFS) {
+        ArchiveWriter(dwarfs = true, handle = dwarfsWriterOpen(fd))
+    } else {
+        check(archiveWriterOpen(fd) == 0) { "Failed to open archive for writing" }
+        ArchiveWriter(dwarfs = false, handle = 0)
+    }
+
+    /**
+     * Writes the gallery out as [format].
+     *
+     * A gallery is kept as one format or the other, never both: once it is an
+     * archive its loose images are gone, so asking for the other format has
+     * nothing to pack. The pages are read back out of the archive it is already
+     * kept as instead, which is the only way that request can be answered.
+     */
     suspend fun exportAsArchive(file: Path, format: Int) {
-        downloadDir!!.find("$gid." + archiveSuffix(format))?.sendTo(file) ?: archiveTo(file, format)
+        downloadDir!!.find("$gid." + archiveSuffix(format))?.sendTo(file)
+            ?: downloadDir!!.find("$gid." + archiveSuffix(otherArchiveFormat(format)))
+                ?.let { repack(it, file, format) }
+            ?: archiveTo(file, format)
+    }
+
+    /**
+     * Copies an archive into another format, page by page.
+     *
+     * Pages are staged through the app's own temporary directory one chunk at a
+     * time: the writers take descriptors, and a descriptor is what `save` leaves
+     * behind. Staging a chunk rather than the whole gallery bounds the space by
+     * the chunk size, which matters because a gallery is thousands of images.
+     */
+    private suspend fun repack(source: Path, file: Path, format: Int) = resourceScope {
+        useArchivePageLoader(source, info, passwdProvider = { "" }) { loader ->
+            val stage = info.tempDownloadDir!!.apply { mkdirs() }
+            val comicInfoFile = downloadDir!! / COMIC_INFO_FILE
+            val comicInfo = closeable {
+                if (!comicInfoFile.exists()) {
+                    writeComicInfo()
+                } else if (info.pages == 0) {
+                    info.pages = readComicInfo(comicInfoFile)!!.pageCount
+                }
+                comicInfoFile.openFileDescriptor("r")
+            }
+            val arcFd = closeable { file.openFileDescriptor("rw") }
+            val writer = openWriter(arcFd.fd, format)
+            val pages = loader.size
+            var written = 0
+            try {
+                for (start in 0 until pages step ARCHIVE_CHUNK) {
+                    coroutineContext.ensureActive()
+                    val end = minOf(start + ARCHIVE_CHUNK, pages)
+                    resourceScope {
+                        val staged = (start until end).parMap { idx ->
+                            val extension = loader.imageExtension(idx) ?: "webp"
+                            val tmp = stage / perFilename(idx, extension)
+                            check(loader.save(idx, tmp)) { "Extract archive content $idx failed!" }
+                            tmp
+                        }
+                        // The descriptors stay open until the chunk scope ends,
+                        // which is after the writer has read them. Deleting the
+                        // staged files first is safe: on Linux the descriptor
+                        // keeps the file alive until it is closed.
+                        val opened = staged.map { path -> closeable { path.openFileDescriptor("r") } }
+                        written += writer.append(
+                            opened.mapIndexed { i, pfd ->
+                                ArchiveSource(fd = pfd.fd, size = pfd.statSize, name = staged[i].name)
+                            },
+                        )
+                        staged.forEach { it.delete() }
+                    }
+                }
+                written += writer.append(
+                    listOf(
+                        ArchiveSource(
+                            fd = comicInfo.fd,
+                            size = comicInfoFile.metadataOrNull()?.size ?: -1L,
+                            name = COMIC_INFO_FILE,
+                        ),
+                    ),
+                )
+            } finally {
+                writer.close()
+            }
+            check(written == pages + 1) { "Archive wrote $written of ${pages + 1} entries" }
+        }
     }
 
     /**
@@ -442,12 +525,7 @@ class SpiderDen(val info: GalleryInfo) {
             ?.associate { it.name to it.size }
             .orEmpty()
         val arcFd = closeable { file.openFileDescriptor("rw") }
-        val writer = if (format == Settings.ARCHIVE_DWARFS) {
-            ArchiveWriter(dwarfs = true, handle = dwarfsWriterOpen(arcFd.fd))
-        } else {
-            check(archiveWriterOpen(arcFd.fd) == 0) { "Failed to open archive for writing" }
-            ArchiveWriter(dwarfs = false, handle = 0)
-        }
+        val writer = openWriter(arcFd.fd, format)
         var written = 0
         try {
             // Every source keeps an open descriptor until its entry is written,
@@ -539,6 +617,9 @@ private const val TEMP_SUFFIX = ".tmp"
 
 /** The extension a format writes. The two differ only in that. */
 private fun archiveSuffix(format: Int) = if (format == Settings.ARCHIVE_DWARFS) "dwarfs" else "cbz"
+
+/** The format a gallery kept as [format] is not. */
+private fun otherArchiveFormat(format: Int) = if (format == Settings.ARCHIVE_DWARFS) Settings.ARCHIVE_CBZ else Settings.ARCHIVE_DWARFS
 
 /**
  * Suffix for an archive that is still being written. Distinct from [TEMP_SUFFIX]

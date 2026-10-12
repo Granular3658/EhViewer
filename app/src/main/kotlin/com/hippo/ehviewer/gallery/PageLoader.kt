@@ -123,6 +123,14 @@ abstract class PageLoader(val scope: CoroutineScope, val info: GalleryInfo?, sta
 
     protected abstract fun getImageExtension(index: Int): String?
 
+    /**
+     * The extension a page would be saved under.
+     *
+     * Public because a caller that copies pages back out of the loader has to
+     * name them the way the loader itself would.
+     */
+    fun imageExtension(index: Int): String? = getImageExtension(index)
+
     fun getImageFilename(index: Int): String? = getImageExtension(index)?.let {
         FileUtils.sanitizeFilename("$title - ${index + 1}.${it.lowercase()}")
     }
