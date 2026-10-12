@@ -43,6 +43,9 @@ tokio = { version = "1", features = ["macros"] }
 [target.'cfg(target_pointer_width = "64")'.dependencies]
 dwarfs = { version = "0.2", default-features = false, features = ["zstd"] }
 positioned-io = "0.3"
+# The writer. GPL-3.0, unlike the reader above, which is why it is called out:
+# it is the first GPL dependency in the tree, and the project is GPL-3.0 too.
+dwarfs-enc = "0.1"
 
 [profile.release]
 panic = "abort"
