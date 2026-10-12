@@ -416,11 +416,19 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                 }
 
                 runSuspendCatching {
-                    DownloadManager.downloadInfoList.parMapNotNull {
+                    // Both passes reach the share: the filter stats a file in
+                    // every gallery's directory, and the rewrite writes one. They
+                    // run one after the other, so each needs its own bound -- and
+                    // unbounded, a library of a hundred items puts a hundred SMB
+                    // calls in flight, each parking an IO-pool thread in the
+                    // native runtime's block_on. That runtime has two workers
+                    // behind it, so past the pool's size the work stops rather
+                    // than queueing. Same shape as the restore scan below.
+                    DownloadManager.downloadInfoList.parMapNotNull(concurrency = 4) {
                         if (it.state == DownloadInfo.STATE_FINISH && !it.isStable()) it else null
                     }.apply {
                         fillGalleryListByApi(this, EhUrl.referer)
-                        val toUpdate = parMap { di ->
+                        val toUpdate = parMap(concurrency = 4) { di ->
                             di.galleryInfo.also { SpiderDen(it, di.dirname!!).writeComicInfo(false) }
                         }
                         EhDB.updateGalleryInfo(toUpdate)
