@@ -98,7 +98,18 @@ object Settings : DataStorePreferences(null) {
     val timeoutSpeed = intPref("timeout_speed_level", 6)
     val preloadImage = intPref("preload_image_2", 5)
     val downloadOriginImage = boolPref("download_origin_image", false)
-    val saveAsCbz = boolPref("save_as_cbz", false)
+    const val ARCHIVE_OFF = 0
+    const val ARCHIVE_CBZ = 1
+    const val ARCHIVE_DWARFS = 2
+
+    /**
+     * What a finished gallery is written as.
+     *
+     * Off, so a gallery keeps its loose images unless a format is chosen. The two
+     * formats are alternatives rather than flags -- they are two ways of being the
+     * same thing -- so one value covers both.
+     */
+    val archiveFormat = intPref("archive_format", ARCHIVE_OFF)
     val archiveMetadata = boolPref("archive_metadata", true)
 
     // Multiple download locations. The "_2" suffix distinguishes this multi-location

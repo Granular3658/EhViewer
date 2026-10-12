@@ -23,3 +23,16 @@ external fun dwarfsReadPage(handle: Long, page: Int): ByteBuffer
 external fun dwarfsReadPageToFd(handle: Long, page: Int, fd: Int): Boolean
 external fun dwarfsReleaseByteBuffer(buffer: ByteBuffer)
 external fun dwarfsClose(handle: Long)
+
+/**
+ * Writing an image, in the same shape as the archive writer: open against the
+ * output descriptor, append bounded chunks of entries, close to write the
+ * metadata and the index.
+ *
+ * The sources are read to their ends, so unlike the archive writer these take
+ * no lengths: a descriptor for a remote file is a pipe, and a pipe cannot be
+ * stat'ed anyway.
+ */
+external fun dwarfsWriterOpen(fd: Int): Long
+external fun dwarfsWriterAppend(handle: Long, fdBatch: IntArray, names: Array<String>, size: Int): Int
+external fun dwarfsWriterClose(handle: Long): Int

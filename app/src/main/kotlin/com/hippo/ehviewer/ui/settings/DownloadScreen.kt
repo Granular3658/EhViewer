@@ -392,9 +392,11 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                 summary = stringResource(id = R.string.settings_download_download_origin_image_summary),
                 state = Settings.downloadOriginImage.asMutableState(),
             )
-            SwitchPreference(
-                title = stringResource(id = R.string.settings_download_save_as_cbz),
-                state = Settings.saveAsCbz.asMutableState(),
+            SimpleMenuPreferenceInt(
+                title = stringResource(id = R.string.settings_download_save_as_archive),
+                entry = com.hippo.ehviewer.R.array.archive_format_entries,
+                entryValueRes = com.hippo.ehviewer.R.array.archive_format_entry_values,
+                state = Settings.archiveFormat.asMutableState(),
             )
             SwitchPreference(
                 title = stringResource(id = R.string.settings_download_archive_metadata),
