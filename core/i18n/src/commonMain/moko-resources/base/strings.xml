@@ -253,6 +253,7 @@
     <string name="download_service_label">EhViewer Download Service</string>
     <string name="download_speed_text">%s</string>
     <string name="download_speed_text_2">%1$s, %2$s left</string>
+    <string name="download_archiving">Archiving %1$d/%2$d</string>
     <string name="remember_download_label">Remember download label</string>
     <string name="default_download_label">Default download label</string>
     <string name="added_to_download_list">Added to download list</string>

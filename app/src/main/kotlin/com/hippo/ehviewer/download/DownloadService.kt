@@ -239,6 +239,17 @@ class DownloadService :
         }
     }
 
+    override fun onArchiveProgress(done: Int, total: Int) {
+        val text = getString(R.string.download_archiving, done, total)
+        downloadingNotification.run {
+            builder.setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                .setSubText("$done/$total")
+                .setProgress(total, done, false)
+            startForeground()
+        }
+    }
+
     override fun onFinish(info: DownloadInfo) {
         downloadingNotification.cancel()
         val finish = info.state == DownloadInfo.STATE_FINISH

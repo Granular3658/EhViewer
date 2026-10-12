@@ -686,6 +686,12 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
         }
     }
 
+    override fun onArchiveProgress(done: Int, total: Int) {
+        launch {
+            mDownloadListener?.onArchiveProgress(done, total)
+        }
+    }
+
     override fun onFinish(finished: Int, downloaded: Int, total: Int, failed: Boolean) {
         launch {
             mSpeedReminder.onFinish()
@@ -725,6 +731,13 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
          * Update download speed
          */
         fun onDownload(info: DownloadInfo)
+
+        /**
+         * How far the archive write has got, in entries. Sent after every page has
+         * been downloaded, because the download is not finished until the archive
+         * holding it is: on a share that tail is long enough to look like a hang.
+         */
+        fun onArchiveProgress(done: Int, total: Int) {}
 
         /**
          * Download done
