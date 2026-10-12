@@ -385,7 +385,15 @@ suspend inline fun <T> usePageLoader(args: ReaderScreenArgs, crossinline block: 
         val page = args.page.takeUnless { it == -1 } ?: EhDB.getReadProgress(info.gid)
         val archive = DownloadManager.getDownloadInfo(info.gid)?.archiveFile
         if (archive != null) {
-            useArchivePageLoader(archive, info, page, info.hasAds, { error("Managed Archive have password???") }, block)
+            // An image is not an archive: it is a filesystem, and it is read
+            // through its own reader rather than through libarchive. This is the
+            // path a downloaded gallery is opened by, so it has to make the same
+            // distinction the standalone-file path does.
+            if (archive.isDwarfs()) {
+                useDwarfsPageLoader(archive, info, page, info.hasAds, block)
+            } else {
+                useArchivePageLoader(archive, info, page, info.hasAds, { error("Managed Archive have password???") }, block)
+            }
         } else {
             useEhPageLoader(info, page, block)
         }
