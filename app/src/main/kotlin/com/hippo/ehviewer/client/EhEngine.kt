@@ -414,6 +414,11 @@ object EhEngine {
         if (index != 0) {
             delay(REQUEST_INTERVAL)
         }
+        // unbounded: the receiver is one chunk of MAX_SEQUENTIAL_REQUESTS batches
+        // of MAX_REQUEST_SIZE, so the fan-out cannot exceed that product however
+        // long the list is. The calls also go through ktor, which suspends rather
+        // than parking a thread, so they do not hold the pool the way an SMB call
+        // does.
         chunk.parMap {
             ehRequest(EhUrl.apiUrl, referer, EhUrl.origin) {
                 jsonBody {
