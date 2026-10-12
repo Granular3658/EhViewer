@@ -48,6 +48,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -148,6 +149,19 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
         }
     }
 
+    /**
+     * How far the archive write has got, in entries. Sent on the same listener
+     * list as the page callbacks: writing an archive is the tail of a download
+     * that used to be invisible, and on a share it is a long tail.
+     */
+    private fun notifyArchiveProgress(done: Int, total: Int) {
+        synchronized(mSpiderListeners) {
+            mSpiderListeners.forEach {
+                it.onArchiveProgress(done, total)
+            }
+        }
+    }
+
     private fun notifyPageReady(index: Int) {
         synchronized(mSpiderListeners) {
             mSpiderListeners.forEach {
@@ -215,8 +229,27 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
 
     private val prepareScope = CoroutineScope(coroutineContext + SupervisorJob())
     private val prepareJob = prepareScope.async { doPrepare() }
+
+    /**
+     * Whether this session tried to write the archive and did not finish, either
+     * because it failed or because it was cancelled. Read by [stop] before
+     * [SpiderDen.postArchive] so a rewrite that did not complete never trades the
+     * loose images this session wrote for the archive left by a previous one.
+     */
+    @Volatile
+    private var archiveFailed = false
     private val archiveJob = launch(start = CoroutineStart.LAZY) {
-        val failed = spiderDen.archive()
+        val failed = try {
+            spiderDen.archive { done, total -> notifyArchiveProgress(done, total) }
+        } catch (e: CancellationException) {
+            // A cancelled write publishes nothing: the part file is never renamed
+            // onto the final name, so what is there -- if anything -- is an
+            // earlier archive, and the loose images are the copy this session
+            // produced.
+            archiveFailed = true
+            throw e
+        }
+        archiveFailed = failed
         notifyAllPageDownloaded(failed)
     }
 
@@ -240,9 +273,14 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
         val queenScope = this
         launch {
             if (archiveJob.isActive) {
-                archiveJob.join()
+                // Cancel rather than join. The archive is built under a name
+                // nothing reads, so abandoning the write leaves only debris --
+                // which the next open of this gallery removes -- while joining
+                // made "stop" look like it did nothing until the whole archive
+                // had reached the share.
+                archiveJob.cancelAndJoin()
             }
-            if (!spiderDen.postArchive()) {
+            if (!spiderDen.postArchive(!archiveFailed)) {
                 if (mWorkerScope.isDownloadMode) {
                     runCatching {
                         spiderDen.writeComicInfo()
@@ -427,6 +465,7 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
         fun onPageSuccess(index: Int, finished: Int, downloaded: Int, total: Int) {}
         fun onPageFailure(index: Int, error: String?, finished: Int, downloaded: Int, total: Int) {}
         fun onFinish(finished: Int, downloaded: Int, total: Int, failed: Boolean) {}
+        fun onArchiveProgress(done: Int, total: Int) {}
         fun onPageReady(index: Int) {}
     }
 

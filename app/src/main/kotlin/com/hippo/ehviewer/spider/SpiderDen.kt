@@ -64,6 +64,8 @@ import io.ktor.client.statement.request
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.ensureActive
 import okio.Path
 import okio.Path.Companion.toOkioPath
 import splitties.init.appCtx
@@ -84,6 +86,16 @@ class SpiderDen(val info: GalleryInfo) {
     private var tempDownloadDir: Path? = null
     private val saveAsCbz = Settings.saveAsCbz.value
     private val archiveName = "$gid.cbz"
+
+    /**
+     * Where the archive is built before it is published.
+     *
+     * A write that is interrupted -- cancelled, killed, or out of space -- leaves
+     * this behind instead of something under [archiveName], so nothing that reads
+     * an archive can ever open a half-written one. Debris under this name is
+     * removed when the gallery is next opened.
+     */
+    private val archivePartName = "$gid.cbz$ARCHIVE_PART_SUFFIX"
 
     private val lock = ReentrantReadWriteLock()
 
@@ -305,25 +317,43 @@ class SpiderDen(val info: GalleryInfo) {
         }
     }
 
-    suspend fun archive() = saveAsCbz && downloadDir?.run {
-        resolve(archiveName).let { file ->
-            runCatching {
-                archiveTo(file)
-            }.onFailure {
-                file.delete()
-                logcat(it)
-            }.isFailure
-        }
+    /**
+     * Writes the gallery as a single archive, reporting how many entries have
+     * been written so far.
+     *
+     * The archive is built under [archivePartName] and only renamed onto
+     * [archiveName] once every entry is in it. Renaming inside one directory is
+     * atomic, so the final name only ever holds a complete archive: an
+     * interrupted write leaves debris under the part name and the loose images
+     * -- which only [postArchive] removes, and only after this returns -- still
+     * whole. That is what makes cancelling the write safe.
+     */
+    suspend fun archive(progress: suspend (Int, Int) -> Unit = { _, _ -> }) = saveAsCbz && downloadDir?.run {
+        val target = resolve(archiveName)
+        val part = resolve(archivePartName)
+        runCatching {
+            archiveTo(part, progress)
+            part moveTo target
+        }.onFailure {
+            part.delete()
+            logcat(it)
+        }.isFailure
     } == true
 
     // Postpone this to `SpiderQueen.stop` because files may still be in use by reader
-    suspend fun postArchive(): Boolean {
+    suspend fun postArchive(archiveWritten: Boolean): Boolean {
         // An SMB archive is written but not cleaned up yet: reading one back needs a
         // mmap-able descriptor, which the share cannot provide, so the loose images
         // are still the only copy the app can open. Drop this guard once the archive
         // reader can take its input from the in-memory cache instead.
+        //
+        // `archiveWritten` guards the other direction: if this session tried to
+        // rewrite the archive and did not finish, what is under [archiveName] is
+        // the previous one, and the loose images are the copy this session
+        // produced. Deleting them in its favour would throw away the pages that
+        // were just downloaded.
         val dir = downloadDir?.takeUnless { it.isSmb }
-        val archived = saveAsCbz && dir?.find(archiveName) != null
+        val archived = saveAsCbz && archiveWritten && dir?.find(archiveName) != null
         if (archived) {
             dir.list().parMap(concurrency = 10) {
                 if (it.name.matches(FileNameRegex)) {
@@ -348,7 +378,7 @@ class SpiderDen(val info: GalleryInfo) {
      */
     private class ArchiveSource(val fd: Int, val size: Long, val name: String)
 
-    private suspend fun archiveTo(file: Path) = resourceScope {
+    private suspend fun archiveTo(file: Path, progress: suspend (Int, Int) -> Unit = { _, _ -> }) = resourceScope {
         val comicInfoFile = downloadDir!! / COMIC_INFO_FILE
         val comicInfo = closeable {
             if (!comicInfoFile.exists()) {
@@ -376,6 +406,10 @@ class SpiderDen(val info: GalleryInfo) {
             // behind it. Opening a whole gallery up front is what it cannot
             // afford, so write it in bounded chunks.
             for (start in 0 until pages step ARCHIVE_CHUNK) {
+                // Stopping has to be able to stop the writing. It is safe to
+                // abandon here because the archive is still under a name nobody
+                // reads, and the loose images are untouched.
+                coroutineContext.ensureActive()
                 val end = minOf(start + ARCHIVE_CHUNK, pages)
                 resourceScope {
                     val sources = (start until end).parMap { idx ->
@@ -394,6 +428,7 @@ class SpiderDen(val info: GalleryInfo) {
                         sources.size,
                     )
                 }
+                progress(end, pages)
             }
             written += archiveWriterAppend(
                 intArrayOf(comicInfo.fd),
@@ -412,6 +447,11 @@ class SpiderDen(val info: GalleryInfo) {
     suspend fun initDownloadDirIfExist() {
         downloadDir = getGalleryDownloadDir(info).takeIf { it.isDirectory }
         tempDownloadDir = info.tempDownloadDir?.takeIf { it.isDirectory }
+        // An archive that was being written when the app went away is debris: it
+        // is never read, and leaving it would mean it is rewritten from the start
+        // next time anyway. Removing it here is what makes "an interrupted write
+        // is recoverable" true rather than just "detectable".
+        downloadDir?.resolve(archivePartName)?.delete()
     }
 
     suspend fun initDownloadDir() {
@@ -443,6 +483,13 @@ private val sCache by lazy {
     }
 }
 private const val TEMP_SUFFIX = ".tmp"
+
+/**
+ * Suffix for an archive that is still being written. Distinct from [TEMP_SUFFIX]
+ * because the two are cleaned up by different rules, and because a part file
+ * must never be mistaken for a finished archive.
+ */
+private const val ARCHIVE_PART_SUFFIX = ".part"
 
 /**
  * How many images are opened at once while writing an archive. Every source
