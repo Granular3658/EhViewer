@@ -514,7 +514,17 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                                 .getOrDefault(emptyList())
                         }
                     }
-                    val result = candidates.parMapNotNull { getRestoreItem(it) }.also {
+                    // The scan fans out over every candidate, and each one costs
+                    // four SMB operations. Unbounded, a library of a hundred
+                    // directories puts more than a hundred of them in flight at
+                    // once: every one parks an IO-pool thread in the native
+                    // runtime's block_on, and that runtime has two worker threads
+                    // behind it. Past the pool's size nothing new is ever given a
+                    // thread, and the scan stops dead rather than finishing
+                    // slowly. A share serialises the operations anyway -- 45
+                    // directories measured 5.5 MB and 750 ms -- so concurrency
+                    // here buys queueing, not throughput.
+                    val result = candidates.parMapNotNull(concurrency = 4) { getRestoreItem(it) }.also {
                         fillGalleryListByApi(it, EhUrl.referer)
                     }
                     if (result.isEmpty()) {
