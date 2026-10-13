@@ -503,7 +503,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                             // scan that knows where the directory is, and a
                             // download whose name was already right is exactly
                             // the one that still has no location recorded.
-                            DownloadManager.recordDownloadLocation(gid, dirname, location)
+                            DownloadManager.recordDownloadDir(gid, dirname, location)
                             return null
                         }
                         RestoreItem(dirname, gid, token, location)
@@ -554,7 +554,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                         // throughput path.
                         val count = result.parMap(concurrency = 4) {
                             if (it.pages != 0) {
-                                DownloadManager.recordDownloadLocation(it.gid, it.dirname, it.location)
+                                DownloadManager.recordDownloadDir(it.gid, it.dirname, it.location)
                                 DownloadManager.restoreDownload(it.galleryInfo, it.dirname, it.location)
                                 SpiderDen(it.galleryInfo, it.dirname).writeComicInfo(false)
                             }
