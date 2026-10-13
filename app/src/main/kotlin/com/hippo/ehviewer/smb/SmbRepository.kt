@@ -18,6 +18,7 @@ import com.hippo.ehviewer.jni.smbStat
 import com.hippo.ehviewer.jni.smbTest
 import com.hippo.ehviewer.jni.smbWrite
 import com.hippo.ehviewer.jni.smbWriteClose
+import com.hippo.ehviewer.jni.wsdDiscover
 import java.nio.ByteBuffer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -40,6 +41,17 @@ object SmbRepository {
         withTarget(location) { credentials ->
             parseEntries(smbList(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain))
         }
+    }
+
+    /**
+     * Hosts on the local network that answer WS-Discovery.
+     *
+     * Callers should hold a multicast lock: without one the Wi-Fi stack drops
+     * group traffic to save power, the probe goes out and nothing comes back,
+     * and that looks exactly like a network with no hosts on it.
+     */
+    suspend fun discoverHosts(): List<String> = withContext(Dispatchers.IO) {
+        wsdDiscover().toList()
     }
 
     /**

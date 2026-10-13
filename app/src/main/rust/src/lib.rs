@@ -6,6 +6,7 @@ pub mod parser;
 pub mod smb;
 #[cfg(feature = "android-26")]
 mod smb_cache;
+pub mod wsd;
 
 use serde::{Serialize, Serializer, ser::SerializeTuple};
 use std::fmt::{Debug, Display, Formatter};

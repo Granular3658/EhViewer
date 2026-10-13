@@ -75,6 +75,18 @@ pub fn smbTest(
     })
 }
 
+/// Hosts on the local network that answer WS-Discovery.
+///
+/// Blocking for the length of the discovery window, so callers must not be on
+/// the main thread. Returns addresses, deduplicated.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn wsdDiscover(mut env: JNIEnv, _: JClass) -> jobjectArray {
+    jni_throwing(&mut env, |env| {
+        let hosts = crate::wsd::discover()?;
+        marshal_strings(env, hosts.into_iter().map(|host| host.address).collect())
+    })
+}
+
 /// The disk shares a server offers, for a browser that has no share name yet.
 ///
 /// Takes no share, unlike every other entry point here: the caller is asking
