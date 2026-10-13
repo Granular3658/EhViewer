@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -183,6 +184,16 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
     // result would accumulate hosts from every network ever visited. A found
     // row is remembered only when it is asked for, and then it is a typed host.
     var discovered by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    // Back goes up one level, the way it does in any file browser, and only
+    // leaves the screen from the top of the list. Closing the whole screen from
+    // several directories down throws away the path that was just walked.
+    BackHandler(enabled = host != null) {
+        when {
+            subPath.isNotEmpty() -> subPath = subPath.substringBeforeLast('/', "")
+            share != null -> share = null
+            else -> host = null
+        }
+    }
     val context = LocalContext.current
 
     val cannotList = stringResource(id = R.string.local_network_cannot_list)
