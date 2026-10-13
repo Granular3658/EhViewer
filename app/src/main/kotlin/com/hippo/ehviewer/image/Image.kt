@@ -42,6 +42,7 @@ import com.ehviewer.core.files.openFileDescriptor
 import com.ehviewer.core.files.toUri
 import com.ehviewer.core.util.isAtLeastP
 import com.ehviewer.core.util.isAtLeastU
+import com.ehviewer.core.util.logcat
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.coil.AnimatedWebPDrawable
 import com.hippo.ehviewer.coil.BitmapImageWithExtraInfo
@@ -199,6 +200,11 @@ inline fun byteBufferSource(buffer: ByteBuffer, crossinline release: () -> Unit)
     override fun close() {
         if (released.compareAndSet(false, true)) {
             release()
+        } else {
+            // Both routes releasing the same source is what used to free the page
+            // buffer twice, so it is worth knowing when it happens -- and it costs
+            // a line only when it does.
+            logcat("bufferSource") { "a second close of the same page buffer was refused" }
         }
     }
 }
