@@ -176,14 +176,29 @@ fn probe(message_id: &str) -> String {
     )
 }
 
-/// A message id only has to be unique enough for a responder to echo it back.
-/// A UUID would be more correct and needs a dependency to produce.
+/// A message id has to be unique per probe, and it has to *look* like a UUID.
+///
+/// The shape matters more than the uniqueness: a responder that validates the
+/// format drops the whole probe, and a probe that was dropped looks exactly
+/// like a host that is not there. Formatting nanoseconds with a minimum width
+/// produces nineteen digits in the last group, which is not a UUID, and that
+/// is what cost a Windows host its reply.
 fn message_id() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or_default();
-    format!("urn:uuid:00000000-0000-0000-0000-{nanos:012}")
+    // Mixing the pid in keeps probes from one run apart as well, and rotating
+    // it keeps the low bits from being where the clock's own low bits are.
+    let mixed = nanos ^ (std::process::id() as u128).rotate_left(32);
+    format!(
+        "urn:uuid:{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        (mixed >> 96) & 0xffff_ffff,
+        (mixed >> 80) & 0xffff,
+        (mixed >> 64) & 0xffff,
+        (mixed >> 48) & 0xffff,
+        mixed & 0xfff_ffff_ffff
+    )
 }
 
 /// Read one reply. Returns `None` for anything that is not a `ProbeMatches`
@@ -266,22 +281,40 @@ fn metadata_name(endpoint: &str) -> Option<String> {
             return metadata_name(&format!("http://{endpoint}:{PORT}/"));
         }
     };
-    let addresses = (host.as_str(), port).to_socket_addrs().ok()?;
-    let address = addresses.into_iter().next()?;
-    // Why this failed is the whole question when a name is missing, and it is
-    // not recoverable from `None`: a refused connection, an address that does
-    // not route, and a device that answers something else all surface here.
-    let mut stream = TcpStream::connect_timeout(&address, GET_TIMEOUT)
-        .map_err(|err| log::debug!(target: "wsd", "metadata: connect {address} failed: {err}"))
-        .ok()?;
-    stream
-        .set_read_timeout(Some(GET_TIMEOUT))
-        .map_err(|err| log::debug!(target: "wsd", "metadata: read timeout failed: {err}"))
-        .ok()?;
-    stream
-        .set_write_timeout(Some(GET_TIMEOUT))
-        .map_err(|err| log::debug!(target: "wsd", "metadata: write timeout failed: {err}"))
-        .ok()?;
+    // Every remaining exit has to say why it left: a name that is missing
+    // because a connection was refused, because the address did not resolve,
+    // and because the answer was not what was expected are three different
+    // bugs, and `None` tells none of them apart.
+    let addresses = match (host.as_str(), port).to_socket_addrs() {
+        Ok(addresses) => addresses,
+        Err(err) => {
+            log::debug!(target: "wsd", "metadata: {host}:{port} does not resolve: {err}");
+            return None;
+        }
+    };
+    let address = match addresses.into_iter().next() {
+        Some(address) => address,
+        None => {
+            log::debug!(target: "wsd", "metadata: {host}:{port} resolved to nothing");
+            return None;
+        }
+    };
+    let mut stream = match TcpStream::connect_timeout(&address, GET_TIMEOUT) {
+        Ok(stream) => stream,
+        Err(err) => {
+            log::debug!(target: "wsd", "metadata: connect {address} failed: {err}");
+            return None;
+        }
+    };
+    for (what, result) in [
+        ("read", stream.set_read_timeout(Some(GET_TIMEOUT))),
+        ("write", stream.set_write_timeout(Some(GET_TIMEOUT))),
+    ] {
+        if let Err(err) = result {
+            log::debug!(target: "wsd", "metadata: {what} timeout failed: {err}");
+            return None;
+        }
+    }
 
     let message_id = message_id();
     let body = format!(
@@ -306,17 +339,50 @@ fn metadata_name(endpoint: &str) -> Option<String> {
         log::debug!(target: "wsd", "metadata: read from {host}:{port} failed: {err}");
         return None;
     }
-    let separator = response.windows(4).position(|w| w == b"\r\n\r\n")?;
-    let headers = std::str::from_utf8(&response[..separator]).ok()?;
-    let status = headers.lines().next()?.split_whitespace().nth(1)?;
+    let separator = match response.windows(4).position(|w| w == b"\r\n\r\n") {
+        Some(separator) => separator,
+        None => {
+            log::debug!(
+                target: "wsd",
+                "metadata: {host}:{port} sent {} bytes with no header separator",
+                response.len()
+            );
+            return None;
+        }
+    };
+    let headers = match std::str::from_utf8(&response[..separator]) {
+        Ok(headers) => headers,
+        Err(err) => {
+            log::debug!(target: "wsd", "metadata: {host}:{port} sent a non-UTF-8 header: {err}");
+            return None;
+        }
+    };
+    let status = match headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+    {
+        Some(status) => status.to_owned(),
+        None => {
+            log::debug!(
+                target: "wsd",
+                "metadata: {host}:{port} sent an unreadable status line: {:?}",
+                headers.lines().next()
+            );
+            return None;
+        }
+    };
     if status != "200" {
-        log::debug!(
-            target: "wsd",
-            "metadata: {host}:{port} answered HTTP {status}"
-        );
+        log::debug!(target: "wsd", "metadata: {host}:{port} answered HTTP {status}");
         return None;
     }
-    let xml = std::str::from_utf8(&response[separator + 4..]).ok()?;
+    let xml = match std::str::from_utf8(&response[separator + 4..]) {
+        Ok(xml) => xml,
+        Err(err) => {
+            log::debug!(target: "wsd", "metadata: {host}:{port} sent a non-UTF-8 body: {err}");
+            return None;
+        }
+    };
     let name = parse_metadata_name(xml);
     if name.is_none() {
         log::debug!(target: "wsd", "metadata: {host}:{port} sent no name");
@@ -420,6 +486,23 @@ mod tests {
     /// reason to drop it -- the port belongs to metadata only, and SMB is
     /// always contacted on the port the browser was configured with.
     const WINDOWS: &str = r#"<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:wsd="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:wsdp="http://schemas.xmlsoap.org/ws/2006/02/devprof" xmlns:pub="http://schemas.microsoft.com/windows/pub/2005/07"><soap:Header><wsa:To>http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous</wsa:To><wsa:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/ProbeMatches</wsa:Action><wsa:MessageID>urn:uuid:f7a189d7-649a-48e0-bf29-4d7fedb24772</wsa:MessageID><wsa:RelatesTo>urn:uuid:48326a7c-2380-44ab-b63d-4e06645d4ce1</wsa:RelatesTo><wsd:AppSequence InstanceId="212" SequenceId="urn:uuid:45657af3-1a54-40a2-90c6-967c7d2329fb" MessageNumber="21"></wsd:AppSequence></soap:Header><soap:Body><wsd:ProbeMatches><wsd:ProbeMatch><wsa:EndpointReference><wsa:Address>urn:uuid:6b0383b4-9e60-4c45-88cf-4c0e9e3920f5</wsa:Address></wsa:EndpointReference><wsd:Types>wsdp:Device pub:Computer</wsd:Types><wsd:XAddrs>http://192.168.1.132:5357/6b0383b4-9e60-4c45-88cf-4c0e9e3920f5/</wsd:XAddrs><wsd:MetadataVersion>12</wsd:MetadataVersion></wsd:ProbeMatch></wsd:ProbeMatches></soap:Body></soap:Envelope>"#;
+
+    #[test]
+    fn message_ids_are_uuid_shaped_and_distinct() {
+        // A responder that validates the format drops the whole probe, and a
+        // dropped probe is indistinguishable from a host that is not there.
+        let id = message_id();
+        let digits = id.strip_prefix("urn:uuid:").expect("a urn:uuid prefix");
+        let groups: Vec<&str> = digits.split('-').collect();
+        assert_eq!(groups.len(), 5, "{id}");
+        for (group, width) in groups.iter().zip([8, 4, 4, 4, 12]) {
+            assert_eq!(group.len(), width, "group {group} of {id}");
+            assert!(group.chars().all(|c| c.is_ascii_hexdigit()), "{id}");
+        }
+        // Two probes in the same run must not share an id: a responder echoes
+        // it back, and a collision would let one host's reply answer another's.
+        assert_ne!(message_id(), message_id());
+    }
 
     #[test]
     fn reads_a_windows_10_match() {
