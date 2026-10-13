@@ -79,10 +79,21 @@ pub fn smbTest(
 ///
 /// Blocking for the length of the discovery window, so callers must not be on
 /// the main thread. Returns one `address` + tab + name per host, deduplicated.
+///
+/// Takes the address of the interface to listen on. Naming it is what makes the
+/// replies arrive on a device with more than one interface: joining the group
+/// without one lets the kernel choose, and the choice is not always the
+/// interface the answers come back on.
 #[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
-pub fn wsdDiscover(mut env: JNIEnv, _: JClass) -> jobjectArray {
+pub fn wsdDiscover(mut env: JNIEnv, _: JClass, interface: JString) -> jobjectArray {
     jni_throwing(&mut env, |env| {
-        let hosts = crate::wsd::discover()?;
+        let interface: String = env.get_string(&interface)?.into();
+        // An empty address means "any interface", which is what the Rust side
+        // does on its own; passing anything else pins it.
+        let interface = (!interface.is_empty())
+            .then(|| interface.parse::<std::net::Ipv4Addr>().ok())
+            .flatten();
+        let hosts = crate::wsd::discover(interface)?;
         marshal_strings(
             env,
             hosts

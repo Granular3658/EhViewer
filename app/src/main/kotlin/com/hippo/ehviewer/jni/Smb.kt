@@ -26,10 +26,12 @@ external fun smbShares(
 /**
  * Hosts on the local network that answer WS-Discovery.
  *
- * Blocking for the length of the discovery window, so this must not be called
- * on the main thread. Returns addresses.
+ * [address] is the address of the interface to listen on, or empty for any.
+ * Naming it matters on a device with more than one: joining the multicast
+ * group without one lets the kernel choose, and the choice is not always the
+ * interface the answers come back on.
  */
-external fun wsdDiscover(): Array<String>
+external fun wsdDiscover(address: String): Array<String>
 
 /** Each entry is "1:name" for a directory and "0:name" for a regular file. */
 external fun smbList(

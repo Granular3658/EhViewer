@@ -1,6 +1,7 @@
 package com.hippo.ehviewer.ui.screen
 
 import android.content.Context
+import android.net.ConnectivityManager
 import android.net.wifi.WifiManager
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -161,7 +162,7 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
             val lock = wifi?.createMulticastLock("ehviewer-wsd")?.apply { setReferenceCounted(false) }
             val found = runCatching {
                 lock?.acquire()
-                SmbRepository.discoverHosts()
+                SmbRepository.discoverHosts(wifiInterfaceAddress(context))
             }.onFailure { launchSnackbar(cannotList) }.getOrElse { emptyList() }
             runCatching { lock?.takeIf { it.isHeld }?.release() }
             if (found.isNotEmpty()) {
@@ -348,6 +349,29 @@ private fun Breadcrumb(
             )
         }
     }
+}
+
+/**
+ * The address of the interface a probe should be sent on.
+ *
+ * Handed to the native side so it joins the multicast group on this interface
+ * and not one the kernel picks: with more than one interface up the pick is
+ * not necessarily the one the answers come back on, and the symptom is a probe
+ * that goes out into silence. Empty lets the native side choose, which is
+ * right when there is nothing better to say.
+ */
+private fun wifiInterfaceAddress(context: Context): String {
+    val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        ?: return ""
+    val link = connectivity.activeNetwork?.let { connectivity.getLinkProperties(it) } ?: return ""
+    // IPv4 only: the discovery group is IPv4, and an IPv6 link-local address
+    // cannot be joined to it.
+    return link.linkAddresses
+        .map { it.address }
+        .filterIsInstance<java.net.Inet4Address>()
+        .firstOrNull()
+        ?.hostAddress
+        .orEmpty()
 }
 
 @Composable
