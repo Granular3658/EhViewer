@@ -77,6 +77,7 @@ import com.hippo.ehviewer.gallery.unblock
 import com.hippo.ehviewer.gallery.useArchivePageLoader
 import com.hippo.ehviewer.gallery.useDwarfsPageLoader
 import com.hippo.ehviewer.gallery.useEhPageLoader
+import com.hippo.ehviewer.gallery.useImagesPageLoader
 import com.hippo.ehviewer.ui.MainActivity
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.theme.EhTheme
@@ -112,6 +113,16 @@ sealed interface ReaderScreenArgs {
 
     @Serializable
     data class Archive(val path: String) : ReaderScreenArgs
+
+    /**
+     * A gallery made of the images in one directory, in the order given.
+     *
+     * The paths are the pages themselves rather than the directory, so the
+     * order is the caller's and the page a tap opened is the page that was
+     * tapped.
+     */
+    @Serializable
+    data class Images(val paths: List<String>, val startPage: Int) : ReaderScreenArgs
 }
 
 @Composable
@@ -397,6 +408,11 @@ suspend inline fun <T> usePageLoader(args: ReaderScreenArgs, crossinline block: 
         } else {
             useEhPageLoader(info, page, block)
         }
+    }
+    is ReaderScreenArgs.Images -> {
+        val paths = args.paths.map { it.toPath() }
+        // The directory the images came from, which is what the gallery is.
+        useImagesPageLoader(paths, paths.first().parent?.name.orEmpty(), args.startPage, block)
     }
     is ReaderScreenArgs.Archive -> {
         val path = args.path.toPath()
