@@ -29,10 +29,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -45,6 +47,7 @@ import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.download.invalidateDownloadLocationCache
 import com.hippo.ehviewer.smb.SmbLocation
 import com.hippo.ehviewer.smb.SmbRepository
+import com.hippo.ehviewer.ui.LocalSnackBarHostState
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.main.NavigationIcon
 import com.hippo.ehviewer.ui.navToReader
@@ -52,7 +55,6 @@ import com.hippo.ehviewer.ui.settings.SmbLocationDialog
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
-import kotlinx.coroutines.flow.collectAsState
 import kotlinx.coroutines.launch
 import moe.tarsin.snackbar
 
@@ -89,7 +91,14 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
     var savingLocation by remember { mutableStateOf<SmbLocation?>(null) }
 
     val cannotList = stringResource(id = R.string.local_network_cannot_list)
-    fun launchSnackbar(message: String) = launch { snackbar(message) }
+    val alreadyAdded = stringResource(id = R.string.settings_download_location_already_added)
+    // `snackbar` takes the host as a context receiver, so it has to be called
+    // with that context in hand rather than from a plain local function.
+    val snackbarHostState = LocalSnackBarHostState.current
+    val scope = rememberCoroutineScope()
+    val launchSnackbar: (String) -> Unit = { message ->
+        scope.launch { with(snackbarHostState) { snackbar(message) } }
+    }
 
     // The listing for the level on screen, or null while it is being fetched.
     var names by remember { mutableStateOf<List<String>?>(null) }
@@ -108,11 +117,11 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
         val s = share
         if (s == null) {
             names = runCatching { SmbRepository.shares(h, port) }
-                .onFailure { snackbar(cannotList) }
+                .onFailure { with(snackbarHostState) { snackbar(cannotList) } }
                 .getOrElse { emptyList() }
         } else {
             entries = runCatching { SmbRepository.list(SmbLocation(h, port, s, subPath)) }
-                .onFailure { snackbar(cannotList) }
+                .onFailure { with(snackbarHostState) { snackbar(cannotList) } }
                 .getOrElse { emptyList() }
         }
     }
@@ -209,7 +218,7 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
             onSaved = { saved ->
                 val uriStr = saved.uriString
                 if (uriStr in Settings.downloadLocations.value) {
-                    launchSnackbar(stringResource(id = R.string.settings_download_location_already_added))
+                    launchSnackbar(alreadyAdded)
                 } else {
                     Settings.downloadLocations.value = Settings.downloadLocations.value + uriStr
                     Settings.smbLocations.value = Settings.smbLocations.value + uriStr
