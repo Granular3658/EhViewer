@@ -41,6 +41,15 @@ object SmbRepository {
         }
     }
 
+    /**
+     * The disk shares a server offers. Takes no share, because asking what
+     * shares exist is what a caller does when it has no share name yet.
+     */
+    suspend fun shares(host: String, port: Int): List<String> = withContext(Dispatchers.IO) {
+        val credentials = SmbCredentialStore.find(host, port) ?: SmbCredentials("", "", "")
+        smbShares(host, port, credentials.user, credentials.password, credentials.domain).toList()
+    }
+
     suspend fun stat(location: SmbLocation): Stat = withContext(Dispatchers.IO) {
         withTarget(location) { credentials ->
             val raw = smbStat(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain)

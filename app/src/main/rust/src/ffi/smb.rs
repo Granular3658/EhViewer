@@ -48,6 +48,15 @@ fn marshal_entries(env: &mut JNIEnv, entries: Vec<smb::Entry>) -> Result<jobject
     Ok(array.into_raw())
 }
 
+fn marshal_strings(env: &mut JNIEnv, values: Vec<String>) -> Result<jobjectArray> {
+    let array = env.new_object_array(values.len() as i32, "java/lang/String", JObject::null())?;
+    for (i, value) in values.iter().enumerate() {
+        let element = env.new_string(value)?;
+        env.set_object_array_element(&array, i as i32, element)?;
+    }
+    Ok(array.into_raw())
+}
+
 #[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
 pub fn smbTest(
     mut env: JNIEnv,
@@ -63,6 +72,35 @@ pub fn smbTest(
     jni_throwing(&mut env, |env| {
         let target = read_target(env, &host, port, &share, &sub, &user, &pass, &domain)?;
         Ok(smb::list_dir(&target)?.len() as jlong)
+    })
+}
+
+/// The disk shares a server offers, for a browser that has no share name yet.
+///
+/// Takes no share, unlike every other entry point here: the caller is asking
+/// what shares exist, so it cannot name one.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbShares(
+    mut env: JNIEnv,
+    _: JClass,
+    host: JString,
+    port: jint,
+    user: JString,
+    pass: JString,
+    domain: JString,
+) -> jobjectArray {
+    jni_throwing(&mut env, |env| {
+        let host: String = env.get_string(&host)?.into();
+        let port = if port > 0 {
+            port as u16
+        } else {
+            smb::DEFAULT_PORT
+        };
+        let user: String = env.get_string(&user)?.into();
+        let pass: String = env.get_string(&pass)?.into();
+        let domain: String = env.get_string(&domain)?.into();
+        let shares = smb::list_shares(&host, port, &user, &pass, &domain)?;
+        marshal_strings(env, shares)
     })
 }
 

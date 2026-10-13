@@ -14,6 +14,15 @@ external fun smbTest(
     domain: String,
 ): Long
 
+/** Returns the disk shares the server offers, admin shares excluded. */
+external fun smbShares(
+    host: String,
+    port: Int,
+    user: String,
+    pass: String,
+    domain: String,
+): Array<String>
+
 /** Each entry is "1:name" for a directory and "0:name" for a regular file. */
 external fun smbList(
     host: String,

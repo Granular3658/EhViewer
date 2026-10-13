@@ -77,6 +77,22 @@ object SmbCredentialStore {
         decrypt(value)
     }.getOrNull()
 
+    /**
+     * The credentials stored for a host, whichever share they were entered for.
+     *
+     * The store is keyed by host, port *and* share, but a browser asks about a
+     * host before it knows a share name -- listing the shares is how it finds
+     * one. Any credential for that host will do: a server authenticates the
+     * session, not the share.
+     */
+    @Synchronized
+    fun find(host: String, port: Int): SmbCredentials? = runCatching {
+        val prefix = "smb://$host:$port/"
+        val json = JSONObject(Settings.smbCredentials.value)
+        val key = json.keys().asSequence().firstOrNull { it.startsWith(prefix) } ?: return null
+        decrypt(json.getString(key))
+    }.getOrNull()
+
     @Synchronized
     fun put(location: SmbLocation, credentials: SmbCredentials) {
         val json = JSONObject(Settings.smbCredentials.value)
