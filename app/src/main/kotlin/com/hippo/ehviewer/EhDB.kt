@@ -123,6 +123,22 @@ object EhDB {
     val downloadsCountByArtist
         get() = db.downloadsDao().countByArtist()
 
+    val downloadsCountByLocation
+        get() = db.downloadsDao().countByLocation()
+
+    /**
+     * Records which location holds a download's directory.
+     *
+     * Written from the places that have just worked it out, so it costs a write
+     * and not a search. The dirname is passed along rather than read back so this
+     * can also create the row, which is the case when a gallery is downloaded for
+     * the first time.
+     */
+    suspend fun putDownloadLocation(gid: Long, dirname: String, location: String) {
+        val dao = db.downloadDirnameDao()
+        dao.upsert(DownloadDirname(gid, dirname, location))
+    }
+
     suspend fun getAllDownloadLabelList() = db.downloadLabelDao().list()
 
     suspend fun addDownloadLabel(raw: DownloadLabel): DownloadLabel {

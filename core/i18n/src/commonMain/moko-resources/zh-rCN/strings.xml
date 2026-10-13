@@ -245,7 +245,7 @@
     <string name="select_grouping_mode_artist">作者</string>
     <string name="select_grouping_mode_location">保存位置</string>
     <string name="unknown_artists">未知</string>
-    <string name="unknown_location">其他位置</string>
+    <string name="unknown_location">未知位置</string>
     <!-- Download label -->
     <string name="add">添加</string>
     <string name="new_label_title">新标签</string>
