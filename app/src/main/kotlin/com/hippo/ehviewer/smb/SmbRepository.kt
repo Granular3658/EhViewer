@@ -13,6 +13,7 @@ import com.hippo.ehviewer.jni.smbRead
 import com.hippo.ehviewer.jni.smbReleaseMemfd
 import com.hippo.ehviewer.jni.smbRename
 import com.hippo.ehviewer.jni.smbSetCacheLimitMb
+import com.hippo.ehviewer.jni.smbShares
 import com.hippo.ehviewer.jni.smbStat
 import com.hippo.ehviewer.jni.smbTest
 import com.hippo.ehviewer.jni.smbWrite
