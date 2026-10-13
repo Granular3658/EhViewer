@@ -1,6 +1,7 @@
 package com.hippo.ehviewer.ui.reader
 
 import android.content.Context
+import android.util.Log
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
@@ -189,6 +190,7 @@ fun AnimatedVisibilityScope.ReaderScreen(args: ReaderScreenArgs, navigator: Dest
                 // reader's composition goes away, which is the moment to keep it.
                 DisposableEffect(loader) {
                     onDispose {
+                        Log.d("ehviewer-images", "leaving ${System.identityHashCode(loader)} at ${loader.startPage}")
                         (args as? ReaderScreenArgs.Images)?.let {
                             lastPageByDirectory[it.directory] = loader.startPage
                         }
@@ -245,6 +247,17 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
     val lazyListState = rememberLazyListState(LazyLayoutCacheWindow(SCROLL_FRACTION, SCROLL_FRACTION), pageLoader.startPage)
     val pagerState = rememberPagerState(pageLoader.startPage) { pageLoader.size }
     val syncState = rememberSliderPagerDoubleSyncState(lazyListState, pagerState, pageLoader)
+    // Where this gallery is, kept as it is read. Writing it on the way out is
+    // too late: the listing is composed again and reads its position before the
+    // reader's teardown runs, so it has to be there before that.
+    pageLoader.positionKey?.let { key ->
+        LaunchedEffect(key) {
+            snapshotFlow { syncState.sliderValue }.collect { value ->
+                lastPageByDirectory[key] = value - 1
+                Log.d("ehviewer-images", "kept page ${value - 1} for $key")
+            }
+        }
+    }
     var appbarVisible by remember { mutableStateOf(false) }
     val isWebtoon by rememberUpdatedState(ReadingModeType.isWebtoon(readingMode))
     val focusRequester = remember { FocusRequester() }
