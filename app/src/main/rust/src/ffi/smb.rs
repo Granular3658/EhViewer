@@ -2,7 +2,7 @@
 
 use super::jvm::jni_throwing;
 use crate::smb::{self, DEFAULT_PORT, Target};
-use anyhow::{Result, ensure};
+use anyhow::{Context as _, Result, ensure};
 use jni::JNIEnv;
 use jni::objects::{JByteBuffer, JClass, JObject, JString};
 use jni::sys::{jint, jlong, jlongArray, jobject, jobjectArray};
@@ -87,12 +87,19 @@ pub fn smbTest(
 #[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
 pub fn wsdDiscover(mut env: JNIEnv, _: JClass, interface: JString) -> jobjectArray {
     jni_throwing(&mut env, |env| {
-        let interface: String = env.get_string(&interface)?.into();
-        // An empty address means "any interface", which is what the Rust side
-        // does on its own; passing anything else pins it.
-        let interface = (!interface.is_empty())
-            .then(|| interface.parse::<std::net::Ipv4Addr>().ok())
-            .flatten();
+        let address: String = env.get_string(&interface)?.into();
+        // A missing or unparseable interface here is not something to fall back
+        // from: letting the kernel choose is what sent the probe out of the
+        // cellular interface and the replies to a socket nobody joined.
+        let interface = if address.is_empty() {
+            None
+        } else {
+            Some(
+                address
+                    .parse::<std::net::Ipv4Addr>()
+                    .with_context(|| format!("{address} is not an IPv4 address"))?,
+            )
+        };
         let hosts = crate::wsd::discover(interface)?;
         marshal_strings(
             env,

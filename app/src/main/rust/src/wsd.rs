@@ -148,7 +148,9 @@ pub fn discover(interface: Option<Ipv4Addr>) -> Result<Vec<Host>> {
         host.name = metadata_name(&host.xaddrs).or_else(|| metadata_name(&host.address));
         log::debug!(
             target: "wsd",
-            "metadata name for {}: {:?}",
+            "metadata for {} (tried {:?} then {:?}) = {:?}",
+            host.address,
+            host.xaddrs,
             host.address,
             host.name
         );
@@ -489,6 +491,30 @@ mod tests {
         assert_eq!(
             endpoint_parts("http://[fe80::1]:3702/uuid"),
             Some(("fe80::1".to_owned(), 3702, "/uuid".to_owned()))
+        );
+    }
+
+    #[test]
+    fn parses_the_xaddr_a_wsdd2_actually_advertises() {
+        let parts =
+            endpoint_parts("http://192.168.1.240:3702/7e24ab30-200e-4fca-a527-e10fd7ea4d55");
+        assert_eq!(
+            parts,
+            Some((
+                "192.168.1.240".to_owned(),
+                3702,
+                "/7e24ab30-200e-4fca-a527-e10fd7ea4d55".to_owned()
+            ))
+        );
+        let parts =
+            endpoint_parts("http://192.168.1.132:5357/6b0383b4-9e60-4c45-88cf-4c0e9e3920f5/");
+        assert_eq!(
+            parts,
+            Some((
+                "192.168.1.132".to_owned(),
+                5357,
+                "/6b0383b4-9e60-4c45-88cf-4c0e9e3920f5/".to_owned()
+            ))
         );
     }
 
