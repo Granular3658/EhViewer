@@ -1,0 +1,400 @@
+package com.hippo.ehviewer.ui.screen
+
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.ehviewer.core.i18n.R
+import com.hippo.ehviewer.Settings
+import com.hippo.ehviewer.download.invalidateDownloadLocationCache
+import com.hippo.ehviewer.smb.SmbLocation
+import com.hippo.ehviewer.smb.SmbRepository
+import com.hippo.ehviewer.ui.Screen
+import com.hippo.ehviewer.ui.main.NavigationIcon
+import com.hippo.ehviewer.ui.navToReader
+import com.hippo.ehviewer.ui.settings.SmbLocationDialog
+import com.ramcosta.composedestinations.annotation.Destination
+import com.ramcosta.composedestinations.annotation.RootGraph
+import com.ramcosta.composedestinations.navigation.DestinationsNavigator
+import kotlinx.coroutines.flow.collectAsState
+import kotlinx.coroutines.launch
+import moe.tarsin.snackbar
+
+private const val DEFAULT_SMB_PORT = 445
+
+/** Extensions [navToReader] knows how to open as a gallery. */
+private val ARCHIVE_SUFFIXES = listOf(".zip", ".cbz", ".dwarfs")
+
+private fun isArchive(name: String) = ARCHIVE_SUFFIXES.any { name.endsWith(it, ignoreCase = true) }
+
+private fun String.appendSegment(segment: String) = if (isEmpty()) segment else "$this/$segment"
+
+/**
+ * A browser for the SMB shares on the local network.
+ *
+ * Three levels, each a list: the hosts that have been entered, the shares a
+ * host offers, and the directories inside a share. The breadcrumb is that
+ * stack read out loud, so tapping a segment returns to that level.
+ *
+ * Nothing discovers hosts yet, so a host arrives by being typed in and is then
+ * remembered. Reading a share needs credentials, and they are asked for only
+ * after a listing fails: the host is usually already configured for downloads,
+ * so asking up front would ask for something the app often already has.
+ */
+@Destination<RootGraph>
+@Composable
+fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator) = Screen(navigator) {
+    val savedHosts by Settings.localNetworkHosts.collectAsState()
+    var host by rememberSaveable { mutableStateOf<String?>(null) }
+    var port by rememberSaveable { mutableIntStateOf(DEFAULT_SMB_PORT) }
+    var share by rememberSaveable { mutableStateOf<String?>(null) }
+    var subPath by rememberSaveable { mutableStateOf("") }
+    var addingHost by remember { mutableStateOf(false) }
+    var savingLocation by remember { mutableStateOf<SmbLocation?>(null) }
+
+    val cannotList = stringResource(id = R.string.local_network_cannot_list)
+    fun launchSnackbar(message: String) = launch { snackbar(message) }
+
+    // The listing for the level on screen, or null while it is being fetched.
+    var names by remember { mutableStateOf<List<String>?>(null) }
+    var entries by remember { mutableStateOf<List<SmbRepository.Entry>?>(null) }
+
+    val location = remember(host, port, share, subPath) {
+        val h = host
+        val s = share
+        if (h != null && s != null) SmbLocation(h, port, s, subPath) else null
+    }
+
+    LaunchedEffect(host, port, share, subPath) {
+        names = null
+        entries = null
+        val h = host ?: return@LaunchedEffect
+        val s = share
+        if (s == null) {
+            names = runCatching { SmbRepository.shares(h, port) }
+                .onFailure { snackbar(cannotList) }
+                .getOrElse { emptyList() }
+        } else {
+            entries = runCatching { SmbRepository.list(SmbLocation(h, port, s, subPath)) }
+                .onFailure { snackbar(cannotList) }
+                .getOrElse { emptyList() }
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            Column {
+                TopAppBar(
+                    title = { Text(text = stringResource(id = R.string.local_network)) },
+                    navigationIcon = { NavigationIcon() },
+                    actions = {
+                        if (host == null) {
+                            IconButton(onClick = { addingHost = true }) {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = stringResource(id = R.string.local_network_add_host),
+                                )
+                            }
+                        }
+                    },
+                )
+                Breadcrumb(
+                    host = host,
+                    share = share,
+                    subPath = subPath,
+                    onHost = { host = null; share = null; subPath = "" },
+                    onShare = { share = null; subPath = "" },
+                    onSegment = { subPath = it },
+                )
+            }
+        },
+    ) { paddingValues ->
+        Box(modifier = Modifier.padding(paddingValues).fillMaxSize()) {
+            when {
+                host == null -> HostList(
+                    hosts = savedHosts,
+                    onOpen = { value ->
+                        val parts = value.split(':')
+                        host = parts.first()
+                        port = parts.getOrNull(1)?.toIntOrNull() ?: DEFAULT_SMB_PORT
+                        share = null
+                        subPath = ""
+                    },
+                    onRemove = { value -> Settings.localNetworkHosts.value = Settings.localNetworkHosts.value - value },
+                )
+
+                share == null -> NameList(names = names, onOpen = { name -> share = name; subPath = "" })
+
+                else -> EntryList(
+                    entries = entries,
+                    onOpenDirectory = { name -> subPath = subPath.appendSegment(name) },
+                    onOpenFile = { name ->
+                        val current = location
+                        if (current != null && isArchive(name)) {
+                            navToReader(current.copy(subPath = current.subPath.appendSegment(name)).uriString)
+                        }
+                    },
+                    onAddToDownloadLocations = { name ->
+                        val current = location
+                        if (current != null) {
+                            savingLocation = current.copy(subPath = current.subPath.appendSegment(name))
+                        }
+                    },
+                )
+            }
+        }
+    }
+
+    if (addingHost) {
+        AddHostDialog(
+            onDismiss = { addingHost = false },
+            onAdd = { value ->
+                Settings.localNetworkHosts.value = Settings.localNetworkHosts.value + value
+                addingHost = false
+            },
+        )
+    }
+
+    // The dialog the download settings use, so a share added here behaves
+    // exactly like one typed in there, including which lists it lands in.
+    savingLocation?.let { target ->
+        SmbLocationDialog(
+            initial = target,
+            onDismiss = { savingLocation = null },
+            showMessage = { launchSnackbar(it) },
+            onSaved = { saved ->
+                val uriStr = saved.uriString
+                if (uriStr in Settings.downloadLocations.value) {
+                    launchSnackbar(stringResource(id = R.string.settings_download_location_already_added))
+                } else {
+                    Settings.downloadLocations.value = Settings.downloadLocations.value + uriStr
+                    Settings.smbLocations.value = Settings.smbLocations.value + uriStr
+                    invalidateDownloadLocationCache()
+                    savingLocation = null
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun Breadcrumb(
+    host: String?,
+    share: String?,
+    subPath: String,
+    onHost: () -> Unit,
+    onShare: () -> Unit,
+    onSegment: (String) -> Unit,
+) {
+    if (host == null) return
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = host,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.clickable(onClick = onHost),
+        )
+        if (share != null) {
+            Text(text = " / ")
+            Text(
+                text = share,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable(onClick = onShare),
+            )
+        }
+        var accumulated = ""
+        for (segment in subPath.split('/').filter { it.isNotEmpty() }) {
+            accumulated = accumulated.appendSegment(segment)
+            val target = accumulated
+            Text(text = " / ")
+            Text(
+                text = segment,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable { onSegment(target) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun HostList(hosts: Set<String>, onOpen: (String) -> Unit, onRemove: (String) -> Unit) {
+    if (hosts.isEmpty()) {
+        Empty(text = stringResource(id = R.string.local_network_no_hosts))
+        return
+    }
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        items(hosts.sorted()) { value ->
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .clickable { onOpen(value) }
+                    .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(text = value, modifier = Modifier.weight(1f))
+                TextButton(onClick = { onRemove(value) }) {
+                    Text(text = stringResource(id = R.string.settings_download_remove_location))
+                }
+            }
+            HorizontalDivider()
+        }
+    }
+}
+
+@Composable
+private fun NameList(names: List<String>?, onOpen: (String) -> Unit) {
+    if (names == null) {
+        Empty(text = "")
+        return
+    }
+    if (names.isEmpty()) {
+        Empty(text = stringResource(id = R.string.local_network_empty))
+        return
+    }
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        items(names) { name ->
+            Text(
+                text = "$name/",
+                modifier = Modifier.fillMaxWidth()
+                    .clickable { onOpen(name) }
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+            )
+            HorizontalDivider()
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun EntryList(
+    entries: List<SmbRepository.Entry>?,
+    onOpenDirectory: (String) -> Unit,
+    onOpenFile: (String) -> Unit,
+    onAddToDownloadLocations: (String) -> Unit,
+) {
+    if (entries == null) {
+        Empty(text = "")
+        return
+    }
+    if (entries.isEmpty()) {
+        Empty(text = stringResource(id = R.string.local_network_empty))
+        return
+    }
+    var menuFor by remember { mutableStateOf<String?>(null) }
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        items(entries, key = { it.name }) { entry ->
+            Box {
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .combinedClickable(
+                            onClick = {
+                                if (entry.isDirectory) onOpenDirectory(entry.name) else onOpenFile(entry.name)
+                            },
+                            onLongClick = { if (entry.isDirectory) menuFor = entry.name },
+                        )
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = if (entry.isDirectory) "${entry.name}/" else entry.name,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (!entry.isDirectory) {
+                        Text(text = humanSize(entry.size), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                DropdownMenu(expanded = menuFor == entry.name, onDismissRequest = { menuFor = null }) {
+                    DropdownMenuItem(
+                        text = { Text(text = stringResource(id = R.string.local_network_add_to_download_locations)) },
+                        onClick = {
+                            menuFor = null
+                            onAddToDownloadLocations(entry.name)
+                        },
+                    )
+                }
+            }
+            HorizontalDivider()
+        }
+    }
+}
+
+@Composable
+private fun Empty(text: String) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(text = text)
+    }
+}
+
+private fun humanSize(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> "${bytes / 1024} KiB"
+    bytes < 1024L * 1024 * 1024 -> "${bytes / (1024 * 1024)} MiB"
+    else -> "${bytes / (1024L * 1024 * 1024)} GiB"
+}
+
+@Composable
+private fun AddHostDialog(onDismiss: () -> Unit, onAdd: (String) -> Unit) {
+    var value by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(text = stringResource(id = R.string.local_network_add_host)) },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { value = it },
+                label = { Text(text = stringResource(id = R.string.local_network_host)) },
+                singleLine = true,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onAdd(value.trim()) }, enabled = value.isNotBlank()) {
+                Text(text = stringResource(id = android.R.string.ok))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(text = stringResource(id = android.R.string.cancel))
+            }
+        },
+    )
+}

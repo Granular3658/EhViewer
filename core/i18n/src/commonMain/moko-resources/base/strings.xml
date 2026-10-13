@@ -35,6 +35,14 @@
     <string name="favourite">Favourite</string>
     <string name="history">History</string>
     <string name="downloads">Downloads</string>
+    <string name="local_network">Local network</string>
+    <string name="local_network_add_host">Add host</string>
+    <string name="local_network_host">Host address</string>
+    <string name="local_network_no_hosts">No hosts yet. Add one by address.</string>
+    <string name="local_network_add_to_download_locations">Add to download locations</string>
+    <string name="local_network_cannot_list">Could not read this location</string>
+    <string name="local_network_empty">Empty</string>
+    <string name="local_network_shares_of">Shares</string>
     <string name="settings">Settings</string>
     <string name="username">Username</string>
     <string name="password">Password</string>
