@@ -18,16 +18,15 @@ enum class DownloadsFilterMode(
         }
     }),
     LOCATION(flag = 2, take = { info, label ->
-        // Where a download lives is not stored on it: it is whichever configured
-        // location holds its directory, which is what `downloadDir` resolves (and
-        // caches). A location is therefore identified by that path, and the label
-        // is its string form.
-        val location = info.downloadDir?.parent?.toString()
+        // Which location holds a download is recorded on it, not searched for:
+        // the places that resolve a directory write down what they found, and
+        // the list reads that. A download nothing has been written down for --
+        // one that predates the record, or one whose location has since been
+        // taken off the list -- is unknown, and is deliberately not looked up
+        // again here: what is being filtered is the list, not the share.
+        val location = info.location?.takeIf { saved -> allDownloadLocations.any { it.toString() == saved } }
         if (null == label) {
-            // Saved somewhere that is no longer a configured location -- a
-            // directory that was removed from the list, or the default the
-            // resolver falls back to. The counterpart of an unknown artist.
-            location != null && allDownloadLocations.none { it.toString() == location }
+            location == null
         } else {
             label == "" || location == label
         }

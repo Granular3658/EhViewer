@@ -262,7 +262,7 @@
     <string name="select_grouping_mode_artist">Artist</string>
     <string name="select_grouping_mode_location">Save location</string>
     <string name="unknown_artists">Unknown</string>
-    <string name="unknown_location">Other locations</string>
+    <string name="unknown_location">Unknown location</string>
     <!-- Download label -->
     <string name="add">Add</string>
     <string name="new_label_title">New label</string>

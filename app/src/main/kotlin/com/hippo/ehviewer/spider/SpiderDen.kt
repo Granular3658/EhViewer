@@ -673,8 +673,10 @@ suspend fun GalleryInfo.downloadDirname(): String {
  */
 suspend fun getGalleryDownloadDir(info: GalleryInfo): Path {
     val dirname = info.downloadDirname()
-    return allDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
+    val dir = allDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
         ?: (defaultDownloadLocation / dirname)
+    dir.recordDownloadLocation(info.gid, dirname)
+    return dir
 }
 
 /**
@@ -683,6 +685,20 @@ suspend fun getGalleryDownloadDir(info: GalleryInfo): Path {
  */
 suspend fun getGalleryWritableDownloadDir(info: GalleryInfo): Path {
     val dirname = info.downloadDirname()
-    return writableDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
+    val dir = writableDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
         ?: (defaultDownloadLocation / dirname)
+    dir.recordDownloadLocation(info.gid, dirname)
+    return dir
+}
+
+/**
+ * Writes down which location the directory was just found in, so the download
+ * list can group by location without searching for it again.
+ *
+ * Both callers above have already searched -- that is how they got the path --
+ * so this is a write and not a second lookup, and it keeps the record honest
+ * when a directory has been moved between locations.
+ */
+private suspend fun Path.recordDownloadLocation(gid: Long, dirname: String) {
+    parent?.let { EhDB.putDownloadLocation(gid, dirname, it.toString()) }
 }

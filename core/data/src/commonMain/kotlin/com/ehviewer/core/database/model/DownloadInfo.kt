@@ -75,6 +75,10 @@ data class DownloadInfo(
     @ColumnInfo(name = "DIRNAME")
     val dirname: String?,
 
+    /** Recorded when the directory was resolved; null until then. See [DownloadDirname]. */
+    @ColumnInfo(name = "LOCATION")
+    val location: String? = null,
+
     @Relation(parentColumn = "GID", entityColumn = "GID")
     var artistInfoList: List<DownloadArtist> = emptyList(),
 

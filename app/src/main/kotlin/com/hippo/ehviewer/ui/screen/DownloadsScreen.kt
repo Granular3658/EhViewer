@@ -139,9 +139,7 @@ import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import kotlin.math.roundToInt
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import moe.tarsin.navigate
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -230,38 +228,25 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
     val labelExists = stringResource(R.string.label_text_exist)
     val downloadsCountGroupByArtist by rememberInVM { EhDB.downloadsCountByArtist }.collectAsState(emptyMap())
     val downloadsCountGroupByLabel by rememberInVM { EhDB.downloadsCountByLabel }.collectAsState(emptyMap())
-    // A location is not a column on a download, so this one cannot be a query the
-    // way the other two are: it is whichever location holds the download's
-    // directory, which is what `downloadDir` resolves and caches. The key is
-    // `null` for a download that is not under any configured location -- the same
-    // rule the filter uses, so the count beside a row matches what the row
-    // filters to.
-    //
-    // Resolving a directory is not free: `downloadDir`'s cold path stats each
-    // configured location until one holds it, and on a share that stat is a round
-    // trip. Doing that for every download, on the main thread, while the screen
-    // is composing, is what made the first opening stutter -- the row that prints
-    // a download's source only ever resolves the rows on screen, and only when
-    // that setting is on.
-    //
-    // So it is counted off the main thread, and only in this mode: the other two
-    // count from the database and never need to resolve anything. The numbers
-    // read zero for the moment it takes to fill in; the filter itself does not
-    // wait on them.
-    var downloadsCountGroupByLocation by remember { mutableStateOf(emptyMap<String?, Int>()) }
-    LaunchedEffect(filterMode, invalidateKey, DownloadManager.isInitialized, configuredLocations) {
-        if (filterMode != DownloadsFilterMode.LOCATION) return@LaunchedEffect
-        downloadsCountGroupByLocation = withContext(Dispatchers.IO) {
-            val known = allDownloadLocations.mapTo(HashSet()) { it.toString() }
-            DownloadManager.downloadInfoList
-                .groupingBy { info -> info.downloadDir?.parent?.toString()?.takeIf { it in known } }
-                .eachCount()
-        }
+    // A query like the other two, but over a column that is written by the places
+    // that resolve a directory rather than by the download itself: the key is
+    // whichever location was recorded, and `null` is a download nothing has been
+    // written down for.
+    val downloadsCountGroupByLocation by rememberInVM { EhDB.downloadsCountByLocation }.collectAsState(emptyMap())
+    // The locations a recorded value can name. A row saved to one that has since
+    // been taken off the list is counted with the unknown ones -- the same rule
+    // `take` applies, so a count matches what tapping it shows.
+    val knownLocations = remember(configuredLocations) {
+        allDownloadLocations.mapTo(HashSet()) { it.toString() }
     }
     val downloadsCount = when (filterMode) {
         DownloadsFilterMode.CUSTOM -> downloadsCountGroupByLabel
         DownloadsFilterMode.ARTIST -> downloadsCountGroupByArtist
-        DownloadsFilterMode.LOCATION -> downloadsCountGroupByLocation
+        DownloadsFilterMode.LOCATION -> buildMap {
+            downloadsCountGroupByLocation.forEach { (location, count) ->
+                merge(location?.takeIf { it in knownLocations }, count, Int::plus)
+            }
+        }
     }
     val artistList = remember(downloadsCountGroupByArtist) {
         downloadsCountGroupByArtist.keys.mapNotNull { artist -> artist?.let { it to it } }

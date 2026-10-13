@@ -24,6 +24,14 @@ interface DownloadsDao {
     @Query("SELECT ARTIST, COUNT(*) AS COUNT FROM DOWNLOADS LEFT JOIN DOWNLOAD_ARTISTS USING(GID) GROUP BY ARTIST ORDER BY COUNT DESC, ARTIST")
     fun countByArtist(): Flow<Map<@MapColumn("ARTIST") String?, @MapColumn("COUNT") Int>>
 
+    /**
+     * How many downloads each recorded location holds. Null is the ones nothing
+     * has been written down for yet.
+     */
+    @Suppress("ktlint:standard:annotation", RoomWarnings.UNNECESSARY_NULLABILITY_IN_DAO_RETURN_TYPE)
+    @Query("SELECT LOCATION, COUNT(*) AS COUNT FROM DOWNLOADS LEFT JOIN DOWNLOAD_DIRNAME USING(GID) GROUP BY LOCATION")
+    fun countByLocation(): Flow<Map<@MapColumn("LOCATION") String?, @MapColumn("COUNT") Int>>
+
     @Query("SELECT * FROM DOWNLOADS ORDER BY TIME")
     suspend fun list(): List<DownloadEntity>
 

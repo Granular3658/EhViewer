@@ -450,6 +450,9 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     // would send us back through the provider for nothing.
                     val smb = if (file.isSmb) SmbLocation.parse(file) else null
                     if (smb == null && !file.isDirectory) return null
+                    // The scan walked one location at a time, so the candidate's
+                    // parent is the location it came from.
+                    val location = file.parent?.toString() ?: return null
 
                     /**
                      * gid/token of an SMB directory, read straight from the
@@ -494,12 +497,12 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                             // Restore download dir to avoid redownload
                             val dbdirname = EhDB.getDownloadDirname(gid)
                             if (null == dbdirname || dirname != dbdirname) {
-                                EhDB.putDownloadDirname(gid, dirname)
+                                EhDB.putDownloadLocation(gid, dirname, location)
                                 restoreDirCount++
                             }
                             return null
                         }
-                        RestoreItem(dirname, gid, token)
+                        RestoreItem(dirname, gid, token, location)
                     }.onFailure {
                         logcat(it)
                     }.getOrNull()
@@ -547,7 +550,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                         // throughput path.
                         val count = result.parMap(concurrency = 4) {
                             if (it.pages != 0) {
-                                EhDB.putDownloadDirname(it.gid, it.dirname)
+                                EhDB.putDownloadLocation(it.gid, it.dirname, it.location)
                                 DownloadManager.restoreDownload(it.galleryInfo, it.dirname)
                                 SpiderDen(it.galleryInfo, it.dirname).writeComicInfo(false)
                             }
@@ -593,6 +596,8 @@ private class RestoreItem(
     val dirname: String,
     gid: Long,
     token: String,
+    /** The location the scan found this directory in; see `putDownloadLocation`. */
+    val location: String,
     val galleryInfo: BaseGalleryInfo = BaseGalleryInfo(gid, token),
 ) : GalleryInfo by galleryInfo
 private val RESTORE_NOT_FOUND = appCtx.getString(R.string.settings_download_restore_not_found)
