@@ -414,7 +414,7 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
                 info.tempDownloadDir?.delete()
                 EhDB.removeDownloadDirname(info.gid)
                 // The directory just got removed, drop its cached resolution
-                info.dirname?.let { downloadDirCache.remove(it) }
+                info.dirname?.let { downloadDirCache.remove("${info.location.orEmpty()}/$it") }
             }
         }
     }
@@ -935,19 +935,35 @@ val writableDownloadLocations: List<Path>
     get() = allDownloadLocations
 
 /**
- * Resolved per-dirname and cached: the naive version performed a filesystem
- * stat per list item per recomposition, on the main thread.
+ * Resolved per-download and cached: the naive version performed a filesystem stat
+ * per list item per recomposition, on the main thread.
+ *
+ * The location the download was recorded in is asked first, and on its own. Going
+ * through every configured location instead means asking a local provider whether
+ * it holds a directory that in fact lives on a share -- it answers with a
+ * missing-file error, which is what a `FileSystemProvider` logging
+ * "Failed to determine if primary:eh/<name> is child of primary:eh" is -- and
+ * taking whichever location happens to hold a directory of the same name, rather
+ * than the one the download is actually in.
  */
 val DownloadInfo.downloadDir: Path?
     get() = dirname?.let { name ->
-        downloadDirCache[name] ?: run {
-            val resolved = writableDownloadLocations
-                .firstNotNullOfOrNull { loc -> (loc / name).takeIf { it.isDirectory } }
+        val key = "${location.orEmpty()}/$name"
+        downloadDirCache[key] ?: run {
+            val resolved = recordedLocationPath(location)?.let { it / name }
+                ?: writableDownloadLocations.firstNotNullOfOrNull { loc -> (loc / name).takeIf { it.isDirectory } }
                 ?: (defaultDownloadLocation / name)
-            downloadDirCache[name] = resolved
+            downloadDirCache[key] = resolved
             resolved
         }
     }
+
+/**
+ * The configured location a recorded location string names, or null if it is not
+ * one any more -- a location removed from the settings still has its downloads,
+ * and their directories are then found the slow way.
+ */
+private fun recordedLocationPath(location: String?): Path? = location?.let { saved -> allDownloadLocations.firstOrNull { it.toString() == saved } }
 
 /**
  * The gallery's single-file archive, if it has one.
