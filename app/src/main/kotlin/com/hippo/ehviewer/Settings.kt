@@ -127,6 +127,10 @@ object Settings : DataStorePreferences(null) {
     // Without it, clearing every location would make the migration restore the old one.
     val downloadLocationsMigrated = boolPref("download_locations_migrated", false)
 
+    // Hosts the local-network browser has been told about, as "host:port".
+    // Nothing discovers them yet: a host gets here by being typed in.
+    val localNetworkHosts = stringSetPref("local_network_hosts", emptySet())
+
     // Privacy
     val security = boolPref("require_unlock", false)
     val securityDelay = intPref("require_unlock_delay", 0)

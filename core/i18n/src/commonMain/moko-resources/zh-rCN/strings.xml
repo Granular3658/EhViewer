@@ -21,6 +21,14 @@
     <string name="favourite">收藏</string>
     <string name="history">历史</string>
     <string name="downloads">下载</string>
+    <string name="local_network">本地网络</string>
+    <string name="local_network_add_host">添加主机</string>
+    <string name="local_network_host">主机地址</string>
+    <string name="local_network_no_hosts">还没有主机，请按地址添加。</string>
+    <string name="local_network_add_to_download_locations">加入下载目录列表</string>
+    <string name="local_network_cannot_list">无法读取该位置</string>
+    <string name="local_network_empty">空</string>
+    <string name="local_network_shares_of">共享</string>
     <string name="settings">设置</string>
     <string name="username">用户名</string>
     <string name="password">密码</string>
