@@ -8,6 +8,7 @@ import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Refresh
@@ -117,6 +119,38 @@ private fun discoveredHostRow(value: String): String {
 
 private fun String.appendSegment(segment: String) = if (isEmpty()) segment else "$this/$segment"
 
+/** A host as the list shows it: kept by hand, or found by the last scan. */
+private data class HostRow(val value: String, val discovered: Boolean)
+
+/**
+ * A typed host, in the form the list stores: `host[:port]`.
+ *
+ * The scheme is accepted and dropped, because it is how the same address is
+ * written everywhere else in the app, and a share or path after the host is
+ * dropped too, so a pasted URI works as well as a bare address.
+ */
+private fun normalizeHostInput(value: String): String = value
+    .trim()
+    .removePrefix("smb://")
+    .removePrefix("smb:")
+    .trimStart('/')
+    .substringBefore('/')
+    .trim()
+
+/**
+ * The rows to show: the typed hosts first, then whatever the last scan found
+ * that is not already among them.
+ *
+ * Matched by address rather than by the stored string, because a typed host
+ * usually carries no name and a found one does, so the two forms of the same
+ * host would otherwise both be listed.
+ */
+private fun hostRows(saved: Set<String>, discovered: List<String>): List<HostRow> {
+    val known = saved.mapTo(HashSet()) { parseSavedHost(it).address }
+    return saved.sorted().map { HostRow(it, discovered = false) } +
+        discovered.filterNot { parseSavedHost(it).address in known }.map { HostRow(it, discovered = true) }
+}
+
 /**
  * A browser for the SMB shares on the local network.
  *
@@ -124,10 +158,14 @@ private fun String.appendSegment(segment: String) = if (isEmpty()) segment else 
  * host offers, and the directories inside a share. The breadcrumb is that
  * stack read out loud, so tapping a segment returns to that level.
  *
- * Nothing discovers hosts yet, so a host arrives by being typed in and is then
- * remembered. Reading a share needs credentials, and they are asked for only
- * after a listing fails: the host is usually already configured for downloads,
- * so asking up front would ask for something the app often already has.
+ * Nothing here is a network filesystem client of its own: it is a view over the
+ * same SMB support the download locations use, and reading a share needs
+ * credentials that are asked for only after a listing fails. The host is
+ * usually already configured for downloads, so asking up front would ask for
+ * something the app often already has.
+ *
+ * A scan shows what answered for as long as the screen is open, and nothing
+ * more: a host is kept only when it is asked for, and then it is a typed host.
  */
 @Destination<RootGraph>
 @Composable
@@ -140,6 +178,11 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
     var addingHost by remember { mutableStateOf(false) }
     var savingLocation by remember { mutableStateOf<SmbLocation?>(null) }
     var discovering by remember { mutableStateOf(false) }
+    // What the last scan found, kept for the visit rather than written to the
+    // setting: a scan describes the network it ran on, and keeping every scan's
+    // result would accumulate hosts from every network ever visited. A found
+    // row is remembered only when it is asked for, and then it is a typed host.
+    var discovered by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     val context = LocalContext.current
 
     val cannotList = stringResource(id = R.string.local_network_cannot_list)
@@ -152,7 +195,7 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
         scope.launch { with(snackbarHostState) { snackbar(message) } }
     }
 
-    /** Ask the network, and keep whatever answers as if it had been typed in. */
+    /** Ask the network, and show what answers until the next scan. */
     fun discover() {
         if (discovering) return
         discovering = true
@@ -166,10 +209,9 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                 SmbRepository.discoverHosts(wifiInterfaceAddress(context))
             }.onFailure { launchSnackbar(cannotList) }.getOrElse { emptyList() }
             runCatching { lock?.takeIf { it.isHeld }?.release() }
-            if (found.isNotEmpty()) {
-                Settings.localNetworkHosts.value =
-                    Settings.localNetworkHosts.value + found.map(::discoveredHostRow)
-            }
+            // Replaced, not appended: the previous scan described a network
+            // that may not be the one this device is on any more.
+            discovered = ArrayList(found.map(::discoveredHostRow))
             discovering = false
         }
     }
@@ -244,14 +286,20 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
         Box(modifier = Modifier.padding(paddingValues).fillMaxSize()) {
             when {
                 host == null -> HostList(
-                    hosts = savedHosts,
+                    rows = hostRows(savedHosts, discovered),
                     onOpen = { openHost, openPort ->
                         host = openHost
                         port = openPort
                         share = null
                         subPath = ""
                     },
-                    onRemove = { value -> Settings.localNetworkHosts.value = Settings.localNetworkHosts.value - value },
+                    onRemember = { value ->
+                        Settings.localNetworkHosts.value = Settings.localNetworkHosts.value + value
+                        discovered = ArrayList(discovered - value)
+                    },
+                    onRemove = { value ->
+                        Settings.localNetworkHosts.value = Settings.localNetworkHosts.value - value
+                    },
                 )
                 share == null -> NameList(names = names, onOpen = { name ->
                     share = name
@@ -281,7 +329,10 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
         AddHostDialog(
             onDismiss = { addingHost = false },
             onAdd = { value ->
-                Settings.localNetworkHosts.value = Settings.localNetworkHosts.value + value
+                val host = normalizeHostInput(value)
+                if (host.isNotEmpty()) {
+                    Settings.localNetworkHosts.value = Settings.localNetworkHosts.value + host
+                }
                 addingHost = false
             },
         )
@@ -319,22 +370,34 @@ private fun Breadcrumb(
     onSegment: (String) -> Unit,
 ) {
     if (host == null) return
+    // One line, scrolled sideways, and kept at the end: a deep path used to
+    // wrap and push the listing off the screen, and the part worth seeing is
+    // always the part nearest the current directory.
+    val scroll = rememberScrollState()
+    LaunchedEffect(host, share, subPath) { scroll.scrollTo(scroll.maxValue) }
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(scroll)
+            .padding(horizontal = 16.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             text = host,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            softWrap = false,
             modifier = Modifier.clickable(onClick = onHost),
         )
         if (share != null) {
-            Text(text = " / ")
+            Text(text = " / ", maxLines = 1, softWrap = false)
             Text(
                 text = share,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                softWrap = false,
                 modifier = Modifier.clickable(onClick = onShare),
             )
         }
@@ -342,10 +405,12 @@ private fun Breadcrumb(
         for (segment in subPath.split('/').filter { it.isNotEmpty() }) {
             accumulated = accumulated.appendSegment(segment)
             val target = accumulated
-            Text(text = " / ")
+            Text(text = " / ", maxLines = 1, softWrap = false)
             Text(
                 text = segment,
                 color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                softWrap = false,
                 modifier = Modifier.clickable { onSegment(target) },
             )
         }
@@ -390,23 +455,41 @@ private fun wifiInterfaceAddress(context: Context): String {
 }
 
 @Composable
-private fun HostList(hosts: Set<String>, onOpen: (String, Int) -> Unit, onRemove: (String) -> Unit) {
-    if (hosts.isEmpty()) {
+private fun HostList(
+    rows: List<HostRow>,
+    onOpen: (String, Int) -> Unit,
+    onRemember: (String) -> Unit,
+    onRemove: (String) -> Unit,
+) {
+    if (rows.isEmpty()) {
         Empty(text = stringResource(id = R.string.local_network_no_hosts))
         return
     }
     LazyColumn(modifier = Modifier.fillMaxSize()) {
-        items(hosts.sorted()) { value ->
-            val saved = parseSavedHost(value)
+        items(rows, key = { it.value }) { row ->
+            val saved = parseSavedHost(row.value)
             Row(
                 modifier = Modifier.fillMaxWidth()
                     .clickable { onOpen(saved.host, saved.port) }
                     .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(text = saved.label, modifier = Modifier.weight(1f))
-                TextButton(onClick = { onRemove(value) }) {
-                    Text(text = stringResource(id = R.string.settings_download_remove_location))
+                Text(
+                    text = saved.label,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+                // A found host is not kept unless asked for, and a kept one is
+                // removed the same way a typed one is: the two lists differ in
+                // how long they last, not in what the button does.
+                if (row.discovered) {
+                    TextButton(onClick = { onRemember(row.value) }) {
+                        Text(text = stringResource(id = R.string.local_network_remember_host))
+                    }
+                } else {
+                    TextButton(onClick = { onRemove(row.value) }) {
+                        Text(text = stringResource(id = R.string.settings_download_remove_location))
+                    }
                 }
             }
             HorizontalDivider()
@@ -509,6 +592,9 @@ private fun humanSize(bytes: Long): String = when {
 @Composable
 private fun AddHostDialog(onDismiss: () -> Unit, onAdd: (String) -> Unit) {
     var value by remember { mutableStateOf("") }
+    // The scheme and any path are dropped, so what is typed is accepted in
+    // either form; the hint says so, because it was accepted without saying.
+    val host = normalizeHostInput(value)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(text = stringResource(id = R.string.local_network_add_host)) },
@@ -517,11 +603,12 @@ private fun AddHostDialog(onDismiss: () -> Unit, onAdd: (String) -> Unit) {
                 value = value,
                 onValueChange = { value = it },
                 label = { Text(text = stringResource(id = R.string.local_network_host)) },
+                supportingText = { Text(text = stringResource(id = R.string.local_network_host_hint)) },
                 singleLine = true,
             )
         },
         confirmButton = {
-            TextButton(onClick = { onAdd(value.trim()) }, enabled = value.isNotBlank()) {
+            TextButton(onClick = { onAdd(host) }, enabled = host.isNotEmpty()) {
                 Text(text = stringResource(id = android.R.string.ok))
             }
         },

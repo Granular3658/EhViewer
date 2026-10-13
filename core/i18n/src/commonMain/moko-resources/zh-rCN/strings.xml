@@ -25,6 +25,8 @@
     <string name="local_network_add_host">添加主机</string>
     <string name="local_network_search">搜索网络</string>
     <string name="local_network_host">主机地址</string>
+    <string name="local_network_host_hint">例如 192.168.1.5 或 smb://192.168.1.5:445</string>
+    <string name="local_network_remember_host">记住</string>
     <string name="local_network_no_hosts">还没有主机，请按地址添加。</string>
     <string name="local_network_add_to_download_locations">加入下载目录列表</string>
     <string name="local_network_cannot_list">无法读取该位置</string>
