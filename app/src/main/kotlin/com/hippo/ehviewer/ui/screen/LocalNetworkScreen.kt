@@ -2,6 +2,7 @@ package com.hippo.ehviewer.ui.screen
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -352,18 +353,27 @@ private fun Breadcrumb(
 }
 
 /**
- * The address of the interface a probe should be sent on.
+ * The address of the Wi-Fi interface, which is where a local network answers
+ * from.
  *
- * Handed to the native side so it joins the multicast group on this interface
- * and not one the kernel picks: with more than one interface up the pick is
- * not necessarily the one the answers come back on, and the symptom is a probe
- * that goes out into silence. Empty lets the native side choose, which is
- * right when there is nothing better to say.
+ * Asked for by transport rather than taken from the active network: the active
+ * one is whatever carries default traffic, which on a phone is often the
+ * cellular interface. Joining the discovery group there sends the probe onto a
+ * network that cannot route to any of the hosts being browsed -- the probe goes
+ * out, the replies arrive on Wi-Fi, and nothing comes back.
+ *
+ * Empty when there is no Wi-Fi, which lets the native side choose.
  */
 private fun wifiInterfaceAddress(context: Context): String {
     val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         ?: return ""
-    val link = connectivity.activeNetwork?.let { connectivity.getLinkProperties(it) } ?: return ""
+    val wifi = runCatching {
+        connectivity.allNetworks.firstOrNull { network ->
+            connectivity.getNetworkCapabilities(network)
+                ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+        }
+    }.getOrNull() ?: return ""
+    val link = runCatching { connectivity.getLinkProperties(wifi) }.getOrNull() ?: return ""
     // IPv4 only: the discovery group is IPv4, and an IPv6 link-local address
     // cannot be joined to it.
     return link.linkAddresses
