@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
-import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -278,14 +277,10 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
     val entryListState = rememberLazyListState()
     LaunchedEffect(entries) {
         val list = entries ?: return@LaunchedEffect
-        val target = location?.uriString
-        val page = target?.let { lastPageByDirectory[it] }
-        Log.d("ehviewer-images", "restore: entries=${list.size} target=$target page=$page")
-        if (page == null) return@LaunchedEffect
+        val page = location?.let { lastPageByDirectory[it.uriString] } ?: return@LaunchedEffect
         val name = list.filter { !it.isDirectory && isImage(it.name) }.getOrNull(page)?.name
             ?: return@LaunchedEffect
         val index = list.indexOfFirst { it.name == name }
-        Log.d("ehviewer-images", "restore: page=$page name=$name index=$index")
         if (index >= 0) entryListState.scrollToItem(index)
     }
 

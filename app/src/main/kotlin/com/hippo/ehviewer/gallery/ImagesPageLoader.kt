@@ -15,7 +15,6 @@
  */
 package com.hippo.ehviewer.gallery
 
-import android.util.Log
 import arrow.autoCloseScope
 import com.hippo.ehviewer.image.ImageSource
 import com.hippo.ehviewer.image.PathSource
@@ -66,12 +65,6 @@ suspend inline fun <T> useImagesPageLoader(
                 override val title by lazy { name }
 
                 override val positionKey = directory
-
-                override fun close() {
-                    lastPageByDirectory[directory] = startPage
-                    Log.d("ehviewer-images", "close $directory at page $startPage")
-                    super.close()
-                }
 
                 override fun getImageExtension(index: Int) = paths[index].name.substringAfterLast('.', "")
 

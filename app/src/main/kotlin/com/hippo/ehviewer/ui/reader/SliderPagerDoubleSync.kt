@@ -1,6 +1,5 @@
 package com.hippo.ehviewer.ui.reader
 
-import android.util.Log
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.runtime.Composable
@@ -63,7 +62,6 @@ class SliderPagerDoubleSync(
                 currentIndexFlow.drop(1).collect { index ->
                     slider.value = index + 1
                     pageLoader.startPage = index
-                    Log.d("ehviewer-images", "settled $index on ${System.identityHashCode(pageLoader)}")
                     onPageSelected()
                 }
             }
