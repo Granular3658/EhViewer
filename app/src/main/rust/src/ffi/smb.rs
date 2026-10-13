@@ -78,12 +78,18 @@ pub fn smbTest(
 /// Hosts on the local network that answer WS-Discovery.
 ///
 /// Blocking for the length of the discovery window, so callers must not be on
-/// the main thread. Returns addresses, deduplicated.
+/// the main thread. Returns one `address` + tab + name per host, deduplicated.
 #[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
 pub fn wsdDiscover(mut env: JNIEnv, _: JClass) -> jobjectArray {
     jni_throwing(&mut env, |env| {
         let hosts = crate::wsd::discover()?;
-        marshal_strings(env, hosts.into_iter().map(|host| host.address).collect())
+        marshal_strings(
+            env,
+            hosts
+                .into_iter()
+                .map(|host| format!("{}\t{}", host.address, host.name.unwrap_or_default()))
+                .collect(),
+        )
     })
 }
 
