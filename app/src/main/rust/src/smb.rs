@@ -188,6 +188,39 @@ pub struct Stat {
     pub modified_millis: i64,
 }
 
+/// The disk shares a server offers.
+///
+/// A session is keyed by host and share, so this needs a share to hang one on.
+/// `IPC$` is the share every server has, and it is also the share the listing
+/// travels over: `list_shares` opens the `srvsvc` named pipe and asks for
+/// `NetShareEnumAll` there, so which tree the session was built on is
+/// irrelevant. Admin shares (names ending in `$`) are dropped by `smb2`.
+pub fn list_shares(
+    host: &str,
+    port: u16,
+    user: &str,
+    pass: &str,
+    domain: &str,
+) -> Result<Vec<String>> {
+    let target = Target {
+        host: host.to_owned(),
+        port,
+        share: "IPC$".to_owned(),
+        sub: String::new(),
+        user: user.to_owned(),
+        pass: pass.to_owned(),
+        domain: domain.to_owned(),
+    };
+    runtime().block_on(async {
+        with_session!(&target, |session| {
+            let shares = timeout(OP_TIMEOUT, session.client.list_shares())
+                .await
+                .map_err(|_| anyhow!("Timed out listing the shares of {host}"))??;
+            Ok(shares.into_iter().map(|share| share.name).collect())
+        })
+    })
+}
+
 pub fn stat(target: &Target) -> Result<Stat> {
     runtime().block_on(async {
         with_session!(target, |session| {
