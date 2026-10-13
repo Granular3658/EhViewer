@@ -1,7 +1,6 @@
 package com.hippo.ehviewer.ui.reader
 
 import android.content.Context
-import android.util.Log
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
@@ -183,19 +182,6 @@ fun AnimatedVisibilityScope.ReaderScreen(args: ReaderScreenArgs, navigator: Dest
             is Either.Right -> {
                 val loader = result.value
                 val info = (args as? ReaderScreenArgs.Gallery)?.info
-                // Leaving the reader leaves the listing where the reader was.
-                // `startPage` is the settled page -- the pager writes it when it
-                // comes to rest, so it is the page being read rather than a page
-                // that was merely requested ahead -- and this runs when the
-                // reader's composition goes away, which is the moment to keep it.
-                DisposableEffect(loader) {
-                    onDispose {
-                        Log.d("ehviewer-images", "leaving ${System.identityHashCode(loader)} at ${loader.startPage}")
-                        (args as? ReaderScreenArgs.Images)?.let {
-                            lastPageByDirectory[it.directory] = loader.startPage
-                        }
-                    }
-                }
                 key(loader) {
                     ReaderScreen(loader, info)
                 }
@@ -254,7 +240,6 @@ fun ReaderScreen(pageLoader: PageLoader, info: BaseGalleryInfo?) {
         LaunchedEffect(key) {
             snapshotFlow { syncState.sliderValue }.collect { value ->
                 lastPageByDirectory[key] = value - 1
-                Log.d("ehviewer-images", "kept page ${value - 1} for $key")
             }
         }
     }
