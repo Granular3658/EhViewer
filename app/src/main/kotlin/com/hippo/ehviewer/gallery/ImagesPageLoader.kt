@@ -15,6 +15,7 @@
  */
 package com.hippo.ehviewer.gallery
 
+import android.util.Log
 import arrow.autoCloseScope
 import com.hippo.ehviewer.image.ImageSource
 import com.hippo.ehviewer.image.PathSource
@@ -66,6 +67,7 @@ suspend inline fun <T> useImagesPageLoader(
 
                 override fun close() {
                     lastPageByDirectory[directory] = startPage
+                    Log.d("ehviewer-images", "close $directory at page $startPage")
                     super.close()
                 }
 
@@ -88,7 +90,16 @@ suspend inline fun <T> useImagesPageLoader(
 
                 override fun prefetchPages(pages: List<Int>, bounds: IntRange) = Unit
 
-                override fun onRequest(index: Int, force: Boolean, orgImg: Boolean) = notifySourceReady(index)
+                override fun onRequest(index: Int, force: Boolean, orgImg: Boolean) {
+                    // The page being asked for is the page being looked at: the
+                    // reader requests a page when it shows it, and prefetches go
+                    // through prefetchPages instead. Recording here as well as on
+                    // close means the position survives even if the close hook
+                    // is not the one that ends up running.
+                    lastPageByDirectory[directory] = index
+                    Log.d("ehviewer-images", "request page $index of $directory")
+                    notifySourceReady(index)
+                }
             },
         )
         block(loader)
