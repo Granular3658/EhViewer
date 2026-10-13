@@ -72,10 +72,24 @@ private const val DEFAULT_SMB_PORT = 445
 /** Extensions [navToReader] knows how to open as a gallery. */
 private val ARCHIVE_SUFFIXES = listOf(".zip", ".cbz", ".dwarfs")
 
+/**
+ * Extensions the reader decodes: the list the share provider maps to image
+ * types, so it is the same set of files the rest of the app calls images.
+ *
+ * A directory holding any of these opens as a gallery of the directory itself
+ * -- not of what is under it, which would be a walk of the whole share.
+ */
+private val IMAGE_SUFFIXES = listOf(
+    ".webp", ".gif", ".jpg", ".jpeg", ".png", ".avif", ".bmp",
+    ".heic", ".heif", ".jxl", ".mng", ".apng", ".tif", ".tiff", ".wbmp",
+)
+
 /** Separates a host row from the name discovery gave it. */
 private val TAB_CHAR = 0x09.toChar()
 
 private fun isArchive(name: String) = ARCHIVE_SUFFIXES.any { name.endsWith(it, ignoreCase = true) }
+
+private fun isImage(name: String) = IMAGE_SUFFIXES.any { name.endsWith(it, ignoreCase = true) }
 
 private data class SavedHost(val host: String, val port: Int, val name: String?) {
     val address: String
@@ -321,8 +335,23 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                     onOpenDirectory = { name -> subPath = subPath.appendSegment(name) },
                     onOpenFile = { name ->
                         val current = location
-                        if (current != null && isArchive(name)) {
-                            navToReader(current.copy(subPath = current.subPath.appendSegment(name)).uriString)
+                        if (current != null) {
+                            if (isArchive(name)) {
+                                navToReader(current.copy(subPath = current.subPath.appendSegment(name)).uriString)
+                            } else if (isImage(name)) {
+                                // The images of this directory, in the order they
+                                // are listed, so the tapped one is the page that
+                                // opens. Subdirectories are not walked: the
+                                // gallery is the directory, not the share.
+                                val images = entries.orEmpty()
+                                    .filter { !it.isDirectory && isImage(it.name) }
+                                navToReader(
+                                    images.map {
+                                        current.copy(subPath = current.subPath.appendSegment(it.name)).uriString
+                                    },
+                                    images.indexOfFirst { it.name == name }.coerceAtLeast(0),
+                                )
+                            }
                         }
                     },
                     onAddToDownloadLocations = { name ->
