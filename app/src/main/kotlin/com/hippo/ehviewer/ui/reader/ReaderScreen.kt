@@ -119,10 +119,11 @@ sealed interface ReaderScreenArgs {
      *
      * The paths are the pages themselves rather than the directory, so the
      * order is the caller's and the page a tap opened is the page that was
-     * tapped.
+     * tapped. [directory] is the directory they came from, and is the key the
+     * page last read is remembered under, so the listing can return to it.
      */
     @Serializable
-    data class Images(val paths: List<String>, val startPage: Int) : ReaderScreenArgs
+    data class Images(val directory: String, val paths: List<String>, val startPage: Int) : ReaderScreenArgs
 }
 
 @Composable
@@ -411,8 +412,9 @@ suspend inline fun <T> usePageLoader(args: ReaderScreenArgs, crossinline block: 
     }
     is ReaderScreenArgs.Images -> {
         val paths = args.paths.map { it.toPath() }
-        // The directory the images came from, which is what the gallery is.
-        useImagesPageLoader(paths, paths.first().parent?.name.orEmpty(), args.startPage, block)
+        // The directory the images came from, which is what the gallery is and
+        // what the page last read is remembered under.
+        useImagesPageLoader(paths, args.directory, paths.first().parent?.name.orEmpty(), args.startPage, block)
     }
     is ReaderScreenArgs.Archive -> {
         val path = args.path.toPath()

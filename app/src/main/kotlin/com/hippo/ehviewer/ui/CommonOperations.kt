@@ -278,10 +278,11 @@ fun navToReader(path: String) = navToReader(ReaderScreenArgs.Archive(path))
  * Opens a list of images as a gallery, starting at [page].
  *
  * The list is the pages, in order, so the caller is the one that decides what
- * the gallery contains and which page a tap lands on.
+ * the gallery contains and which page a tap lands on. [directory] is where
+ * they came from, and the page the reader is left on is remembered under it.
  */
 context(_: DestinationsNavigator)
-fun navToReader(paths: List<String>, page: Int) = navToReader(ReaderScreenArgs.Images(paths, page))
+fun navToReader(directory: String, paths: List<String>, page: Int) = navToReader(ReaderScreenArgs.Images(directory, paths, page))
 
 context(nav: DestinationsNavigator)
 private fun navToReader(args: ReaderScreenArgs) = nav.navigate(ReaderScreenDestination(args)) { launchSingleTop = true }
