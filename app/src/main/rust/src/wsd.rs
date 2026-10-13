@@ -145,14 +145,17 @@ pub fn discover(interface: Option<Ipv4Addr>) -> Result<Vec<Host>> {
         // reached it by -- behind a NAT, or with more than one interface, they
         // differ. Falling back to the source of the datagram is what makes the
         // name survive that, and it costs nothing when they already agree.
-        host.name = metadata_name(&host.xaddrs).or_else(|| metadata_name(&host.address));
+        host.name = metadata_name(&host.xaddrs, &host.address);
+        // Lengths, not the strings: this line is the only place the two fields
+        // the request is built from can be seen together, and an empty one is
+        // a parsing bug rather than a network one.
         log::debug!(
             target: "wsd",
-            "metadata for {} (tried {:?} then {:?}) = {:?}",
+            "metadata for {}: address={} xaddrs={} name={}",
             host.address,
-            host.xaddrs,
-            host.address,
-            host.name
+            host.address.len(),
+            host.xaddrs.len(),
+            host.name.as_ref().map_or(0, |name| name.len())
         );
     }
     log::info!(target: "wsd", "discovery found {} host(s)", hosts.len());
@@ -266,26 +269,76 @@ fn parse_match(text: &str, fallback: String) -> Option<Host> {
     })
 }
 
-/// Ask the host for its WS-Device Profile metadata and use the advertised
-/// computer name as a display label. The address remains the connection target.
+/// SOAP 1.2 puts the action in the content type, and a conforming responder
+/// will not answer without it. wsdd2 refuses any parameter on the content type
+/// outright -- with the action appended it answers 400 -- so the plain form
+/// has to be tried first and the conforming one second.
+const CONTENT_TYPE: &str = "application/soap+xml";
+const CONTENT_TYPE_WITH_ACTION: &str =
+    "application/soap+xml; action=\"http://schemas.xmlsoap.org/ws/2004/09/transfer/Get\"";
+
+/// Ask a host for its WS-Device Profile metadata and take the advertised
+/// computer name as a display label. The address stays the connection target.
 ///
-/// Takes either an `XAddrs` URL or a bare `host:port`: the URL names the exact
-/// endpoint, and a bare address is the fallback for a device whose advertised
-/// URL this one cannot reach, on the port the same protocol uses.
-fn metadata_name(endpoint: &str) -> Option<String> {
-    let (host, port, path) = match endpoint_parts(endpoint) {
+/// The advertised URL is asked first, and it is the address the host sees *for
+/// itself*: behind a NAT, or with more than one interface, that is not always
+/// the address this one reached it by. When the request there fails it is
+/// tried again at the source of the datagram, keeping the advertised port and
+/// path, which belong to the service rather than to the address.
+fn metadata_name(xaddrs: &str, fallback_host: &str) -> Option<String> {
+    let (host, port, path) = match endpoint_parts(xaddrs) {
         Some(parts) => parts,
-        // A bare host, with the port WSD answers XML on.
+        // Nothing to parse: the datagram's source, on the port the profile
+        // service answers on.
         None => {
-            log::debug!(target: "wsd", "metadata: {endpoint} is not an XAddr");
-            return metadata_name(&format!("http://{endpoint}:{PORT}/"));
+            log::debug!(
+                target: "wsd",
+                "metadata: {xaddrs:?} is not an XAddr, asking {fallback_host}:{PORT}"
+            );
+            (fallback_host.to_owned(), PORT, "/".to_owned())
         }
     };
+    let url = format!("http://{host}:{port}{path}");
+    if let Some(name) = ask(&host, port, &path, &url) {
+        return Some(name);
+    }
+    if host != fallback_host {
+        log::debug!(
+            target: "wsd",
+            "metadata: {host}:{port} did not answer, asking {fallback_host}:{port}"
+        );
+        let url = format!("http://{fallback_host}:{port}{path}");
+        return ask(fallback_host, port, &path, &url);
+    }
+    None
+}
+
+/// The two content types, in the order that works for both responders: the
+/// plain one is the only one wsdd2 accepts, and the one with the action is the
+/// only one Windows accepts.
+fn ask(host: &str, port: u16, path: &str, url: &str) -> Option<String> {
+    request_name(host, port, path, url, CONTENT_TYPE).or_else(|| {
+        log::debug!(
+            target: "wsd",
+            "metadata: {host}:{port} did not answer without the action, asking again with it"
+        );
+        request_name(host, port, path, url, CONTENT_TYPE_WITH_ACTION)
+    })
+}
+
+/// One metadata request, to one address, with one content type.
+fn request_name(
+    host: &str,
+    port: u16,
+    path: &str,
+    url: &str,
+    content_type: &str,
+) -> Option<String> {
     // Every remaining exit has to say why it left: a name that is missing
     // because a connection was refused, because the address did not resolve,
     // and because the answer was not what was expected are three different
     // bugs, and `None` tells none of them apart.
-    let addresses = match (host.as_str(), port).to_socket_addrs() {
+    let addresses = match (host, port).to_socket_addrs() {
         Ok(addresses) => addresses,
         Err(err) => {
             log::debug!(target: "wsd", "metadata: {host}:{port} does not resolve: {err}");
@@ -320,11 +373,11 @@ fn metadata_name(endpoint: &str) -> Option<String> {
     let body = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:wst="http://schemas.xmlsoap.org/ws/2004/09/transfer">
-<soap:Header><wsa:To>{endpoint}</wsa:To><wsa:Action>http://schemas.xmlsoap.org/ws/2004/09/transfer/Get</wsa:Action><wsa:MessageID>{message_id}</wsa:MessageID></soap:Header>
+<soap:Header><wsa:To>{url}</wsa:To><wsa:Action>http://schemas.xmlsoap.org/ws/2004/09/transfer/Get</wsa:Action><wsa:MessageID>{message_id}</wsa:MessageID></soap:Header>
 <soap:Body><wst:Get/></soap:Body></soap:Envelope>"#
     );
     let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/soap+xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     stream
@@ -535,6 +588,20 @@ mod tests {
         assert_eq!(host.name, None);
     }
 
+    /// The `XAddrs` text has to reach the metadata step: an empty one sends the
+    /// request nowhere, and the log then reads "tried  then " with nothing in
+    /// it -- a mystery rather than the plain fact that the reply was misread.
+    #[test]
+    fn the_xaddrs_of_the_wsdd2_reply_is_kept() {
+        let host = parse_match(MATCH, "10.0.0.9".to_owned()).expect("a match");
+        assert!(
+            !host.xaddrs.is_empty(),
+            "xaddrs is empty while the address is {}",
+            host.address
+        );
+        assert!(host.xaddrs.starts_with("http://"), "{:?}", host.xaddrs);
+    }
+
     #[test]
     fn reads_the_advertised_types() {
         let host = parse_match(MATCH, "10.0.0.9".to_owned()).expect("a match");
@@ -655,7 +722,90 @@ mod tests {
             stream.write_all(response.as_bytes()).expect("write");
         });
 
-        let name = metadata_name(&format!("http://127.0.0.1:{port}/uuid"));
+        let name = metadata_name(&format!("http://127.0.0.1:{port}/uuid"), "127.0.0.1");
         assert_eq!(name.as_deref(), Some("TESTHOST"));
+    }
+
+    /// A conforming responder wants the action in the content type and answers
+    /// a request without it with an error -- Windows answers 500 -- while wsdd2
+    /// wants the bare type and answers 400 when a parameter is present. The
+    /// request is therefore tried both ways, and this holds that the second one
+    /// happens and that its answer is the one used.
+    #[test]
+    fn asks_again_with_the_action_when_the_bare_type_is_refused() {
+        use std::io::Write as _;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let body = concat!(
+            r#"<soap:Envelope xmlns:pub="http://schemas.microsoft.com/windows/pub/2005/07">"#,
+            r#"<soap:Body><wsx:Metadata><pub:Computer>WINBOX/Workgroup:WORKGROUP</pub:Computer>"#,
+            r#"</wsx:Metadata></soap:Body></soap:Envelope>"#
+        );
+        std::thread::spawn(move || {
+            for attempt in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let mut seen = [0u8; 8192];
+                let len = stream.read(&mut seen).expect("read the request");
+                let request = std::str::from_utf8(&seen[..len]).expect("text");
+                if attempt == 0 {
+                    assert!(
+                        request.contains("Content-Type: application/soap+xml\r\n"),
+                        "{request}"
+                    );
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n",
+                        )
+                        .expect("write");
+                } else {
+                    assert!(
+                        request.contains("Content-Type: application/soap+xml; action=\"http://schemas.xmlsoap.org/ws/2004/09/transfer/Get\"\r\n"),
+                        "{request}"
+                    );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    stream.write_all(response.as_bytes()).expect("write");
+                }
+            }
+        });
+
+        let name = metadata_name(&format!("http://127.0.0.1:{port}/uuid"), "127.0.0.1");
+        assert_eq!(name.as_deref(), Some("WINBOX"));
+    }
+
+    /// The advertised URL is the address the host sees for itself, which is not
+    /// always the address it was reached at: behind a NAT it is a private one.
+    /// The retry has to keep the advertised port, because the port belongs to
+    /// the service -- retrying on the discovery port instead is a timeout for
+    /// every host whose profile lives somewhere else, which is every Windows.
+    #[test]
+    fn falls_back_to_the_sender_on_the_advertised_port() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = asked.clone();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut buffer = [0u8; 4096];
+            let len = stream.read(&mut buffer).expect("read");
+            seen.lock()
+                .expect("lock")
+                .push(String::from_utf8_lossy(&buffer[..len]).to_string());
+        });
+
+        // The advertised host is unreachable, so the only way this can succeed
+        // is the fallback, and it has to arrive at the advertised port.
+        let name = metadata_name(&format!("http://192.0.2.1:{port}/uuid"), "127.0.0.1");
+        assert_eq!(name, None, "nothing was served, so there is no name");
+        let requests = asked.lock().expect("lock");
+        assert_eq!(requests.len(), 1, "the fallback request never arrived");
+        assert!(
+            requests[0].starts_with("POST /uuid HTTP/1.1\r\n"),
+            "{}",
+            requests[0]
+        );
     }
 }
