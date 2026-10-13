@@ -67,7 +67,51 @@ private const val DEFAULT_SMB_PORT = 445
 /** Extensions [navToReader] knows how to open as a gallery. */
 private val ARCHIVE_SUFFIXES = listOf(".zip", ".cbz", ".dwarfs")
 
+/** Separates a host row from the name discovery gave it. */
+private val TAB_CHAR = 0x09.toChar()
+
 private fun isArchive(name: String) = ARCHIVE_SUFFIXES.any { name.endsWith(it, ignoreCase = true) }
+
+private data class SavedHost(val host: String, val port: Int, val name: String?) {
+    val address: String
+        get() = "${if (host.contains(':')) "[$host]" else host}:$port"
+
+    val label: String
+        get() = name?.let { "$it ($address)" } ?: address
+}
+
+/** Stored rows may be plain host[:port] or address + tab + discovered name. */
+private fun parseSavedHost(value: String): SavedHost {
+    val parts = value.split(TAB_CHAR, limit = 2)
+    val endpoint = parts[0]
+    val savedName = parts.getOrNull(1)
+    val parsed = if (endpoint.startsWith('[')) {
+        val closing = endpoint.indexOf(']')
+        if (closing > 0) {
+            val host = endpoint.substring(1, closing)
+            val port = endpoint.substring(closing + 1).removePrefix(":").toIntOrNull() ?: DEFAULT_SMB_PORT
+            host to port
+        } else {
+            endpoint to DEFAULT_SMB_PORT
+        }
+    } else {
+        val lastColon = endpoint.lastIndexOf(':')
+        if (lastColon > 0 && endpoint.substring(lastColon + 1).toIntOrNull() != null) {
+            endpoint.substring(0, lastColon) to endpoint.substring(lastColon + 1).toInt()
+        } else {
+            endpoint to DEFAULT_SMB_PORT
+        }
+    }
+    return SavedHost(parsed.first, parsed.second, savedName?.takeIf(String::isNotBlank))
+}
+
+private fun discoveredHostRow(value: String): String {
+    val parts = value.split(TAB_CHAR, limit = 2)
+    val host = parts[0]
+    val name = parts.getOrNull(1)
+    val address = parseSavedHost(host).address
+    return if (name.isNullOrBlank()) address else "$address$TAB_CHAR$name"
+}
 
 private fun String.appendSegment(segment: String) = if (isEmpty()) segment else "$this/$segment"
 
@@ -122,7 +166,7 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
             runCatching { lock?.takeIf { it.isHeld }?.release() }
             if (found.isNotEmpty()) {
                 Settings.localNetworkHosts.value =
-                    Settings.localNetworkHosts.value + found.map { "$it:$DEFAULT_SMB_PORT" }
+                    Settings.localNetworkHosts.value + found.map(::discoveredHostRow)
             }
             discovering = false
         }
@@ -199,10 +243,9 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
             when {
                 host == null -> HostList(
                     hosts = savedHosts,
-                    onOpen = { value ->
-                        val parts = value.split(':')
-                        host = parts.first()
-                        port = parts.getOrNull(1)?.toIntOrNull() ?: DEFAULT_SMB_PORT
+                    onOpen = { openHost, openPort ->
+                        host = openHost
+                        port = openPort
                         share = null
                         subPath = ""
                     },
@@ -308,20 +351,21 @@ private fun Breadcrumb(
 }
 
 @Composable
-private fun HostList(hosts: Set<String>, onOpen: (String) -> Unit, onRemove: (String) -> Unit) {
+private fun HostList(hosts: Set<String>, onOpen: (String, Int) -> Unit, onRemove: (String) -> Unit) {
     if (hosts.isEmpty()) {
         Empty(text = stringResource(id = R.string.local_network_no_hosts))
         return
     }
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         items(hosts.sorted()) { value ->
+            val saved = parseSavedHost(value)
             Row(
                 modifier = Modifier.fillMaxWidth()
-                    .clickable { onOpen(value) }
+                    .clickable { onOpen(saved.host, saved.port) }
                     .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(text = value, modifier = Modifier.weight(1f))
+                Text(text = saved.label, modifier = Modifier.weight(1f))
                 TextButton(onClick = { onRemove(value) }) {
                     Text(text = stringResource(id = R.string.settings_download_remove_location))
                 }
