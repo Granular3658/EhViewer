@@ -119,6 +119,7 @@ import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.download.DownloadService
 import com.hippo.ehviewer.download.DownloadsFilterMode
 import com.hippo.ehviewer.download.SortMode
+import com.hippo.ehviewer.download.allDownloadLocations
 import com.hippo.ehviewer.download.downloadDir
 import com.hippo.ehviewer.ui.DrawerHandle
 import com.hippo.ehviewer.ui.Screen
@@ -174,9 +175,20 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
     val allName = stringResource(R.string.download_all)
     val defaultName = stringResource(R.string.default_download_label_name)
     val unknownName = stringResource(R.string.unknown_artists)
+    val otherLocationName = stringResource(R.string.unknown_location)
     val emptyLabelName = when (filterMode) {
         DownloadsFilterMode.ARTIST -> unknownName
         DownloadsFilterMode.CUSTOM -> defaultName
+        DownloadsFilterMode.LOCATION -> otherLocationName
+    }
+    // A location is identified by its path but shown by its short label, so the
+    // title needs the same mapping the list below is built from. Both are keyed
+    // on the configured locations rather than on `invalidateKey`: `allDownloadLocations`
+    // is a plain getter, so adding a location in settings would otherwise leave
+    // these stale until something else happened to touch the list.
+    val configuredLocations by Settings.downloadLocations.collectAsState()
+    val locationNames = remember(configuredLocations) {
+        allDownloadLocations.associate { it.toString() to downloadSourceLabel(it) }
     }
     val title = stringResource(
         R.string.scene_download_title,
@@ -184,7 +196,11 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
             when (label) {
                 "" -> allName
                 null -> emptyLabelName
-                else -> if (mode == DownloadsFilterMode.ARTIST) getTranslation(label) else label
+                else -> when (mode) {
+                    DownloadsFilterMode.ARTIST -> getTranslation(label)
+                    DownloadsFilterMode.LOCATION -> locationNames[label] ?: label
+                    DownloadsFilterMode.CUSTOM -> label
+                }
             }
         },
     )
@@ -212,9 +228,21 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
     val labelExists = stringResource(R.string.label_text_exist)
     val downloadsCountGroupByArtist by rememberInVM { EhDB.downloadsCountByArtist }.collectAsState(emptyMap())
     val downloadsCountGroupByLabel by rememberInVM { EhDB.downloadsCountByLabel }.collectAsState(emptyMap())
+    // A location is not a column on a download, so this one cannot be a query the
+    // way the other two are: it is whichever location holds the download's
+    // directory, resolved (and cached) by `downloadDir`. The key is `null` for a
+    // download that is not under any configured location -- the same rule the
+    // filter uses, so the count beside a row matches what the row filters to.
+    val downloadsCountGroupByLocation = remember(invalidateKey) {
+        val known = allDownloadLocations.mapTo(HashSet()) { it.toString() }
+        DownloadManager.downloadInfoList
+            .groupingBy { info -> info.downloadDir?.parent?.toString()?.takeIf { it in known } }
+            .eachCount()
+    }
     val downloadsCount = when (filterMode) {
         DownloadsFilterMode.CUSTOM -> downloadsCountGroupByLabel
         DownloadsFilterMode.ARTIST -> downloadsCountGroupByArtist
+        DownloadsFilterMode.LOCATION -> downloadsCountGroupByLocation
     }
     val artistList = remember(downloadsCountGroupByArtist) {
         downloadsCountGroupByArtist.keys.mapNotNull { artist -> artist?.let { it to it } }
@@ -224,9 +252,16 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
             DownloadManager.labelList.map { it.id!! to it.label }
         }
     }
+    // Every configured location, including the ones nothing has been saved to
+    // yet: a location is a thing the user set up, so it should not vanish from
+    // the list just because it is empty.
+    val locationList = remember(configuredLocations) {
+        allDownloadLocations.map { it.toString() to downloadSourceLabel(it) }
+    }
     val groupList = when (filterMode) {
         DownloadsFilterMode.CUSTOM -> labelList
         DownloadsFilterMode.ARTIST -> artistList
+        DownloadsFilterMode.LOCATION -> locationList
     }
     val totalCount = remember(downloadsCountGroupByLabel) { downloadsCountGroupByLabel.values.sum() }
 
@@ -298,6 +333,7 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
                 }
                 val custom = stringResource(R.string.select_grouping_mode_custom)
                 val artist = stringResource(R.string.select_grouping_mode_artist)
+                val location = stringResource(R.string.select_grouping_mode_location)
                 IconButton(
                     onClick = {
                         launch {
@@ -309,6 +345,7 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
                                 }
                                 onSelect(custom) { select(DownloadsFilterMode.CUSTOM) }
                                 onSelect(artist) { select(DownloadsFilterMode.ARTIST) }
+                                onSelect(location) { select(DownloadsFilterMode.LOCATION) }
                             }()
                         }
                     },
