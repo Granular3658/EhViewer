@@ -335,6 +335,16 @@ pub fn dwarfsReadPage(mut env: JNIEnv, _: JClass, handle: jlong, page: jint) -> 
 
         let addr = unsafe { malloc(size) };
         ensure!(!addr.is_null(), "out of memory for a {size} byte page");
+        // Every allocation and release of a page buffer is logged with its
+        // address, so that when the allocator aborts on a corrupted chunk the
+        // address it names can be looked up: one allocation and one release
+        // means something else wrote over the block, two releases mean a
+        // release path is unguarded, and no allocation means the pointer was
+        // never ours. Nothing cheaper distinguishes those three.
+        log::debug!(
+            target: "dwarfs-page",
+            "alloc handle={handle} page={page} addr={addr:p} size={size}"
+        );
         let buf = unsafe { std::slice::from_raw_parts_mut(addr.cast::<u8>(), size) };
         match image.read_into(page as usize, buf) {
             Ok(()) => Ok(unsafe {
@@ -343,6 +353,10 @@ pub fn dwarfsReadPage(mut env: JNIEnv, _: JClass, handle: jlong, page: jint) -> 
             }),
             Err(err) => {
                 // The buffer never reached Java, so it has to go back here.
+                log::debug!(
+                    target: "dwarfs-page",
+                    "free on error page={page} addr={addr:p} size={size}"
+                );
                 unsafe { free(addr) };
                 Err(err)
             }
@@ -392,8 +406,14 @@ pub fn dwarfsReadPageToFd(
 pub fn dwarfsReleaseByteBuffer(mut env: JNIEnv, _: JClass, buffer: JByteBuffer) {
     jni_throwing(&mut env, |env| {
         let addr = env.get_direct_buffer_address(&buffer)?;
+        let size = env.get_direct_buffer_capacity(&buffer)?;
+        log::debug!(
+            target: "dwarfs-page",
+            "free addr={:p} size={size}",
+            addr
+        );
         if !addr.is_null() {
-            unsafe { free(addr.cast::<c_void>()) };
+            unsafe { free(addr.cast::<c_void>()) }
         }
         Ok(())
     })
