@@ -138,8 +138,15 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                     host = host,
                     share = share,
                     subPath = subPath,
-                    onHost = { host = null; share = null; subPath = "" },
-                    onShare = { share = null; subPath = "" },
+                    onHost = {
+                        host = null
+                        share = null
+                        subPath = ""
+                    },
+                    onShare = {
+                        share = null
+                        subPath = ""
+                    },
                     onSegment = { subPath = it },
                 )
             }
@@ -158,9 +165,10 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                     },
                     onRemove = { value -> Settings.localNetworkHosts.value = Settings.localNetworkHosts.value - value },
                 )
-
-                share == null -> NameList(names = names, onOpen = { name -> share = name; subPath = "" })
-
+                share == null -> NameList(names = names, onOpen = { name ->
+                    share = name
+                    subPath = ""
+                })
                 else -> EntryList(
                     entries = entries,
                     onOpenDirectory = { name -> subPath = subPath.appendSegment(name) },
