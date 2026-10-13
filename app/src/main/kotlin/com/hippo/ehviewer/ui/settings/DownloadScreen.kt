@@ -497,9 +497,13 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                             // Restore download dir to avoid redownload
                             val dbdirname = EhDB.getDownloadDirname(gid)
                             if (null == dbdirname || dirname != dbdirname) {
-                                EhDB.putDownloadLocation(gid, dirname, location)
                                 restoreDirCount++
                             }
+                            // Written whether or not the name changed: this is the
+                            // scan that knows where the directory is, and a
+                            // download whose name was already right is exactly
+                            // the one that still has no location recorded.
+                            EhDB.putDownloadLocation(gid, dirname, location)
                             return null
                         }
                         RestoreItem(dirname, gid, token, location)
