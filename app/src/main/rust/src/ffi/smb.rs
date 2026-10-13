@@ -89,8 +89,9 @@ pub fn wsdDiscover(mut env: JNIEnv, _: JClass, interface: JString) -> jobjectArr
     jni_throwing(&mut env, |env| {
         let address: String = env.get_string(&interface)?.into();
         // A missing or unparseable interface here is not something to fall back
-        // from: letting the kernel choose is what sent the probe out of the
-        // cellular interface and the replies to a socket nobody joined.
+        // from: choosing silently is the failure mode that reads as "no hosts
+        // here" rather than as an error, and it cost several rounds of guessing
+        // already. An address that does not parse is a bug worth reporting.
         let interface = if address.is_empty() {
             None
         } else {
