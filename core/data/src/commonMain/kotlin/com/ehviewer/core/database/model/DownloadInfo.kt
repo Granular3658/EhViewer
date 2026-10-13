@@ -73,7 +73,7 @@ data class DownloadInfo(
     val galleryInfo: GalleryEntity,
 
     @ColumnInfo(name = "DIRNAME")
-    val dirname: String?,
+    var dirname: String?,
 
     /** Recorded when the directory was resolved; null until then. See [DownloadDirname]. */
     @ColumnInfo(name = "LOCATION")

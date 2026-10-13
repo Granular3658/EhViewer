@@ -700,5 +700,5 @@ suspend fun getGalleryWritableDownloadDir(info: GalleryInfo): Path {
  * when a directory has been moved between locations.
  */
 private suspend fun Path.recordDownloadLocation(gid: Long, dirname: String) {
-    parent?.let { DownloadManager.recordDownloadLocation(gid, dirname, it.toString()) }
+    parent?.let { DownloadManager.recordDownloadDir(gid, dirname, it.toString()) }
 }

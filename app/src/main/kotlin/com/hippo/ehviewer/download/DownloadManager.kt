@@ -328,20 +328,24 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
     }
 
     /**
-     * Records where a download's directory lives, in the database and in the list
-     * that is already in memory.
+     * Records a download's directory: its name, and the location holding it.
      *
-     * Both, because the two are read by different things and would otherwise
-     * disagree: the counts beside each grouping come from the database, while the
-     * list decides what belongs in a group from the objects in memory. Writing
-     * only the database leaves a download that has just been restored counted
-     * under its location but absent from it, until the next start reloads.
+     * Written in the database and in the list already in memory, because the two
+     * are read by different things and would otherwise disagree -- the counts
+     * beside each grouping come from the database, while the list decides what
+     * belongs in a group, and what a download's files are looked up by, from the
+     * objects in memory. Writing only the database leaves a download that has just
+     * been restored counted under a group it is missing from, and reading an
+     * archive out of the directory it used to be in, until the next start.
      */
-    suspend fun recordDownloadLocation(gid: Long, dirname: String, location: String) {
+    suspend fun recordDownloadDir(gid: Long, dirname: String, location: String) {
         EhDB.putDownloadLocation(gid, dirname, location)
-        mAllInfoMap[gid]?.takeIf { it.location != location }?.let { info ->
-            info.location = location
-            mutableNotifyFlow.emit(info)
+        mAllInfoMap[gid]?.let { info ->
+            if (info.dirname != dirname || info.location != location) {
+                info.dirname = dirname
+                info.location = location
+                mutableNotifyFlow.emit(info)
+            }
         }
     }
 
