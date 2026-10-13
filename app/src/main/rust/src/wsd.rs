@@ -35,7 +35,15 @@ pub struct Host {
     pub endpoint: String,
     /// The host part of `XAddrs`, which is what a connection needs.
     pub address: String,
+    /// The device's advertised types, e.g. `wsdp:Device pub:Computer`.
+    pub types: String,
 }
+
+/// A device that advertises itself as a computer, which is what a file server
+/// does. A probe with no `Types` is answered by every device on the network --
+/// televisions, printers, cameras -- and only the computers are worth listing
+/// in a browser for SMB shares.
+const COMPUTER_TYPE: &str = "pub:Computer";
 
 /// Ask the network which hosts speak WS-Discovery.
 pub fn discover() -> Result<Vec<Host>> {
@@ -82,6 +90,10 @@ pub fn discover() -> Result<Vec<Host>> {
         if let Some(host) = parse_match(text, from.ip().to_string())
             && !hosts.iter().any(|seen| seen.endpoint == host.endpoint)
         {
+            if !host.types.contains(COMPUTER_TYPE) {
+                log::debug!(target: "wsd", "{} is not a computer ({})", host.address, host.types);
+                continue;
+            }
             log::debug!(target: "wsd", "host {} at {}", host.endpoint, host.address);
             hosts.push(host);
         }
@@ -127,6 +139,7 @@ fn parse_match(text: &str, fallback: String) -> Option<Host> {
     let mut is_match = false;
     let mut endpoint: Option<String> = None;
     let mut address: Option<String> = None;
+    let mut types = String::new();
     let mut field = String::new();
     let mut text_of: Option<&'static str> = None;
 
@@ -140,6 +153,8 @@ fn parse_match(text: &str, fallback: String) -> Option<Host> {
                     text_of = Some("endpoint");
                 } else if name.ends_with("XAddrs") {
                     text_of = Some("xaddrs");
+                } else if name.ends_with("Types") {
+                    text_of = Some("types");
                 }
             }
             Ok(Event::Text(value)) => {
@@ -153,6 +168,7 @@ fn parse_match(text: &str, fallback: String) -> Option<Host> {
                     Some("xaddrs") if address.is_none() => {
                         address = Some(host_of(&field).unwrap_or_else(|| fallback.clone()));
                     }
+                    Some("types") => types = field.clone(),
                     _ => {}
                 }
             }
@@ -170,6 +186,7 @@ fn parse_match(text: &str, fallback: String) -> Option<Host> {
     Some(Host {
         endpoint,
         address: address.unwrap_or(fallback),
+        types,
     })
 }
 
@@ -205,6 +222,12 @@ mod tests {
             "urn:uuid:194f1cb3-ebc6-4351-b046-610419940dfa"
         );
         assert_eq!(host.address, "172.32.3.100");
+    }
+
+    #[test]
+    fn reads_the_advertised_types() {
+        let host = parse_match(MATCH, "10.0.0.9".to_owned()).expect("a match");
+        assert!(host.types.contains("pub:Computer"), "got {:?}", host.types);
     }
 
     #[test]
