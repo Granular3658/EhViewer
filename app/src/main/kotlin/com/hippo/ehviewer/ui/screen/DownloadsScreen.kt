@@ -240,9 +240,10 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
     // manager finishing its load. Missing that last one counts an empty list.
     val downloadsCountGroupByLocation = remember(filterState, invalidateKey, DownloadManager.isInitialized) {
         val known = allDownloadLocations.mapTo(HashSet()) { it.toString() }
-        DownloadManager.downloadInfoList
+        val counts = DownloadManager.downloadInfoList
             .groupingBy { info -> info.downloadDir?.parent?.toString()?.takeIf { it in known } }
             .eachCount()
+        counts
     }
     val downloadsCount = when (filterMode) {
         DownloadsFilterMode.CUSTOM -> downloadsCountGroupByLabel
@@ -260,8 +261,14 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
     // Every configured location, including the ones nothing has been saved to
     // yet: a location is a thing the user set up, so it should not vanish from
     // the list just because it is empty.
+    //
+    // Both halves are the path, not the short name: the second half is what the
+    // row hands to the filter and what the count is looked up by, and for the
+    // other two modes the name and the key happen to be the same string. A
+    // location's short name is only a display name -- two of them can collide --
+    // so it is applied where the row is drawn, from `locationNames`.
     val locationList = remember(configuredLocations) {
-        allDownloadLocations.map { it.toString() to downloadSourceLabel(it) }
+        allDownloadLocations.map { it.toString() to it.toString() }
     }
     val groupList = when (filterMode) {
         DownloadsFilterMode.CUSTOM -> labelList
@@ -452,7 +459,11 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
                             },
                             shadowElevation = elevation,
                             headlineContent = {
-                                val name = if (filterMode == DownloadsFilterMode.ARTIST) getTranslation(label) else label
+                                val name = when (filterMode) {
+                                    DownloadsFilterMode.ARTIST -> getTranslation(label)
+                                    DownloadsFilterMode.LOCATION -> locationNames[label] ?: label
+                                    DownloadsFilterMode.CUSTOM -> label
+                                }
                                 Text("$name [${downloadsCount.getOrDefault(item, 0)}]")
                             },
                             trailingContent = editEnable.ifTrueThen {
