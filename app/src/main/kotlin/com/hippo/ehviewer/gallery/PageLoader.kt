@@ -121,6 +121,17 @@ abstract class PageLoader(val scope: CoroutineScope, val info: GalleryInfo?, sta
 
     abstract val title: String
 
+    /**
+     * What a position in this loader should be remembered under, or null when
+     * there is nowhere to remember it.
+     *
+     * A loader made of a directory's images is the same pictures, in the same
+     * order, as the listing it was opened from, so a page is a position in that
+     * listing; the key says which listing. It is null for the loaders that have
+     * no listing behind them, such as a gallery read from a server.
+     */
+    open val positionKey: String? get() = null
+
     protected abstract fun getImageExtension(index: Int): String?
 
     /**

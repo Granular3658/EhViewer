@@ -65,6 +65,8 @@ suspend inline fun <T> useImagesPageLoader(
             object : PageLoader(this, null, startPage, paths.size) {
                 override val title by lazy { name }
 
+                override val positionKey = directory
+
                 override fun close() {
                     lastPageByDirectory[directory] = startPage
                     Log.d("ehviewer-images", "close $directory at page $startPage")
