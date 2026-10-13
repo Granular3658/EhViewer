@@ -55,6 +55,7 @@ import com.hippo.ehviewer.jni.rewriteGifSource
 import com.hippo.ehviewer.ktbuilder.execute
 import com.hippo.ehviewer.ktbuilder.imageRequest
 import java.nio.ByteBuffer
+import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.decrementAndFetch
 import kotlin.concurrent.atomics.updateAndFetch
@@ -179,9 +180,27 @@ interface ByteBufferSource : ImageSource {
     val source: ByteBuffer
 }
 
+/**
+ * A source that lends out `buffer` and calls `release` once it is done with.
+ *
+ * `close()` is guarded because closing twice is normal, not exceptional: this is
+ * a `Closeable`, and a source reaches its end through more than one route -- the
+ * loader that produced it, and the `Image` that took it, both release it. The
+ * release frees native memory (`dwarfsReleaseByteBuffer` frees a page buffer
+ * `malloc`ed on the native side; the others unmap), so a second call frees the
+ * same block twice. The allocator notices -- "invalid chunk state when
+ * deallocating" -- and the process dies with a SIGABRT, which is what made
+ * DwarFS pages crash at random: whichever of the two routes ran first decided
+ * whether the second call found live memory or not.
+ */
 inline fun byteBufferSource(buffer: ByteBuffer, crossinline release: () -> Unit) = object : ByteBufferSource {
+    private val released = AtomicBoolean(false)
     override val source = buffer
-    override fun close() = release()
+    override fun close() {
+        if (released.compareAndSet(false, true)) {
+            release()
+        }
+    }
 }
 
 external fun detectBorder(bitmap: Bitmap): IntArray

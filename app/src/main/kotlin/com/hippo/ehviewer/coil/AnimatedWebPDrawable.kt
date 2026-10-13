@@ -11,6 +11,7 @@ import android.os.SystemClock
 import androidx.core.graphics.createBitmap
 import com.ehviewer.core.util.logcat
 import java.nio.ByteBuffer
+import kotlin.concurrent.atomics.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,9 +31,9 @@ class AnimatedWebPDrawable(
     /** Full source file size in bytes; used by the page cache to account for the buffer. */
     val sourceSize: Int = source.capacity()
 
-    @Volatile var disposed = false
-        private set
-    val isDisposed: Boolean get() = disposed
+    private val disposed = AtomicBoolean(false)
+
+    val isDisposed: Boolean get() = disposed.load()
 
     private val decodeScope = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -146,6 +147,14 @@ class AnimatedWebPDrawable(
     }
 
     fun dispose() {
+        // Guarded: `nativeDestroyDecoder` frees the decoder, and disposing twice
+        // would free it twice. That it can happen is not hypothetical -- the
+        // drawable is released both when its image is recycled and when the
+        // holder is closed -- and the allocator's answer to a double free is to
+        // abort the process.
+        if (!disposed.compareAndSet(false, true)) {
+            return
+        }
         runBlocking {
             decodeScope.coroutineContext.job.cancelAndJoin()
         }
@@ -154,7 +163,6 @@ class AnimatedWebPDrawable(
         // Must run after the decoder is destroyed, since it still reads the
         // buffer during teardown.
         release?.invoke()
-        disposed = true
     }
 }
 
