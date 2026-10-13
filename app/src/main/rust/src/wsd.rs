@@ -24,6 +24,19 @@ const PORT: u16 = 3702;
 const PROBE_ACTION: &str = "http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe";
 const MATCHES_ACTION: &str = "http://schemas.xmlsoap.org/ws/2005/04/discovery/ProbeMatches";
 
+/// NetBIOS name service, where a host answers what it calls itself.
+const NBNS_PORT: u16 = 137;
+
+/// The workstation service's NetBIOS suffix: the machine's own name, as
+/// opposed to a service it offers or the workgroup it belongs to.
+const NBNS_WORKSTATION: u8 = 0x00;
+
+/// One UDP round trip on a LAN takes single-digit milliseconds; this is only
+/// long enough to cover a host that is going to answer at all. A host with no
+/// name service at all -- an OpenWrt router, for one -- costs this much and
+/// then falls through to the metadata request.
+const NBNS_TIMEOUT: Duration = Duration::from_millis(800);
+
 /// How long to keep listening after the probe goes out. The specification
 /// allows a responder three seconds of randomised delay; waiting longer only
 /// delays the list, since a host that answers at all answers at once.
@@ -145,7 +158,15 @@ pub fn discover(interface: Option<Ipv4Addr>) -> Result<Vec<Host>> {
         // reached it by -- behind a NAT, or with more than one interface, they
         // differ. Falling back to the source of the datagram is what makes the
         // name survive that, and it costs nothing when they already agree.
-        host.name = metadata_name(&host.xaddrs, &host.address);
+        // The NetBIOS name first: it is one UDP round trip and it is what the
+        // host calls itself. The metadata request is the fallback, for the
+        // hosts with no name service -- and it is the only source for those.
+        host.name = host
+            .address
+            .parse::<Ipv4Addr>()
+            .ok()
+            .and_then(nbns_name)
+            .or_else(|| metadata_name(&host.xaddrs, &host.address));
         // Lengths, not the strings: this line is the only place the two fields
         // the request is built from can be seen together, and an empty one is
         // a parsing bug rather than a network one.
@@ -267,6 +288,135 @@ fn parse_match(text: &str, fallback: String) -> Option<Host> {
         types,
         name: None,
     })
+}
+
+/// Ask the NetBIOS name service what the host calls itself.
+///
+/// One UDP round trip to port 137, answered by Windows, Samba and most NAS.
+/// It is here because the WSD metadata endpoint -- the protocol-correct source
+/// of the same name -- refuses every shape of request with 500 on Windows,
+/// while its NetBIOS name is exactly what is wanted on screen. Neither source
+/// covers everything: a host with no name service at all still answers the
+/// metadata request, which is why that is kept as the fallback.
+fn nbns_name(address: Ipv4Addr) -> Option<String> {
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.set_read_timeout(Some(NBNS_TIMEOUT)).ok()?;
+    let mut query = Vec::with_capacity(50);
+    // Transaction id, then one question and nothing else.
+    query.extend_from_slice(&[0x12, 0x34, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+    // The wildcard name in the length-prefixed form NBNS uses: thirty-two
+    // bytes of half-ASCII, then the node status type and the internet class.
+    query.push(0x20);
+    query.extend_from_slice(b"CK");
+    query.extend_from_slice(&[b'A'; 30]);
+    query.push(0);
+    query.extend_from_slice(&[0x00, 0x21, 0x00, 0x01]);
+    socket.send_to(&query, (address, NBNS_PORT)).ok()?;
+    let mut buffer = [0u8; 1024];
+    let len = socket.recv(&mut buffer).ok()?;
+    let names = parse_name_table(name_table(&buffer[..len])?);
+    machine_name(&names)
+}
+
+/// The machine's own name out of a name table.
+///
+/// The workstation suffix is the machine; the same name with the file-server
+/// suffix is a service it offers, and the workgroup carries the group bit.
+/// Falling back to any unique name keeps a host with an unusual table usable.
+fn machine_name(names: &[NbnsName]) -> Option<String> {
+    names
+        .iter()
+        .find(|name| name.suffix == NBNS_WORKSTATION && !name.group)
+        .or_else(|| names.iter().find(|name| !name.group))
+        .map(|name| name.name.clone())
+}
+
+/// Step over a length-prefixed name, returning the offset just past it.
+fn skip_name(data: &[u8], mut offset: usize) -> Option<usize> {
+    while let Some(&length) = data.get(offset) {
+        if length == 0 {
+            return Some(offset + 1);
+        }
+        if length & 0xc0 == 0xc0 {
+            // A compression pointer is the whole name.
+            return Some(offset + 2);
+        }
+        offset += length as usize + 1;
+    }
+    None
+}
+
+/// The name table out of a node status reply.
+///
+/// A node status reply does not echo the question -- the name at the front is
+/// the answer's own -- so the table sits behind the header, that name, the
+/// type and class, the time to live and the length. Reading it as a reply that
+/// does echo the question lands the length in the middle of a name.
+fn name_table(reply: &[u8]) -> Option<&[u8]> {
+    if reply.len() < 12 || u16::from_be_bytes([reply[6], reply[7]]) == 0 {
+        return None;
+    }
+    let offset = skip_name(reply, 12)? + 4 + 4;
+    let length = u16::from_be_bytes([*reply.get(offset)?, *reply.get(offset + 1)?]) as usize;
+    reply.get(offset + 2..offset + 2 + length)
+}
+
+/// A name from a node status table, and what it says about itself.
+#[derive(Debug)]
+struct NbnsName {
+    name: String,
+    suffix: u8,
+    group: bool,
+}
+
+/// The names in a node status table.
+///
+/// Each entry is the fifteen-byte name and the one-byte suffix; Samba's
+/// replies carry two more bytes of flags, an eighteen-byte stride, where the
+/// documented layout has sixteen and puts the group bit in the suffix. Both
+/// strides are tried and the one whose names read as text wins, because the
+/// wrong one puts a flag byte inside every name. The browse master's name
+/// really does contain control bytes, so it cannot decide this on its own.
+fn parse_name_table(table: &[u8]) -> Vec<NbnsName> {
+    let count = table.first().copied().unwrap_or(0) as usize;
+    let mut best: Vec<NbnsName> = Vec::new();
+    let mut best_readable = 0;
+    for stride in [18usize, 16] {
+        let mut names = Vec::new();
+        let mut readable = 0;
+        for index in 0..count {
+            let start = 1 + index * stride;
+            let Some(entry) = table.get(start..start + stride) else {
+                break;
+            };
+            let name = String::from_utf8_lossy(&entry[..15])
+                .trim_end_matches([' ', '\0'])
+                .to_owned();
+            if name.is_empty() {
+                continue;
+            }
+            if name.chars().all(|c| (' '..'\x7f').contains(&c)) {
+                readable += 1;
+            }
+            // Sixteen-byte entries keep the group bit in the suffix byte;
+            // eighteen-byte ones in the low byte of the two-byte flags.
+            let (suffix, group) = if stride == 18 {
+                (entry[15], entry[17] & 0x80 != 0)
+            } else {
+                (entry[15] & 0x7f, entry[15] & 0x80 != 0)
+            };
+            names.push(NbnsName {
+                name,
+                suffix,
+                group,
+            });
+        }
+        if readable > best_readable {
+            best_readable = readable;
+            best = names;
+        }
+    }
+    best
 }
 
 /// SOAP 1.2 puts the action in the content type, and a conforming responder
@@ -807,5 +957,77 @@ mod tests {
             "{}",
             requests[0]
         );
+    }
+
+    /// The name table a Samba host really sent, stride and all.
+    fn samba_table() -> Vec<u8> {
+        let mut table = vec![7u8];
+        for (name, suffix, flags) in [
+            ("HERMES1", 0x00u8, [0x04u8, 0x00]),
+            ("HERMES1", 0x03, [0x04, 0x00]),
+            ("HERMES1", 0x20, [0x04, 0x00]),
+            // The browse master's name is these bytes, control characters
+            // included, and it is the reason a control byte cannot be taken as
+            // proof that the stride is wrong.
+            ("\u{1}\u{2}__MSBROWSE__\u{2}", 0x01, [0x84, 0x00]),
+            ("WORKGROUP", 0x00, [0x84, 0x00]),
+            ("WORKGROUP", 0x1d, [0x04, 0x00]),
+            ("WORKGROUP", 0x1e, [0x84, 0x00]),
+        ] {
+            let mut entry = vec![b' '; 15];
+            entry[..name.len()].copy_from_slice(name.as_bytes());
+            entry.push(suffix);
+            entry.extend_from_slice(&flags);
+            table.extend_from_slice(&entry);
+        }
+        table
+    }
+
+    /// A node status reply around a table. The question is not echoed, and a
+    /// reply read as if it were puts the length field in the middle of a name.
+    fn nbns_reply(table: &[u8]) -> Vec<u8> {
+        let mut reply = vec![0x12, 0x34, 0x84, 0x00, 0, 0, 0, 1, 0, 0, 0, 0];
+        reply.push(0x20);
+        reply.extend_from_slice(b"CK");
+        reply.extend_from_slice(&[b'A'; 30]);
+        reply.push(0);
+        reply.extend_from_slice(&[0x00, 0x21, 0x00, 0x01]);
+        reply.extend_from_slice(&[0, 0, 0, 0]);
+        reply.extend_from_slice(&(table.len() as u16).to_be_bytes());
+        reply.extend_from_slice(table);
+        reply
+    }
+
+    #[test]
+    fn reads_the_machine_name_from_a_samba_name_table() {
+        let table = samba_table();
+        assert_eq!(name_table(&nbns_reply(&table)), Some(&table[..]));
+        let names = parse_name_table(&table);
+        // The control bytes in the browse master's name must not be read as a
+        // wrong stride, and the workgroup must not be read as the machine.
+        assert!(names.iter().any(|name| name.name.contains("MSBROWSE")));
+        assert_eq!(machine_name(&names).as_deref(), Some("HERMES1"));
+    }
+
+    /// Windows writes the documented sixteen-byte entries, where the group bit
+    /// lives in the suffix byte rather than in a pair of flag bytes, and its
+    /// name is the one the metadata request could not be made to return.
+    #[test]
+    fn reads_the_machine_name_from_a_windows_name_table() {
+        let mut table = vec![3u8];
+        for (name, suffix) in [
+            ("DESKTOP-9CVQRS1", 0x00u8),
+            // The workgroup, with the group bit in the suffix byte.
+            ("WORKGROUP", 0x80),
+            ("DESKTOP-9CVQRS1", 0x20),
+        ] {
+            let mut entry = vec![b' '; 15];
+            entry[..name.len()].copy_from_slice(name.as_bytes());
+            entry.push(suffix);
+            table.extend_from_slice(&entry);
+        }
+        let names = parse_name_table(&table);
+        assert_eq!(names.len(), 3, "{names:?}");
+        assert_eq!(machine_name(&names).as_deref(), Some("DESKTOP-9CVQRS1"));
     }
 }
