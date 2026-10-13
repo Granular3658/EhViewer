@@ -49,6 +49,7 @@ pub fn discover() -> Result<Vec<Host>> {
 
     let message_id = message_id();
     let probe = probe(&message_id);
+    log::debug!(target: "wsd", "probing {GROUP}:{PORT} as {message_id}");
     socket
         .send_to(probe.as_bytes(), (GROUP, PORT))
         .context("sending the probe")?;
@@ -65,17 +66,27 @@ pub fn discover() -> Result<Vec<Host>> {
         let (len, from) = match socket.recv_from(&mut buffer) {
             Ok(received) => received,
             // The timeout is the end of the window, not a failure.
-            Err(_) => break,
+            Err(err) => {
+                log::debug!(target: "wsd", "stopped listening: {err}");
+                break;
+            }
         };
+        // Logged before parsing: a reply that arrives but does not parse is a
+        // different bug from a reply that never arrives, and the count of
+        // datagrams is the only thing that tells them apart.
+        log::debug!(target: "wsd", "datagram from {from} ({len} bytes)");
         let Ok(text) = std::str::from_utf8(&buffer[..len]) else {
+            log::debug!(target: "wsd", "not UTF-8, skipped");
             continue;
         };
         if let Some(host) = parse_match(text, from.ip().to_string())
             && !hosts.iter().any(|seen| seen.endpoint == host.endpoint)
         {
+            log::debug!(target: "wsd", "host {} at {}", host.endpoint, host.address);
             hosts.push(host);
         }
     }
+    log::info!(target: "wsd", "discovery found {} host(s)", hosts.len());
     Ok(hosts)
 }
 
