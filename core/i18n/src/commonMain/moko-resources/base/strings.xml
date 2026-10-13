@@ -37,6 +37,7 @@
     <string name="downloads">Downloads</string>
     <string name="local_network">Local network</string>
     <string name="local_network_add_host">Add host</string>
+    <string name="local_network_search">Search the network</string>
     <string name="local_network_host">Host address</string>
     <string name="local_network_no_hosts">No hosts yet. Add one by address.</string>
     <string name="local_network_add_to_download_locations">Add to download locations</string>

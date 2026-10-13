@@ -23,6 +23,14 @@ external fun smbShares(
     domain: String,
 ): Array<String>
 
+/**
+ * Hosts on the local network that answer WS-Discovery.
+ *
+ * Blocking for the length of the discovery window, so this must not be called
+ * on the main thread. Returns addresses.
+ */
+external fun wsdDiscover(): Array<String>
+
 /** Each entry is "1:name" for a directory and "0:name" for a regular file. */
 external fun smbList(
     host: String,

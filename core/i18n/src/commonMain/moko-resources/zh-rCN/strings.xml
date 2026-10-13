@@ -23,6 +23,7 @@
     <string name="downloads">下载</string>
     <string name="local_network">本地网络</string>
     <string name="local_network_add_host">添加主机</string>
+    <string name="local_network_search">搜索网络</string>
     <string name="local_network_host">主机地址</string>
     <string name="local_network_no_hosts">还没有主机，请按地址添加。</string>
     <string name="local_network_add_to_download_locations">加入下载目录列表</string>
