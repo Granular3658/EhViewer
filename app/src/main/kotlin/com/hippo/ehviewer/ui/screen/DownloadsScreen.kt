@@ -233,7 +233,12 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
     // directory, resolved (and cached) by `downloadDir`. The key is `null` for a
     // download that is not under any configured location -- the same rule the
     // filter uses, so the count beside a row matches what the row filters to.
-    val downloadsCountGroupByLocation = remember(invalidateKey) {
+    //
+    // The download list is a plain list that is filled in after the manager
+    // initialises, so it has to be re-counted on everything the list above is
+    // re-read on: the mode and label being picked, the sort changing, and the
+    // manager finishing its load. Missing that last one counts an empty list.
+    val downloadsCountGroupByLocation = remember(filterState, invalidateKey, DownloadManager.isInitialized) {
         val known = allDownloadLocations.mapTo(HashSet()) { it.toString() }
         DownloadManager.downloadInfoList
             .groupingBy { info -> info.downloadDir?.parent?.toString()?.takeIf { it in known } }
