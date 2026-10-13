@@ -139,7 +139,9 @@ import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import moe.tarsin.navigate
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -230,20 +232,31 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
     val downloadsCountGroupByLabel by rememberInVM { EhDB.downloadsCountByLabel }.collectAsState(emptyMap())
     // A location is not a column on a download, so this one cannot be a query the
     // way the other two are: it is whichever location holds the download's
-    // directory, resolved (and cached) by `downloadDir`. The key is `null` for a
-    // download that is not under any configured location -- the same rule the
-    // filter uses, so the count beside a row matches what the row filters to.
+    // directory, which is what `downloadDir` resolves and caches. The key is
+    // `null` for a download that is not under any configured location -- the same
+    // rule the filter uses, so the count beside a row matches what the row
+    // filters to.
     //
-    // The download list is a plain list that is filled in after the manager
-    // initialises, so it has to be re-counted on everything the list above is
-    // re-read on: the mode and label being picked, the sort changing, and the
-    // manager finishing its load. Missing that last one counts an empty list.
-    val downloadsCountGroupByLocation = remember(filterState, invalidateKey, DownloadManager.isInitialized) {
-        val known = allDownloadLocations.mapTo(HashSet()) { it.toString() }
-        val counts = DownloadManager.downloadInfoList
-            .groupingBy { info -> info.downloadDir?.parent?.toString()?.takeIf { it in known } }
-            .eachCount()
-        counts
+    // Resolving a directory is not free: `downloadDir`'s cold path stats each
+    // configured location until one holds it, and on a share that stat is a round
+    // trip. Doing that for every download, on the main thread, while the screen
+    // is composing, is what made the first opening stutter -- the row that prints
+    // a download's source only ever resolves the rows on screen, and only when
+    // that setting is on.
+    //
+    // So it is counted off the main thread, and only in this mode: the other two
+    // count from the database and never need to resolve anything. The numbers
+    // read zero for the moment it takes to fill in; the filter itself does not
+    // wait on them.
+    var downloadsCountGroupByLocation by remember { mutableStateOf(emptyMap<String?, Int>()) }
+    LaunchedEffect(filterMode, invalidateKey, DownloadManager.isInitialized, configuredLocations) {
+        if (filterMode != DownloadsFilterMode.LOCATION) return@LaunchedEffect
+        downloadsCountGroupByLocation = withContext(Dispatchers.IO) {
+            val known = allDownloadLocations.mapTo(HashSet()) { it.toString() }
+            DownloadManager.downloadInfoList
+                .groupingBy { info -> info.downloadDir?.parent?.toString()?.takeIf { it in known } }
+                .eachCount()
+        }
     }
     val downloadsCount = when (filterMode) {
         DownloadsFilterMode.CUSTOM -> downloadsCountGroupByLabel
