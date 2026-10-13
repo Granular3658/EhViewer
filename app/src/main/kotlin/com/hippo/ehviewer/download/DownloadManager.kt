@@ -310,8 +310,8 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
         }
     }
 
-    suspend fun restoreDownload(galleryInfo: BaseGalleryInfo, dirname: String) {
-        val info = DownloadInfo(galleryInfo.asEntity(), dirname)
+    suspend fun restoreDownload(galleryInfo: BaseGalleryInfo, dirname: String, location: String? = null) {
+        val info = DownloadInfo(galleryInfo.asEntity(), dirname, location)
         info.state = DownloadInfo.STATE_NONE
 
         // Add to all download list and map
@@ -325,6 +325,24 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
 
         // Notify
         mutableNotifyFlow.emit(info)
+    }
+
+    /**
+     * Records where a download's directory lives, in the database and in the list
+     * that is already in memory.
+     *
+     * Both, because the two are read by different things and would otherwise
+     * disagree: the counts beside each grouping come from the database, while the
+     * list decides what belongs in a group from the objects in memory. Writing
+     * only the database leaves a download that has just been restored counted
+     * under its location but absent from it, until the next start reloads.
+     */
+    suspend fun recordDownloadLocation(gid: Long, dirname: String, location: String) {
+        EhDB.putDownloadLocation(gid, dirname, location)
+        mAllInfoMap[gid]?.takeIf { it.location != location }?.let { info ->
+            info.location = location
+            mutableNotifyFlow.emit(info)
+        }
     }
 
     suspend fun stopDownload(gid: Long) {
