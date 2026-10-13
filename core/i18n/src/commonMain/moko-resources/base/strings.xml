@@ -407,7 +407,7 @@
     <string name="settings_advanced_smb_cache_clear_on_exit">Clear SMB cache when leaving a gallery</string>
     <string name="settings_advanced_smb_cache_clear_on_exit_summary">Drop everything cached from the share once the last gallery using it is closed. This is what the bitmap cache does; turning it off keeps what you have already read, so reopening the same gallery does not read from the network again.</string>
     <string name="settings_advanced_dwarfs_cache_size">DwarFS cache size</string>
-    <string name="settings_advanced_dwarfs_cache_size_summary">How much of a DwarFS image to keep decompressed in memory. Reading any byte of a block costs the whole block, so a larger cache trades memory for fewer re-reads. An image whose blocks are larger than this cannot be opened at all.</string>
+    <string name="settings_advanced_dwarfs_cache_size_summary">How much of a DwarFS image is kept decompressed in memory. If an image you packed yourself will not open because its block size is large, try raising this.</string>
     <string name="settings_advanced_app_language_title">App language</string>
     <string name="settings_advanced_enable_quic">QUIC support</string>
     <string name="settings_advanced_hardware_bitmap_threshold">Hardware bitmap (better performance) threshold</string>

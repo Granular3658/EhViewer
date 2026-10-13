@@ -204,6 +204,18 @@ fn evict() {
             guard.by_id.get(&id).is_some_and(|e| e.pins == 0)
                 || guard.window_by_id.contains_key(&id)
         });
+        // Nothing is evictable, so the cap cannot be met -- give up rather than
+        // spin. That makes the cap a *soft* limit: `total` is allowed to exceed
+        // it, and does whenever more regions are in use than it allows. A reader
+        // holds every page it has decoded, so a gallery of large images sits well
+        // above a small cap and nothing is wrong: the cap governs only what is
+        // kept *beyond* what is in use, which is what makes going back to a page
+        // the page cache has already dropped cheaper than reading it again.
+        //
+        // The pin is what makes this safe. A region is pinned while a consumer
+        // holds it -- see the module docs -- so the cap can never take memory
+        // from under a decoder, and setting it to zero is a valid choice rather
+        // than a way to break playback.
         let Some(id) = victim else { break };
         let reprieved = if let Some(e) = guard.by_id.get_mut(&id) {
             let was_accessed = e.accessed;
