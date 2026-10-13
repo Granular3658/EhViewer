@@ -46,12 +46,13 @@ object SmbRepository {
     /**
      * Hosts on the local network that answer WS-Discovery.
      *
-     * Callers should hold a multicast lock: without one the Wi-Fi stack drops
-     * group traffic to save power, the probe goes out and nothing comes back,
-     * and that looks exactly like a network with no hosts on it.
+     * [address] is the interface to listen on, or empty for any: joining the
+     * multicast group without one lets the kernel choose, and on a device with
+     * more than one interface the choice is not always the one the answers
+     * come back on.
      */
-    suspend fun discoverHosts(): List<String> = withContext(Dispatchers.IO) {
-        wsdDiscover().toList()
+    suspend fun discoverHosts(address: String): List<String> = withContext(Dispatchers.IO) {
+        wsdDiscover(address).toList()
     }
 
     /**

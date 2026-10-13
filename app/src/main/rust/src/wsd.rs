@@ -15,7 +15,7 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
@@ -56,12 +56,41 @@ const GET_TIMEOUT: Duration = Duration::from_millis(1200);
 const COMPUTER_TYPE: &str = "pub:Computer";
 
 /// Ask the network which hosts speak WS-Discovery.
-pub fn discover() -> Result<Vec<Host>> {
+///
+/// Takes the address of the interface to listen on, or `None` to let the
+/// kernel choose. Naming it matters on a device with more than one interface:
+/// joining the group with `UNSPECIFIED` picks one, and when it is not the
+/// interface the answers come back on, the probe goes out and the replies
+/// never arrive -- which is indistinguishable from a silent network.
+pub fn discover(interface: Option<Ipv4Addr>) -> Result<Vec<Host>> {
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, PORT))
         .with_context(|| format!("binding UDP {PORT}"))?;
+    let interface = interface.unwrap_or(Ipv4Addr::UNSPECIFIED);
     socket
-        .join_multicast_v4(&GROUP, &Ipv4Addr::UNSPECIFIED)
-        .context("joining the discovery group")?;
+        .join_multicast_v4(&GROUP, &interface)
+        .with_context(|| format!("joining the discovery group on {interface}"))?;
+    if !interface.is_unspecified() {
+        // Pin the outgoing probe to the same interface, or the kernel may send
+        // it out one the group was not joined on and the replies land nowhere.
+        let raw = std::os::fd::AsRawFd::as_raw_fd(&socket);
+        let address = u32::from(interface).to_be();
+        // SAFETY: `raw` is a live socket owned by `socket`, and `address` is the
+        // network-byte-order form of the interface address.
+        let result = unsafe {
+            libc::setsockopt(
+                raw,
+                libc::IPPROTO_IP,
+                libc::IP_MULTICAST_IF,
+                &address as *const u32 as *const libc::c_void,
+                std::mem::size_of::<u32>() as libc::socklen_t,
+            )
+        };
+        ensure!(
+            result == 0,
+            "pinning the probe to {interface}: {}",
+            std::io::Error::last_os_error()
+        );
+    }
     socket.set_multicast_loop_v4(true)?;
     socket.set_read_timeout(Some(WINDOW))?;
 
@@ -109,10 +138,20 @@ pub fn discover() -> Result<Vec<Host>> {
         }
     }
     // Metadata needs one HTTP request per host. Do it after collecting the UDP
-    // replies, so a slow metadata endpoint cannot make us miss another host.
+    // replies, so a slow metadata endpoint cannot cost us another host.
     for host in &mut hosts {
-        host.name = metadata_name(&host.xaddrs);
-        log::debug!(target: "wsd", "metadata name for {}: {:?}", host.address, host.name);
+        // The address in `XAddrs` is authoritative, but it is the address the
+        // device sees for itself, which is not always the address this device
+        // reached it by -- behind a NAT, or with more than one interface, they
+        // differ. Falling back to the source of the datagram is what makes the
+        // name survive that, and it costs nothing when they already agree.
+        host.name = metadata_name(&host.xaddrs).or_else(|| metadata_name(&host.address));
+        log::debug!(
+            target: "wsd",
+            "metadata name for {}: {:?}",
+            host.address,
+            host.name
+        );
     }
     log::info!(target: "wsd", "discovery found {} host(s)", hosts.len());
     Ok(hosts)
@@ -212,40 +251,75 @@ fn parse_match(text: &str, fallback: String) -> Option<Host> {
 
 /// Ask the host for its WS-Device Profile metadata and use the advertised
 /// computer name as a display label. The address remains the connection target.
-fn metadata_name(xaddr: &str) -> Option<String> {
-    let (host, port, path) = endpoint_parts(xaddr)?;
+///
+/// Takes either an `XAddrs` URL or a bare `host:port`: the URL names the exact
+/// endpoint, and a bare address is the fallback for a device whose advertised
+/// URL this one cannot reach, on the port the same protocol uses.
+fn metadata_name(endpoint: &str) -> Option<String> {
+    let (host, port, path) = match endpoint_parts(endpoint) {
+        Some(parts) => parts,
+        // A bare host, with the port WSD answers XML on.
+        None => {
+            log::debug!(target: "wsd", "metadata: {endpoint} is not an XAddr");
+            return metadata_name(&format!("http://{endpoint}:{PORT}/"));
+        }
+    };
     let addresses = (host.as_str(), port).to_socket_addrs().ok()?;
     let address = addresses.into_iter().next()?;
-    let mut stream = TcpStream::connect_timeout(&address, GET_TIMEOUT).ok()?;
-    stream.set_read_timeout(Some(GET_TIMEOUT)).ok()?;
-    stream.set_write_timeout(Some(GET_TIMEOUT)).ok()?;
+    // Why this failed is the whole question when a name is missing, and it is
+    // not recoverable from `None`: a refused connection, an address that does
+    // not route, and a device that answers something else all surface here.
+    let mut stream = TcpStream::connect_timeout(&address, GET_TIMEOUT)
+        .map_err(|err| log::debug!(target: "wsd", "metadata: connect {address} failed: {err}"))
+        .ok()?;
+    stream
+        .set_read_timeout(Some(GET_TIMEOUT))
+        .map_err(|err| log::debug!(target: "wsd", "metadata: read timeout failed: {err}"))
+        .ok()?;
+    stream
+        .set_write_timeout(Some(GET_TIMEOUT))
+        .map_err(|err| log::debug!(target: "wsd", "metadata: write timeout failed: {err}"))
+        .ok()?;
 
     let message_id = message_id();
     let body = format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:wst="http://schemas.xmlsoap.org/ws/2004/09/transfer">
-<soap:Header><wsa:To>{xaddr}</wsa:To><wsa:Action>http://schemas.xmlsoap.org/ws/2004/09/transfer/Get</wsa:Action><wsa:MessageID>{message_id}</wsa:MessageID></soap:Header>
+<soap:Header><wsa:To>{endpoint}</wsa:To><wsa:Action>http://schemas.xmlsoap.org/ws/2004/09/transfer/Get</wsa:Action><wsa:MessageID>{message_id}</wsa:MessageID></soap:Header>
 <soap:Body><wst:Get/></soap:Body></soap:Envelope>"#
     );
     let request = format!(
         "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/soap+xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
-    stream.write_all(request.as_bytes()).ok()?;
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|err| log::debug!(target: "wsd", "metadata: write failed: {err}"))
+        .ok()?;
 
     // wsdd2 and conforming responders close the connection after their reply.
     // Cap it so a broken endpoint cannot turn discovery into an unbounded read.
     let mut response = Vec::new();
-    stream.take(64 * 1024).read_to_end(&mut response).ok()?;
+    if let Err(err) = stream.take(64 * 1024).read_to_end(&mut response) {
+        log::debug!(target: "wsd", "metadata: read from {host}:{port} failed: {err}");
+        return None;
+    }
     let separator = response.windows(4).position(|w| w == b"\r\n\r\n")?;
     let headers = std::str::from_utf8(&response[..separator]).ok()?;
     let status = headers.lines().next()?.split_whitespace().nth(1)?;
     if status != "200" {
-        log::debug!(target: "wsd", "metadata request to {xaddr} returned HTTP {status}");
+        log::debug!(
+            target: "wsd",
+            "metadata: {host}:{port} answered HTTP {status}"
+        );
         return None;
     }
     let xml = std::str::from_utf8(&response[separator + 4..]).ok()?;
-    parse_metadata_name(xml)
+    let name = parse_metadata_name(xml);
+    if name.is_none() {
+        log::debug!(target: "wsd", "metadata: {host}:{port} sent no name");
+    }
+    name
 }
 
 /// Split the first (and in our caller, only) XAddr into the TCP destination
@@ -335,6 +409,31 @@ mod tests {
     /// Our own probe, handed back by the multicast group. It carries the
     /// `Probe` action, not `ProbeMatches`, and must not become a host.
     const ECHO: &str = r#"<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:wsd="http://schemas.xmlsoap.org/ws/2005/04/discovery"><soap:Header><wsa:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</wsa:To><wsa:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</wsa:Action><wsa:MessageID>urn:uuid:202168e8</wsa:MessageID></soap:Header><soap:Body><wsd:Probe/></soap:Body></soap:Envelope>"#;
+
+    /// A ProbeMatch from a Windows 10 machine, as received on a phone.
+    ///
+    /// It is a real responder, and it differs from `wsdd2` in ways that matter:
+    /// the metadata address it advertises is port 5357 rather than 3702, and
+    /// it carries an `AppSequence` in the header. Neither may be mistaken for a
+    /// reason to drop it -- the port belongs to metadata only, and SMB is
+    /// always contacted on the port the browser was configured with.
+    const WINDOWS: &str = r#"<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:wsd="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:wsdp="http://schemas.xmlsoap.org/ws/2006/02/devprof" xmlns:pub="http://schemas.microsoft.com/windows/pub/2005/07"><soap:Header><wsa:To>http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous</wsa:To><wsa:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/ProbeMatches</wsa:Action><wsa:MessageID>urn:uuid:f7a189d7-649a-48e0-bf29-4d7fedb24772</wsa:MessageID><wsa:RelatesTo>urn:uuid:48326a7c-2380-44ab-b63d-4e06645d4ce1</wsa:RelatesTo><wsd:AppSequence InstanceId="212" SequenceId="urn:uuid:45657af3-1a54-40a2-90c6-967c7d2329fb" MessageNumber="21"></wsd:AppSequence></soap:Header><soap:Body><wsd:ProbeMatches><wsd:ProbeMatch><wsa:EndpointReference><wsa:Address>urn:uuid:6b0383b4-9e60-4c45-88cf-4c0e9e3920f5</wsa:Address></wsa:EndpointReference><wsd:Types>wsdp:Device pub:Computer</wsd:Types><wsd:XAddrs>http://192.168.1.132:5357/6b0383b4-9e60-4c45-88cf-4c0e9e3920f5/</wsd:XAddrs><wsd:MetadataVersion>12</wsd:MetadataVersion></wsd:ProbeMatch></wsd:ProbeMatches></soap:Body></soap:Envelope>"#;
+
+    #[test]
+    fn reads_a_windows_10_match() {
+        let host = parse_match(WINDOWS, "10.0.0.9".to_owned()).expect("a match");
+        assert_eq!(
+            host.endpoint,
+            "urn:uuid:6b0383b4-9e60-4c45-88cf-4c0e9e3920f5"
+        );
+        // The SMB address is the host, whatever port the metadata lives on.
+        assert_eq!(host.address, "192.168.1.132");
+        assert_eq!(
+            host.xaddrs,
+            "http://192.168.1.132:5357/6b0383b4-9e60-4c45-88cf-4c0e9e3920f5/"
+        );
+        assert!(host.types.contains(COMPUTER_TYPE), "got {:?}", host.types);
+    }
 
     #[test]
     fn reads_the_address_from_a_real_match() {
