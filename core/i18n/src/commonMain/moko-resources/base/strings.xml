@@ -39,6 +39,8 @@
     <string name="local_network_add_host">Add host</string>
     <string name="local_network_search">Search the network</string>
     <string name="local_network_host">Host address</string>
+    <string name="local_network_host_hint">e.g. 192.168.1.5 or smb://192.168.1.5:445</string>
+    <string name="local_network_remember_host">Keep</string>
     <string name="local_network_no_hosts">No hosts yet. Add one by address.</string>
     <string name="local_network_add_to_download_locations">Add to download locations</string>
     <string name="local_network_cannot_list">Could not read this location</string>
