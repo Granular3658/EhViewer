@@ -356,13 +356,18 @@ private fun Breadcrumb(
  * The address of the Wi-Fi interface, which is where a local network answers
  * from.
  *
- * Asked for by transport rather than taken from the active network: the active
- * one is whatever carries default traffic, which on a phone is often the
- * cellular interface. Joining the discovery group there sends the probe onto a
- * network that cannot route to any of the hosts being browsed -- the probe goes
- * out, the replies arrive on Wi-Fi, and nothing comes back.
+ * A guard, not a repair: it was added believing the probe was going out of the
+ * cellular interface, and that belief is not supported -- the host count was
+ * the same before and after the change, and what actually fixed the missing
+ * host was the message id. What this does buy is that the probe carries a
+ * Wi-Fi source address, and a WSD responder answers by *unicast* to that
+ * address: a source the LAN cannot route to loses the reply silently, and a
+ * silent reply is indistinguishable from a host that is not there.
  *
- * Empty when there is no Wi-Fi, which lets the native side choose.
+ * Asked for by transport rather than taken from the active network, because
+ * the active one is whatever carries default traffic and that is not
+ * necessarily the network being browsed. Empty when there is no Wi-Fi, which
+ * lets the native side choose.
  */
 private fun wifiInterfaceAddress(context: Context): String {
     val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
