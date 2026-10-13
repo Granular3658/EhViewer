@@ -18,7 +18,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -54,6 +56,7 @@ import com.ehviewer.core.i18n.R
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.download.invalidateDownloadLocationCache
+import com.hippo.ehviewer.gallery.lastPageByDirectory
 import com.hippo.ehviewer.smb.SmbLocation
 import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.ui.LocalSnackBarHostState
@@ -267,6 +270,20 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
         }
     }
 
+    // The listing and the gallery are the same pictures in the same order, so
+    // coming back from a gallery lands on the picture that was on screen. The
+    // entries arrive asynchronously, which is why this waits for them rather
+    // than running once when the screen comes back.
+    val entryListState = rememberLazyListState()
+    LaunchedEffect(entries) {
+        val list = entries ?: return@LaunchedEffect
+        val page = location?.let { lastPageByDirectory[it.uriString] } ?: return@LaunchedEffect
+        val name = list.filter { !it.isDirectory && isImage(it.name) }.getOrNull(page)?.name
+            ?: return@LaunchedEffect
+        val index = list.indexOfFirst { it.name == name }
+        if (index >= 0) entryListState.scrollToItem(index)
+    }
+
     Scaffold(
         topBar = {
             Column {
@@ -332,6 +349,7 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                 })
                 else -> EntryList(
                     entries = entries,
+                    listState = entryListState,
                     onOpenDirectory = { name -> subPath = subPath.appendSegment(name) },
                     onOpenFile = { name ->
                         val current = location
@@ -346,6 +364,7 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                                 val images = entries.orEmpty()
                                     .filter { !it.isDirectory && isImage(it.name) }
                                 navToReader(
+                                    current.uriString,
                                     images.map {
                                         current.copy(subPath = current.subPath.appendSegment(it.name)).uriString
                                     },
@@ -383,6 +402,9 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
     savingLocation?.let { target ->
         SmbLocationDialog(
             initial = target,
+            // The directory was reached by listing it, so it answers: the test
+            // button would only re-ask a question this screen already knows.
+            knownReachable = true,
             onDismiss = { savingLocation = null },
             showMessage = { launchSnackbar(it) },
             onSaved = { saved ->
@@ -564,6 +586,7 @@ private fun NameList(names: List<String>?, onOpen: (String) -> Unit) {
 @Composable
 private fun EntryList(
     entries: List<SmbRepository.Entry>?,
+    listState: LazyListState,
     onOpenDirectory: (String) -> Unit,
     onOpenFile: (String) -> Unit,
     onAddToDownloadLocations: (String) -> Unit,
@@ -577,7 +600,7 @@ private fun EntryList(
         return
     }
     var menuFor by remember { mutableStateOf<String?>(null) }
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
+    LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
         items(entries, key = { it.name }) { entry ->
             Box {
                 Row(

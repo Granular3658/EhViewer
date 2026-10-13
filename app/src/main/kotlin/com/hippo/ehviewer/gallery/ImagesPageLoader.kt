@@ -23,13 +23,25 @@ import moe.tarsin.kt.install
 import okio.Path
 
 /**
+ * Where each gallery of images was left off, by the directory it came from.
+ *
+ * The listing and the gallery are the same pictures in the same order, so the
+ * page a reader was left on is a position in the listing. Keeping it here is
+ * what lets the listing go back to it. It is deliberately in memory: it says
+ * where the eye was, which is not something to remember across a restart.
+ */
+val lastPageByDirectory = mutableMapOf<String, Int>()
+
+/**
  * Opens a list of images as a gallery, the way an archive is opened.
  *
  * The pages are the files given, in the order given, and the caller does the
  * listing: a browser already has the entries of the directory on screen, and
  * asking the share for them again would be a second round trip for a list that
  * is already in hand. The order is therefore the order they are shown in, so
- * the page a tap opens is the page that was tapped.
+ * the page a tap opens is the page that was tapped, and the page the reader is
+ * left on is a position the listing can return to -- which is what [directory]
+ * is for.
  *
  * A page is read through [PathSource], which is the same route a downloaded
  * gallery's images are read by, so a share is read through the filesystem that
@@ -41,6 +53,7 @@ import okio.Path
  */
 suspend inline fun <T> useImagesPageLoader(
     paths: List<Path>,
+    directory: String,
     name: String,
     startPage: Int = 0,
     crossinline block: suspend (PageLoader) -> T,
@@ -50,6 +63,11 @@ suspend inline fun <T> useImagesPageLoader(
         val loader = install(
             object : PageLoader(this, null, startPage, paths.size) {
                 override val title by lazy { name }
+
+                override fun close() {
+                    lastPageByDirectory[directory] = startPage
+                    super.close()
+                }
 
                 override fun getImageExtension(index: Int) = paths[index].name.substringAfterLast('.', "")
 

@@ -51,6 +51,14 @@ fun SmbLocationDialog(
     onSaved: (SmbLocation) -> Unit,
     showMessage: (String) -> Unit,
     initial: SmbLocation? = null,
+    /**
+     * Whether this location is already known to answer.
+     *
+     * Typing an address is a claim that has to be checked before it is stored;
+     * walking to a directory through a listing is proof, so asking for a test
+     * there asks for something that has already happened.
+     */
+    knownReachable: Boolean = false,
 ) {
     // Prefill from the stored location when editing, so a tap can fix a typo
     // without retyping the host, the share or the credentials.
@@ -63,8 +71,8 @@ fun SmbLocationDialog(
     }
     var password by remember { mutableStateOf(savedCredentials?.password.orEmpty()) }
     var testing by remember { mutableStateOf(false) }
-    var testedLocation by remember { mutableStateOf<SmbLocation?>(null) }
-    var testedCredentials by remember { mutableStateOf<SmbCredentials?>(null) }
+    var testedLocation by remember { mutableStateOf(initial.takeIf { knownReachable }) }
+    var testedCredentials by remember { mutableStateOf(savedCredentials.takeIf { knownReachable }) }
     var testMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val invalidMessage = stringResource(R.string.settings_download_smb_invalid)
