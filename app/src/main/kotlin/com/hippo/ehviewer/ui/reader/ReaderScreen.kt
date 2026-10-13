@@ -72,6 +72,7 @@ import com.hippo.ehviewer.gallery.Page
 import com.hippo.ehviewer.gallery.PageLoader
 import com.hippo.ehviewer.gallery.PageStatus
 import com.hippo.ehviewer.gallery.isDwarfs
+import com.hippo.ehviewer.gallery.lastPageByDirectory
 import com.hippo.ehviewer.gallery.status
 import com.hippo.ehviewer.gallery.unblock
 import com.hippo.ehviewer.gallery.useArchivePageLoader
@@ -181,6 +182,18 @@ fun AnimatedVisibilityScope.ReaderScreen(args: ReaderScreenArgs, navigator: Dest
             is Either.Right -> {
                 val loader = result.value
                 val info = (args as? ReaderScreenArgs.Gallery)?.info
+                // Leaving the reader leaves the listing where the reader was.
+                // `startPage` is the settled page -- the pager writes it when it
+                // comes to rest, so it is the page being read rather than a page
+                // that was merely requested ahead -- and this runs when the
+                // reader's composition goes away, which is the moment to keep it.
+                DisposableEffect(loader) {
+                    onDispose {
+                        (args as? ReaderScreenArgs.Images)?.let {
+                            lastPageByDirectory[it.directory] = loader.startPage
+                        }
+                    }
+                }
                 key(loader) {
                     ReaderScreen(loader, info)
                 }
