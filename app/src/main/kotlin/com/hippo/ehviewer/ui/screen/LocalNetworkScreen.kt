@@ -29,7 +29,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -44,6 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.ehviewer.core.i18n.R
 import com.hippo.ehviewer.Settings
+import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.download.invalidateDownloadLocationCache
 import com.hippo.ehviewer.smb.SmbLocation
 import com.hippo.ehviewer.smb.SmbRepository
