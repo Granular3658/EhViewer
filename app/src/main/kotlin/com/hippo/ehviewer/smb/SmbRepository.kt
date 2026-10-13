@@ -34,12 +34,13 @@ object SmbRepository {
 
     suspend fun test(location: SmbLocation, credentials: SmbCredentials): List<Entry> = withContext(Dispatchers.IO) {
         val raw = smbList(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain)
-        parseEntries(raw)
+        parseEntries(raw).sortedWith(listingOrder)
     }
 
     suspend fun list(location: SmbLocation): List<Entry> = withContext(Dispatchers.IO) {
         withTarget(location) { credentials ->
             parseEntries(smbList(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain))
+                .sortedWith(listingOrder)
         }
     }
 
@@ -245,6 +246,51 @@ object SmbRepository {
             size = encoded.substring(2, separator).toLongOrNull() ?: 0L,
         )
     }
+}
+
+/**
+ * The order a listing is shown and walked in.
+ *
+ * A share answers in its own directory order, and on a filesystem with a
+ * hashed directory that order is by hash: a real gallery came back as
+ * `21, 3, 24, 4, 5, 7, ...`. An archive does not have this problem because
+ * libarchive sorts its entries, so a listing that is not sorted makes the two
+ * look like different kinds of thing when they are the same pictures.
+ *
+ * Directories first, then by name, with digit runs compared as numbers so that
+ * page 2 comes before page 10.
+ */
+private val listingOrder = Comparator<SmbRepository.Entry> { a, b ->
+    when {
+        a.isDirectory != b.isDirectory -> if (a.isDirectory) -1 else 1
+        else -> compareNatural(a.name, b.name)
+    }
+}
+
+private fun compareNatural(a: String, b: String): Int {
+    var i = 0
+    var j = 0
+    while (i < a.length && j < b.length) {
+        if (a[i].isDigit() && b[j].isDigit()) {
+            val startA = i
+            val startB = j
+            while (i < a.length && a[i].isDigit()) i++
+            while (j < b.length && b[j].isDigit()) j++
+            // Leading zeroes carry no value, so the shorter remainder is the
+            // smaller number and equal lengths compare digit by digit.
+            val digitsA = a.substring(startA, i).trimStart('0')
+            val digitsB = b.substring(startB, j).trimStart('0')
+            if (digitsA.length != digitsB.length) return digitsA.length - digitsB.length
+            val byDigits = digitsA.compareTo(digitsB)
+            if (byDigits != 0) return byDigits
+        } else {
+            val byChar = a[i].lowercaseChar().compareTo(b[j].lowercaseChar())
+            if (byChar != 0) return byChar
+            i++
+            j++
+        }
+    }
+    return (a.length - i) - (b.length - j)
 }
 
 data class SmbHandle(val value: Long, val size: Long)
