@@ -24,20 +24,25 @@ external fun smbShares(
 ): Array<String>
 
 /**
- * Hosts on the local network that answer WS-Discovery.
+ * Start a scan of the local network. Returns at once.
  *
  * [address] is the address of the interface to listen on, or empty for any.
  * Naming it matters on a device with more than one: joining the multicast
  * group without one lets the kernel choose, and the choice is not always the
  * interface the answers come back on.
  */
-external fun wsdDiscover(address: String): Array<String>
+external fun wsdScanStart(address: String): Boolean
 
 /**
- * The same hosts, with the names that needed a second request each. Returns an
- * empty array when nothing has been discovered yet.
+ * What the running scan has so far, one `address` + tab + name per host.
+ *
+ * A host is on the list as soon as it answers, and is named when its name
+ * arrives, so the list fills in rather than appearing at the end.
  */
-external fun wsdResolveNames(): Array<String>
+external fun wsdScanPoll(): Array<String>
+
+/** Whether the running scan has finished, whether or not it found anything. */
+external fun wsdScanFinished(): Boolean
 
 /** Each entry is "1:name" for a directory and "0:name" for a regular file. */
 external fun smbList(

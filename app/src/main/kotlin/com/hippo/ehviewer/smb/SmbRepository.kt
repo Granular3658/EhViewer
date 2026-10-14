@@ -18,10 +18,12 @@ import com.hippo.ehviewer.jni.smbStat
 import com.hippo.ehviewer.jni.smbTest
 import com.hippo.ehviewer.jni.smbWrite
 import com.hippo.ehviewer.jni.smbWriteClose
-import com.hippo.ehviewer.jni.wsdDiscover
-import com.hippo.ehviewer.jni.wsdResolveNames
+import com.hippo.ehviewer.jni.wsdScanFinished
+import com.hippo.ehviewer.jni.wsdScanPoll
+import com.hippo.ehviewer.jni.wsdScanStart
 import java.nio.ByteBuffer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
@@ -35,6 +37,14 @@ import kotlinx.coroutines.withContext
 class SmbAuthRequired(message: String) : Exception(message)
 
 private const val AUTH_REQUIRED_MARK = "smb-auth-required"
+
+/**
+ * How often a scan is read while it runs.
+ *
+ * Short enough that a host appearing feels immediate, long enough that the
+ * reading is nothing next to the scanning.
+ */
+private const val POLL_INTERVAL_MILLIS = 200L
 
 /** Kotlin boundary for the Rust SMB client. All calls are blocking JNI calls. */
 object SmbRepository {
@@ -77,27 +87,26 @@ object SmbRepository {
     }
 
     /**
-     * Hosts on the local network that answer WS-Discovery.
+     * Scan the local network, reporting what it has as it finds it.
      *
-     * [address] is the interface to listen on, or empty for any: joining the
-     * multicast group without one lets the kernel choose, and on a device with
-     * more than one interface the choice is not always the one the answers
-     * come back on.
+     * [onProgress] is called with the hosts so far, from the IO dispatcher, and
+     * the returned list is the finished one. A scan cannot be made fast: the
+     * windows are what a responder is allowed to take. It does not have to be a
+     * blank screen either, which is what this is for -- a host that answered in
+     * the first milliseconds is on screen while the rest of the window runs out.
      */
-    suspend fun discoverHosts(address: String): List<String> = withContext(Dispatchers.IO) {
-        wsdDiscover(address).toList()
-    }
-
-    /**
-     * The same hosts, with the names that needed a second request each.
-     *
-     * Separate from [discoverHosts] so a scan can show what it already has: a
-     * host is worth listing as soon as it is known to be there, and the name
-     * that costs an HTTP request per host arrives a moment later. The whole
-     * list comes back, so the caller replaces what it has rather than merging.
-     */
-    suspend fun discoverNames(): List<String> = withContext(Dispatchers.IO) {
-        wsdResolveNames().toList()
+    suspend fun discoverHosts(address: String, onProgress: (List<String>) -> Unit): List<String> = withContext(Dispatchers.IO) {
+        wsdScanStart(address)
+        // A loop with a `break` rather than a `return@withContext`: the value the
+        // block hands back is its last expression, and a `while` is not one.
+        var lines: List<String> = emptyList()
+        while (true) {
+            lines = wsdScanPoll().toList()
+            onProgress(lines)
+            if (wsdScanFinished()) break
+            delay(POLL_INTERVAL_MILLIS)
+        }
+        lines
     }
 
     /**

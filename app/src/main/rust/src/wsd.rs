@@ -56,6 +56,9 @@ pub struct Host {
     /// The device's own name, when it gave one. A label only: it is not what
     /// the connection uses, and on a home network it often does not resolve.
     pub name: Option<String>,
+    /// The port the share is on, when the source that found the host knew it.
+    /// mDNS carries it in the same answer as the name; WS-Discovery does not.
+    pub port: Option<u16>,
 }
 
 /// How long to wait for one device's metadata. Short: this runs once per host
@@ -96,14 +99,115 @@ pub(crate) fn pin_multicast_interface(socket: &UdpSocket, interface: Ipv4Addr) -
     Ok(())
 }
 
-/// Ask the network which hosts speak WS-Discovery.
+/// A discovery in progress, which the caller reads for what it has so far.
 ///
-/// Takes the address of the interface to listen on, or `None` to let the
-/// kernel choose. Naming it matters on a device with more than one interface:
-/// joining the group with `UNSPECIFIED` picks one, and when it is not the
-/// interface the answers come back on, the probe goes out and the replies
-/// never arrive -- which is indistinguishable from a silent network.
-pub fn discover(interface: Option<Ipv4Addr>) -> Result<Vec<Host>> {
+/// The window a probe is answered in is not time the list has to spend blank: a
+/// host that answers in the first milliseconds can be on screen while the rest
+/// of the window runs out. So the scan runs on its own threads and appends here
+/// as answers arrive, and the caller reads it whenever it likes.
+#[derive(Default)]
+struct Scan {
+    hosts: Vec<Host>,
+    done: bool,
+}
+
+fn scan() -> &'static std::sync::Mutex<Scan> {
+    static SCAN: std::sync::OnceLock<std::sync::Mutex<Scan>> = std::sync::OnceLock::new();
+    SCAN.get_or_init(|| std::sync::Mutex::new(Scan::default()))
+}
+
+/// Remember a host, unless it is already known.
+///
+/// A host can be found twice: a probe that is sent more than once is answered
+/// more than once, and mDNS and WS-Discovery cover overlapping sets of hosts.
+/// This is a list of hosts, so the second answer updates the first rather than
+/// being added to it -- and a name that arrives after the host does is kept,
+/// because the sources do not have it at the same moment.
+fn remember(host: Host) {
+    let mut scan = scan().lock().expect("the scan");
+    match scan
+        .hosts
+        .iter_mut()
+        .find(|seen| seen.address == host.address)
+    {
+        Some(existing) => {
+            if existing.name.is_none() {
+                existing.name = host.name;
+            }
+            if existing.port.is_none() {
+                existing.port = host.port;
+            }
+        }
+        None => scan.hosts.push(host),
+    }
+}
+
+/// Start a discovery. Returns at once; the caller reads [`poll`] from then on.
+pub fn start(interface: Option<Ipv4Addr>) {
+    *scan().lock().expect("the scan") = Scan::default();
+    std::thread::spawn(move || {
+        // The flag is cleared by the guard even if the scan panics: a caller
+        // waiting for it would otherwise wait for ever.
+        let _finished = Finished;
+        run(interface);
+    });
+}
+
+/// What the running discovery has so far, and whether it has finished.
+pub fn poll() -> (Vec<Host>, bool) {
+    let scan = scan().lock().expect("the scan");
+    (scan.hosts.clone(), scan.done)
+}
+
+/// Marks the running scan as finished, however the scan ends.
+struct Finished;
+
+impl Drop for Finished {
+    fn drop(&mut self) {
+        scan().lock().expect("the scan").done = true;
+        log::info!(target: "wsd", "discovery finished");
+    }
+}
+
+fn run(interface: Option<Ipv4Addr>) {
+    // The probe and the mDNS query have their own sockets and their own windows,
+    // and a host may answer either. Running them together makes the wait the
+    // longer of the two instead of the sum, and shortens neither window.
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            if let Err(error) = probe_and_listen(interface) {
+                log::warn!(target: "wsd", "the probe failed: {error:#}");
+            }
+        });
+        scope.spawn(|| match crate::mdns::discover(interface) {
+            Ok(found) => {
+                for host in found {
+                    remember(Host {
+                        endpoint: String::new(),
+                        address: host.address.to_string(),
+                        xaddrs: String::new(),
+                        types: String::new(),
+                        name: Some(host.name),
+                        port: Some(host.port),
+                    });
+                }
+            }
+            Err(error) => log::warn!(target: "wsd", "the mdns query failed: {error:#}"),
+        });
+    });
+    // Names next, then the metadata that covers whatever is still nameless.
+    name_everyone();
+    name_the_rest();
+}
+
+/// Ask the network which hosts speak WS-Discovery, and listen for the answers.
+///
+/// Takes the address of the interface to listen on, or `None` to let the kernel
+/// choose. Naming it matters on a device with more than one interface: joining
+/// the group with `UNSPECIFIED` picks one, and when it is not the interface the
+/// answers come back on, the probe goes out and the replies never arrive --
+/// which is indistinguishable from a silent network.
+fn probe_and_listen(interface: Option<Ipv4Addr>) -> Result<()> {
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, PORT))
         .with_context(|| format!("binding UDP {PORT}"))?;
     let interface = interface.unwrap_or(Ipv4Addr::UNSPECIFIED);
@@ -118,26 +222,38 @@ pub fn discover(interface: Option<Ipv4Addr>) -> Result<Vec<Host>> {
 
     let message_id = message_id();
     let probe = probe(&message_id);
-    log::debug!(target: "wsd", "probing {GROUP}:{PORT} as {message_id}");
-    socket
-        .send_to(probe.as_bytes(), (GROUP, PORT))
-        .context("sending the probe")?;
-
-    let mut hosts: Vec<Host> = Vec::new();
     let deadline = Instant::now() + WINDOW;
+    // Sent more than once over the window, and the window itself is not
+    // shortened: it is what a responder is allowed to take, and a probe that
+    // arrives at a device which is busy is a host that never answers at all.
+    // The same message id each time, so an answer to a repeat is the same
+    // device; the answers are deduplicated by address either way.
+    let resend_every = WINDOW / 3;
+    let mut send_at = Instant::now();
     let mut buffer = vec![0u8; 65535];
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
+    while Instant::now() < deadline {
+        let now = Instant::now();
+        if now >= send_at {
+            log::debug!(target: "wsd", "probing {GROUP}:{PORT} as {message_id}");
+            socket
+                .send_to(probe.as_bytes(), (GROUP, PORT))
+                .context("sending the probe")?;
+            send_at = now + resend_every;
         }
-        socket.set_read_timeout(Some(remaining))?;
+        // Wake for the next probe or for the end of the window, whichever comes
+        // first, so the sends happen while the answers are being listened for.
+        let wait = send_at
+            .min(deadline)
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_millis(1));
+        socket.set_read_timeout(Some(wait))?;
         let (len, from) = match socket.recv_from(&mut buffer) {
             Ok(received) => received,
-            // The timeout is the end of the window, not a failure.
+            // A timeout is the next probe or the end of the window, not a
+            // failure.
             Err(err) => {
-                log::debug!(target: "wsd", "stopped listening: {err}");
-                break;
+                log::debug!(target: "wsd", "nothing for now: {err}");
+                continue;
             }
         };
         // Logged before parsing: a reply that arrives but does not parse is a
@@ -148,74 +264,110 @@ pub fn discover(interface: Option<Ipv4Addr>) -> Result<Vec<Host>> {
             log::debug!(target: "wsd", "not UTF-8, skipped");
             continue;
         };
-        if let Some(host) = parse_match(text, from.ip().to_string())
-            && !hosts.iter().any(|seen| seen.endpoint == host.endpoint)
-        {
-            if !host.types.contains(COMPUTER_TYPE) {
-                log::debug!(target: "wsd", "{} is not a computer ({})", host.address, host.types);
-                continue;
-            }
-            log::debug!(target: "wsd", "host {} at {}", host.endpoint, host.address);
-            hosts.push(host);
+        let Some(host) = parse_match(text, from.ip().to_string()) else {
+            continue;
+        };
+        if !host.types.contains(COMPUTER_TYPE) {
+            log::debug!(target: "wsd", "{} is not a computer ({})", host.address, host.types);
+            continue;
         }
+        log::debug!(target: "wsd", "host {} at {}", host.endpoint, host.address);
+        remember(host);
     }
-    // The name service is one UDP round trip per host and answers most of them,
-    // so it happens here and the caller can show the list. The metadata request
-    // that covers the rest costs an HTTP request each -- which is what made a
-    // scan feel slow -- and is left to [`resolve_names`], which runs after the
-    // list is already on screen.
-    for host in &mut hosts {
-        host.name = host.address.parse::<Ipv4Addr>().ok().and_then(nbns_name);
-        log::debug!(
-            target: "wsd",
-            "name service for {}: address={} xaddrs={} name={}",
-            host.address,
-            host.address.len(),
-            host.xaddrs.len(),
-            host.name.as_ref().map_or(0, |name| name.len())
-        );
-    }
-    *last_hosts().lock().expect("the host cache") = hosts.clone();
-    log::info!(target: "wsd", "discovery found {} host(s)", hosts.len());
-    Ok(hosts)
+    Ok(())
 }
-
-/// The hosts of the last discovery, with the `XAddrs` a metadata request needs.
+/// Ask the name service what each host is called, all at once.
 ///
-/// Held between the two calls a scan makes, which is what lets the first one
-/// return without waiting for the second. A scan is one person tapping a button
-/// and the screen does not start a second one while the first is running, so
-/// there is nothing to arbitrate.
-fn last_hosts() -> &'static std::sync::Mutex<Vec<Host>> {
-    static HOSTS: std::sync::OnceLock<std::sync::Mutex<Vec<Host>>> = std::sync::OnceLock::new();
-    HOSTS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+/// One UDP round trip each, but a host with no name service costs the whole
+/// timeout, and in a row that is the difference between a list that appears and
+/// one that does not. They are independent of each other, so they run together.
+fn name_everyone() {
+    let addresses: Vec<Ipv4Addr> = scan()
+        .lock()
+        .expect("the scan")
+        .hosts
+        .iter()
+        .filter(|host| host.name.is_none())
+        .filter_map(|host| host.address.parse().ok())
+        .collect();
+    if addresses.is_empty() {
+        return;
+    }
+    let found: Vec<(Ipv4Addr, String)> = std::thread::scope(|scope| {
+        let running: Vec<_> = addresses
+            .into_iter()
+            .map(|address| scope.spawn(move || (address, nbns_name(address))))
+            .collect();
+        running
+            .into_iter()
+            .filter_map(|handle| handle.join().ok())
+            .filter_map(|(address, name)| name.map(|name| (address, name)))
+            .collect()
+    });
+    for (address, name) in found {
+        keep_name(&address.to_string(), name);
+    }
 }
 
 /// Ask the devices that no name service answered for what they call themselves.
 ///
-/// The second half of a discovery: one HTTP request per nameless host, which is
-/// the part that cannot be made fast, only moved out of the way. Returns the
-/// same hosts as the first half, with the names filled in.
-pub fn resolve_names() -> Vec<Host> {
-    let mut hosts = last_hosts().lock().expect("the host cache").clone();
-    for host in &mut hosts {
-        if host.name.is_some() {
-            continue;
-        }
-        host.name = metadata_name(&host.xaddrs, &host.address);
-        // Lengths, not the strings: this line is the only place the two fields
-        // the request is built from can be seen together, and an empty one is a
-        // parsing bug rather than a network one.
-        log::debug!(
-            target: "wsd",
-            "metadata for {}: address={} xaddrs={} name={}",
-            host.address,
-            host.address.len(),
-            host.xaddrs.len(),
-            host.name.as_ref().map_or(0, |name| name.len())
-        );
+/// One HTTP request each, which is the part that costs more the more hosts there
+/// are. They are independent of each other, so they run together.
+fn name_the_rest() {
+    let targets: Vec<(String, String)> = scan()
+        .lock()
+        .expect("the scan")
+        .hosts
+        .iter()
+        .filter(|host| host.name.is_none() && !host.xaddrs.is_empty())
+        .map(|host| (host.address.clone(), host.xaddrs.clone()))
+        .collect();
+    if targets.is_empty() {
+        return;
     }
-    hosts
+    let found: Vec<(String, String)> = std::thread::scope(|scope| {
+        let running: Vec<_> = targets
+            .into_iter()
+            .map(|(address, xaddrs)| {
+                scope.spawn(move || {
+                    // Lengths, not the strings: this is the only place the two
+                    // fields the request is built from are seen together, and an
+                    // empty one is a parsing bug rather than a network one.
+                    let name = metadata_name(&xaddrs, &address);
+                    log::debug!(
+                        target: "wsd",
+                        "metadata for {address}: address={} xaddrs={} name={}",
+                        address.len(),
+                        xaddrs.len(),
+                        name.as_ref().map_or(0, |name| name.len())
+                    );
+                    (address, name)
+                })
+            })
+            .collect();
+        running
+            .into_iter()
+            .filter_map(|handle| handle.join().ok())
+            .filter_map(|(address, name)| name.map(|name| (address, name)))
+            .collect()
+    });
+    for (address, name) in found {
+        keep_name(&address, name);
+    }
+}
+
+/// Give a host the name that arrived for its address, if it has none yet.
+///
+/// A host is on the list before it is named -- that is the point of the poll --
+/// so a name is written into the entry that is already there rather than
+/// replacing it, and a second source cannot overwrite the first.
+fn keep_name(address: &str, name: String) {
+    let mut scan = scan().lock().expect("the scan");
+    if let Some(host) = scan.hosts.iter_mut().find(|host| host.address == address)
+        && host.name.is_none()
+    {
+        host.name = Some(name);
+    }
 }
 
 /// A probe with no `Types`, which by the specification every device must
@@ -322,6 +474,8 @@ fn parse_match(text: &str, fallback: String) -> Option<Host> {
         xaddrs: xaddrs.unwrap_or_default(),
         types,
         name: None,
+        // WS-Discovery says where to ask, not which port the share is on.
+        port: None,
     })
 }
 
