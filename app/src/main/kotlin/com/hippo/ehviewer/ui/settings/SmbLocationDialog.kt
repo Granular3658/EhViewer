@@ -1,6 +1,7 @@
 package com.hippo.ehviewer.ui.settings
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -18,6 +19,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -50,6 +52,9 @@ fun SmbLocationDialog(
     // Prefill from the stored location when editing, so a tap can fix a typo
     // without retyping the host, the share or the credentials.
     val savedCredentials = remember(initial) { initial?.let(SmbCredentialStore::get) }
+    // Whether there is still something stored to take back, so the button goes
+    // away with the credential it is about.
+    var stored by remember { mutableStateOf(savedCredentials != null) }
     var path by remember { mutableStateOf(initial?.uriString?.removePrefix(SMB_PREFIX).orEmpty()) }
     var username by remember {
         mutableStateOf(
@@ -134,35 +139,51 @@ fun SmbLocationDialog(
                     visualTransformation = PasswordVisualTransformation(),
                 )
                 testMessage?.let { Text(it, modifier = Modifier.padding(top = 8.dp)) }
-                Button(
-                    onClick = {
-                        val values = parse()
-                        if (values == null) {
-                            testMessage = invalidMessage
-                        } else {
-                            val (location, credentials) = values
-                            testing = true
-                            testMessage = testingMessage
-                            scope.launch {
-                                runCatching { SmbRepository.test(location, credentials) }
-                                    .onSuccess { entries ->
-                                        testedLocation = location
-                                        testedCredentials = credentials
-                                        testMessage = testSuccessMessage.format(entries.size.toString())
-                                    }
-                                    .onFailure { error ->
-                                        testedLocation = null
-                                        testedCredentials = null
-                                        testMessage = testFailedMessage.format(error.message ?: error::class.simpleName.orEmpty())
-                                    }
-                                testing = false
-                            }
-                        }
-                    },
-                    enabled = !testing,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(top = 8.dp),
                 ) {
-                    Text(stringResource(R.string.settings_download_smb_test))
+                    Button(
+                        onClick = {
+                            val values = parse()
+                            if (values == null) {
+                                testMessage = invalidMessage
+                            } else {
+                                val (location, credentials) = values
+                                testing = true
+                                testMessage = testingMessage
+                                scope.launch {
+                                    runCatching { SmbRepository.test(location, credentials) }
+                                        .onSuccess { entries ->
+                                            testedLocation = location
+                                            testedCredentials = credentials
+                                            testMessage = testSuccessMessage.format(entries.size.toString())
+                                        }
+                                        .onFailure { error ->
+                                            testedLocation = null
+                                            testedCredentials = null
+                                            testMessage = testFailedMessage.format(error.message ?: error::class.simpleName.orEmpty())
+                                        }
+                                    testing = false
+                                }
+                            }
+                        },
+                        enabled = !testing,
+                    ) {
+                        Text(stringResource(R.string.settings_download_smb_test))
+                    }
+                    // The prefilled credentials came from this location, so this
+                    // is the server they belong to.
+                    if (stored && initial != null) {
+                        ForgetCredentialsButton(initial.host, initial.port) {
+                            stored = false
+                            username = ""
+                            password = ""
+                            testedLocation = null
+                            testedCredentials = null
+                            testMessage = null
+                        }
+                    }
                 }
             }
         },
