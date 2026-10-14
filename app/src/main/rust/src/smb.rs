@@ -30,6 +30,38 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub const DEFAULT_PORT: u16 = 445;
 
+/// The token a caller looks for to tell "this server wants credentials" from
+/// every other way a connection fails.
+///
+/// The distinction has to cross the JNI boundary, which carries an exception
+/// message and nothing else, so the message is where it goes.
+pub const AUTH_REQUIRED: &str = "smb-auth-required";
+
+/// Mark an error that means the server refused the session.
+///
+/// Three kinds say the same thing from a caller's side. `AuthRequired` is a
+/// server that will not talk to anyone without a name; `SigningRequired` is one
+/// that will not talk to an anonymous session, which is unsigned by definition;
+/// `AccessDenied` is a session it accepted and then refused the share of, which
+/// is what a server reports when it allows the anonymous login and denies the
+/// tree connect -- the shape a share with `guest ok = no` has. The answer to
+/// all three is the same one: ask for credentials.
+///
+/// Generic over nothing: the body hands back an `anyhow` error, and a caller
+/// that has the server's own error type converts it before the body returns.
+fn asking_for_credentials<T>(result: Result<T>) -> Result<T> {
+    result.map_err(
+        |error| match error.downcast_ref::<smb2::Error>().map(smb2::Error::kind) {
+            Some(
+                smb2::ErrorKind::AuthRequired
+                | smb2::ErrorKind::SigningRequired
+                | smb2::ErrorKind::AccessDenied,
+            ) => error.context(AUTH_REQUIRED),
+            _ => error,
+        },
+    )
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Target {
     pub host: String,
@@ -140,14 +172,14 @@ macro_rules! with_session {
             None => true,
         };
         if stale {
-            let session = connect(target).await?;
+            let session = asking_for_credentials(connect(target).await)?;
             guard.insert(key.clone(), session);
         }
         let $session = guard
             .get_mut(&key)
             .ok_or_else(|| anyhow!("Session vanished"))?;
         $session.last_used = Instant::now();
-        $body
+        asking_for_credentials($body)
     }};
 }
 
@@ -296,9 +328,13 @@ fn reopen(handle: u64, target: &Target) -> Result<()> {
         sessions().lock().await.remove(&target.key());
         let reader = with_session!(target, |session| {
             let Session { client, tree, .. } = session;
+            // The server's error is converted here rather than by the caller:
+            // the body has to hand back one error type for the macro to read
+            // the status off, and this path used to leave it to its caller.
             timeout(OP_TIMEOUT, client.open_file_reader(tree, &target.sub))
                 .await
                 .map_err(|_| anyhow!("Timed out reopening {:?}", target.sub))?
+                .map_err(anyhow::Error::from)
         })?;
         let (_, file) = handle_entry(handle)?;
         *file.lock().await = Some(reader);

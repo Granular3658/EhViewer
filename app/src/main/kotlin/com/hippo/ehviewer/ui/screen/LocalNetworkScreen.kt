@@ -57,6 +57,7 @@ import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.download.invalidateDownloadLocationCache
 import com.hippo.ehviewer.gallery.lastPageByDirectory
+import com.hippo.ehviewer.smb.SmbAuthRequired
 import com.hippo.ehviewer.smb.SmbLocation
 import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.ui.LocalSnackBarHostState
@@ -248,24 +249,38 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
     var names by remember { mutableStateOf<List<String>?>(null) }
     var entries by remember { mutableStateOf<List<SmbRepository.Entry>?>(null) }
 
+    // The level the server refused, if it did, and a counter that retries the
+    // listing once credentials have been given. Browsing asks about a server
+    // before it knows a share name, so the refusal can arrive at either level
+    // and the dialog is shown for whichever one was asked for.
+    var refused by remember { mutableStateOf<SmbLocation?>(null) }
+    var attempts by remember { mutableStateOf(0) }
+
     val location = remember(host, port, share, subPath) {
         val h = host
         val s = share
         if (h != null && s != null) SmbLocation(h, port, s, subPath) else null
     }
 
-    LaunchedEffect(host, port, share, subPath) {
+    LaunchedEffect(host, port, share, subPath, attempts) {
         names = null
         entries = null
         val h = host ?: return@LaunchedEffect
         val s = share
+        // A refusal is about credentials, and is answered by asking for them;
+        // anything else is answered by saying the listing did not happen.
         if (s == null) {
             names = runCatching { SmbRepository.shares(h, port) }
-                .onFailure { with(snackbarHostState) { snackbar(cannotList) } }
+                .onFailure { error ->
+                    if (error is SmbAuthRequired) refused = SmbLocation(h, port, "", "") else with(snackbarHostState) { snackbar(cannotList) }
+                }
                 .getOrElse { emptyList() }
         } else {
-            entries = runCatching { SmbRepository.list(SmbLocation(h, port, s, subPath)) }
-                .onFailure { with(snackbarHostState) { snackbar(cannotList) } }
+            val target = SmbLocation(h, port, s, subPath)
+            entries = runCatching { SmbRepository.list(target) }
+                .onFailure { error ->
+                    if (error is SmbAuthRequired) refused = target else with(snackbarHostState) { snackbar(cannotList) }
+                }
                 .getOrElse { emptyList() }
         }
     }
@@ -393,6 +408,26 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                     Settings.localNetworkHosts.value = Settings.localNetworkHosts.value + host
                 }
                 addingHost = false
+            },
+        )
+    }
+
+    // Credentials, asked for at the level that was refused. It is the dialog the
+    // download settings use, so what is entered here is stored and reused the
+    // same way -- and its test button stays the gate, because on this screen the
+    // failure *is* about credentials, unlike the dialog that adds a location
+    // that has already been listed.
+    refused?.let { target ->
+        SmbLocationDialog(
+            initial = target,
+            onDismiss = { refused = null },
+            showMessage = { launchSnackbar(it) },
+            onSaved = {
+                // The refused session is cached under the credentials it was
+                // built with, so it has to go before the listing is retried.
+                SmbRepository.invalidateSessions()
+                refused = null
+                attempts++
             },
         )
     }

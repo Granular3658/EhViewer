@@ -23,24 +23,55 @@ import java.nio.ByteBuffer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+/**
+ * The server refused the session, so it wants credentials or better ones.
+ *
+ * Raised from the native side's mark in the error message: the status code is
+ * only visible there, and a JNI exception carries a message and nothing else.
+ * A caller shows the credentials dialog for this, and the ordinary "cannot
+ * list" message for anything else.
+ */
+class SmbAuthRequired(message: String) : Exception(message)
+
+private const val AUTH_REQUIRED_MARK = "smb-auth-required"
+
 /** Kotlin boundary for the Rust SMB client. All calls are blocking JNI calls. */
 object SmbRepository {
     data class Entry(val name: String, val isDirectory: Boolean, val size: Long)
     data class Stat(val isDirectory: Boolean, val size: Long, val modifiedMillis: Long)
+
+    /**
+     * Translate the native side's mark into a type a caller can match on.
+     *
+     * Only a message crosses the JNI boundary, so the mark is looked for here,
+     * once, instead of every caller parsing the server's words for itself.
+     */
+    private inline fun <T> translatingAuth(block: () -> T): T = try {
+        block()
+    } catch (error: Throwable) {
+        if (error.message?.contains(AUTH_REQUIRED_MARK) == true) {
+            throw SmbAuthRequired(error.message.orEmpty())
+        }
+        throw error
+    }
 
     private fun credentials(location: SmbLocation): SmbCredentials = SmbCredentialStore.get(location) ?: SmbCredentials("", "", "")
 
     private inline fun <T> withTarget(location: SmbLocation, block: (SmbCredentials) -> T): T = block(credentials(location))
 
     suspend fun test(location: SmbLocation, credentials: SmbCredentials): List<Entry> = withContext(Dispatchers.IO) {
-        val raw = smbList(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain)
-        parseEntries(raw).sortedWith(listingOrder)
+        translatingAuth {
+            val raw = smbList(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain)
+            parseEntries(raw).sortedWith(listingOrder)
+        }
     }
 
     suspend fun list(location: SmbLocation): List<Entry> = withContext(Dispatchers.IO) {
         withTarget(location) { credentials ->
-            parseEntries(smbList(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain))
-                .sortedWith(listingOrder)
+            translatingAuth {
+                parseEntries(smbList(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain))
+                    .sortedWith(listingOrder)
+            }
         }
     }
 
@@ -61,8 +92,10 @@ object SmbRepository {
      * shares exist is what a caller does when it has no share name yet.
      */
     suspend fun shares(host: String, port: Int): List<String> = withContext(Dispatchers.IO) {
-        val credentials = SmbCredentialStore.find(host, port) ?: SmbCredentials("", "", "")
-        smbShares(host, port, credentials.user, credentials.password, credentials.domain).toList()
+        translatingAuth {
+            val credentials = SmbCredentialStore.find(host, port) ?: SmbCredentials("", "", "")
+            smbShares(host, port, credentials.user, credentials.password, credentials.domain).toList()
+        }
     }
 
     suspend fun stat(location: SmbLocation): Stat = withContext(Dispatchers.IO) {
