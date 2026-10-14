@@ -159,26 +159,53 @@ pub fn discover(interface: Option<Ipv4Addr>) -> Result<Vec<Host>> {
             hosts.push(host);
         }
     }
-    // Metadata needs one HTTP request per host. Do it after collecting the UDP
-    // replies, so a slow metadata endpoint cannot cost us another host.
+    // The name service is one UDP round trip per host and answers most of them,
+    // so it happens here and the caller can show the list. The metadata request
+    // that covers the rest costs an HTTP request each -- which is what made a
+    // scan feel slow -- and is left to [`resolve_names`], which runs after the
+    // list is already on screen.
     for host in &mut hosts {
-        // The address in `XAddrs` is authoritative, but it is the address the
-        // device sees for itself, which is not always the address this device
-        // reached it by -- behind a NAT, or with more than one interface, they
-        // differ. Falling back to the source of the datagram is what makes the
-        // name survive that, and it costs nothing when they already agree.
-        // The NetBIOS name first: it is one UDP round trip and it is what the
-        // host calls itself. The metadata request is the fallback, for the
-        // hosts with no name service -- and it is the only source for those.
-        host.name = host
-            .address
-            .parse::<Ipv4Addr>()
-            .ok()
-            .and_then(nbns_name)
-            .or_else(|| metadata_name(&host.xaddrs, &host.address));
+        host.name = host.address.parse::<Ipv4Addr>().ok().and_then(nbns_name);
+        log::debug!(
+            target: "wsd",
+            "name service for {}: address={} xaddrs={} name={}",
+            host.address,
+            host.address.len(),
+            host.xaddrs.len(),
+            host.name.as_ref().map_or(0, |name| name.len())
+        );
+    }
+    *last_hosts().lock().expect("the host cache") = hosts.clone();
+    log::info!(target: "wsd", "discovery found {} host(s)", hosts.len());
+    Ok(hosts)
+}
+
+/// The hosts of the last discovery, with the `XAddrs` a metadata request needs.
+///
+/// Held between the two calls a scan makes, which is what lets the first one
+/// return without waiting for the second. A scan is one person tapping a button
+/// and the screen does not start a second one while the first is running, so
+/// there is nothing to arbitrate.
+fn last_hosts() -> &'static std::sync::Mutex<Vec<Host>> {
+    static HOSTS: std::sync::OnceLock<std::sync::Mutex<Vec<Host>>> = std::sync::OnceLock::new();
+    HOSTS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// Ask the devices that no name service answered for what they call themselves.
+///
+/// The second half of a discovery: one HTTP request per nameless host, which is
+/// the part that cannot be made fast, only moved out of the way. Returns the
+/// same hosts as the first half, with the names filled in.
+pub fn resolve_names() -> Vec<Host> {
+    let mut hosts = last_hosts().lock().expect("the host cache").clone();
+    for host in &mut hosts {
+        if host.name.is_some() {
+            continue;
+        }
+        host.name = metadata_name(&host.xaddrs, &host.address);
         // Lengths, not the strings: this line is the only place the two fields
-        // the request is built from can be seen together, and an empty one is
-        // a parsing bug rather than a network one.
+        // the request is built from can be seen together, and an empty one is a
+        // parsing bug rather than a network one.
         log::debug!(
             target: "wsd",
             "metadata for {}: address={} xaddrs={} name={}",
@@ -188,8 +215,7 @@ pub fn discover(interface: Option<Ipv4Addr>) -> Result<Vec<Host>> {
             host.name.as_ref().map_or(0, |name| name.len())
         );
     }
-    log::info!(target: "wsd", "discovery found {} host(s)", hosts.len());
-    Ok(hosts)
+    hosts
 }
 
 /// A probe with no `Types`, which by the specification every device must

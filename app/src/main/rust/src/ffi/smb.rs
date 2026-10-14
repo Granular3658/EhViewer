@@ -75,7 +75,8 @@ pub fn smbTest(
     })
 }
 
-/// Hosts on the local network that answer WS-Discovery.
+/// Hosts on the local network that answer WS-Discovery or mDNS, without waiting
+/// for the names that need a second request each.
 ///
 /// Blocking for the length of the discovery windows, so callers must not be on
 /// the main thread. Returns one `address` + tab + name per host, deduplicated.
@@ -84,6 +85,10 @@ pub fn smbTest(
 /// neither covers every host: a Samba server with `wsdd2` answers the first and
 /// a host with avahi answers the second, and a host with neither is not on the
 /// network to be found.
+///
+/// The names it does carry come from the name service, which is one round trip
+/// each. A host whose name needs a metadata request is listed without one, and
+/// [`wsdResolveNames`] fills it in afterwards.
 ///
 /// Takes the address of the interface to listen on. Naming it is what makes the
 /// replies arrive on a device with more than one interface: joining the group
@@ -127,6 +132,52 @@ pub fn wsdDiscover(mut env: JNIEnv, _: JClass, interface: JString) -> jobjectArr
                 Some(_) => {}
                 None => lines.push(format!("{}:{}\t{}", found.address, found.port, found.name)),
             }
+        }
+        // Kept for the second half of the scan, which fills in the names this
+        // one could not wait for.
+        *last_lines().lock().expect("the line cache") = lines.clone();
+        marshal_strings(env, lines)
+    })
+}
+
+/// The lines of the last discovery, held between the two halves of a scan.
+///
+/// The second half needs the hosts the first one found, and the list is what
+/// the caller already has: keeping it here means the caller passes nothing back.
+fn last_lines() -> &'static std::sync::Mutex<Vec<String>> {
+    static LINES: std::sync::OnceLock<std::sync::Mutex<Vec<String>>> = std::sync::OnceLock::new();
+    LINES.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+/// Fill in the names the first half of the scan left out.
+///
+/// One HTTP request per nameless host, which is the half that cannot be made
+/// fast, only moved out of the way: the caller shows the list from
+/// [`wsdDiscover`] and calls this afterwards to replace it. The whole list comes
+/// back, so there is nothing to merge.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn wsdResolveNames(mut env: JNIEnv, _: JClass) -> jobjectArray {
+    jni_throwing(&mut env, |env| {
+        let resolved = crate::wsd::resolve_names();
+        let mut lines = last_lines().lock().expect("the line cache").clone();
+        for line in lines.iter_mut() {
+            let Some((address, name)) = line.split_once('\t') else {
+                continue;
+            };
+            if !name.is_empty() {
+                continue;
+            }
+            // mDNS writes its hosts as `address:port`, and the resolved list is
+            // keyed by the address alone.
+            let bare = address.split(':').next().unwrap_or(address).to_owned();
+            let Some(found) = resolved
+                .iter()
+                .find(|host| host.address == bare)
+                .and_then(|host| host.name.clone())
+            else {
+                continue;
+            };
+            *line = format!("{bare}\t{found}");
         }
         marshal_strings(env, lines)
     })

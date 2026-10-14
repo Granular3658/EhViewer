@@ -237,11 +237,18 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                 lock?.acquire()
                 SmbRepository.discoverHosts(wifiInterfaceAddress(context))
             }.onFailure { launchSnackbar(cannotList) }.getOrElse { emptyList() }
-            runCatching { lock?.takeIf { it.isHeld }?.release() }
             // Replaced, not appended: the previous scan described a network
             // that may not be the one this device is on any more.
             discovered = ArrayList(found.map(::discoveredHostRow))
+            // The list is up, so the scan is finished as far as the person who
+            // tapped it is concerned. The names that cost a request each are
+            // still coming, and replace the rows in place when they arrive.
             discovering = false
+            val named = runCatching { SmbRepository.discoverNames() }.getOrElse { emptyList() }
+            if (named.isNotEmpty()) {
+                discovered = ArrayList(named.map(::discoveredHostRow))
+            }
+            runCatching { lock?.takeIf { it.isHeld }?.release() }
         }
     }
 

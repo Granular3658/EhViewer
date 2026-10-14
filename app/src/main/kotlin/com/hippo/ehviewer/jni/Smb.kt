@@ -33,6 +33,12 @@ external fun smbShares(
  */
 external fun wsdDiscover(address: String): Array<String>
 
+/**
+ * The same hosts, with the names that needed a second request each. Returns an
+ * empty array when nothing has been discovered yet.
+ */
+external fun wsdResolveNames(): Array<String>
+
 /** Each entry is "1:name" for a directory and "0:name" for a regular file. */
 external fun smbList(
     host: String,
