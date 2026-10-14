@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -257,6 +258,10 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
     // The listing for the level on screen, or null while it is being fetched.
     var names by remember { mutableStateOf<List<String>?>(null) }
     var entries by remember { mutableStateOf<List<SmbRepository.Entry>?>(null) }
+    // Whether the level on screen failed to list, as opposed to listing nothing.
+    // The two used to be the same thing on screen, and a directory that could
+    // not be read looked exactly like a directory with nothing in it.
+    var listingFailed by remember { mutableStateOf(false) }
 
     // The level the server refused, if it did, and a counter that retries the
     // listing once credentials have been given. Browsing asks about a server
@@ -274,23 +279,38 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
     LaunchedEffect(host, port, share, subPath, attempts) {
         names = null
         entries = null
+        listingFailed = false
         val h = host ?: return@LaunchedEffect
         val s = share
         // A refusal is about credentials, and is answered by asking for them;
-        // anything else is answered by saying the listing did not happen.
+        // anything else is answered by saying the listing did not happen -- said
+        // where the listing would have been, not in a snackbar that is gone
+        // before the person looks up. Turning a failure into an empty list, as
+        // this used to, reads as "this directory is empty", which is the one
+        // thing a directory that could not be read is not.
         if (s == null) {
             names = runCatching { SmbRepository.shares(h, port) }
                 .onFailure { error ->
-                    if (error is SmbAuthRequired) refused = SmbLocation(h, port, "", "") else with(snackbarHostState) { snackbar(cannotList) }
+                    if (error is SmbAuthRequired) {
+                        refused = SmbLocation(h, port, "", "")
+                    } else {
+                        Log.w("smb", "shares of $h:$port did not list", error)
+                        listingFailed = true
+                    }
                 }
-                .getOrElse { emptyList() }
+                .getOrNull()
         } else {
             val target = SmbLocation(h, port, s, subPath)
             entries = runCatching { SmbRepository.list(target) }
                 .onFailure { error ->
-                    if (error is SmbAuthRequired) refused = target else with(snackbarHostState) { snackbar(cannotList) }
+                    if (error is SmbAuthRequired) {
+                        refused = target
+                    } else {
+                        Log.w("smb", "listing $target did not list", error)
+                        listingFailed = true
+                    }
                 }
-                .getOrElse { emptyList() }
+                .getOrNull()
         }
     }
 
@@ -374,6 +394,7 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                         Settings.localNetworkHosts.value = Settings.localNetworkHosts.value - value
                     },
                 )
+                listingFailed -> Empty(text = cannotList)
                 share == null -> NameList(names = names, onOpen = { name ->
                     share = name
                     subPath = ""
