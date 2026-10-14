@@ -19,6 +19,7 @@ import com.hippo.ehviewer.jni.smbTest
 import com.hippo.ehviewer.jni.smbWrite
 import com.hippo.ehviewer.jni.smbWriteClose
 import com.hippo.ehviewer.jni.wsdDiscover
+import com.hippo.ehviewer.jni.wsdResolveNames
 import java.nio.ByteBuffer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -85,6 +86,18 @@ object SmbRepository {
      */
     suspend fun discoverHosts(address: String): List<String> = withContext(Dispatchers.IO) {
         wsdDiscover(address).toList()
+    }
+
+    /**
+     * The same hosts, with the names that needed a second request each.
+     *
+     * Separate from [discoverHosts] so a scan can show what it already has: a
+     * host is worth listing as soon as it is known to be there, and the name
+     * that costs an HTTP request per host arrives a moment later. The whole
+     * list comes back, so the caller replaces what it has rather than merging.
+     */
+    suspend fun discoverNames(): List<String> = withContext(Dispatchers.IO) {
+        wsdResolveNames().toList()
     }
 
     /**
