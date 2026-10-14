@@ -103,12 +103,18 @@ object SmbCredentialStore {
      * host before it knows a share name -- listing the shares is how it finds
      * one. Any credential for that host will do: a server authenticates the
      * session, not the share.
+     *
+     * "Any" has to be a fixed answer, though. The shortest key is the host's own
+     * -- `smb://host:port/` -- which is where a credential is written when the
+     * server refused before any share was named, and picking by anything else
+     * lets the password that was just corrected be shadowed by the one it
+     * replaced.
      */
     @Synchronized
     fun find(host: String, port: Int): SmbCredentials? = runCatching {
         val prefix = "smb://$host:$port/"
         val json = JSONObject(Settings.smbCredentials.value)
-        val key = json.keys().asSequence().firstOrNull { it.startsWith(prefix) } ?: return null
+        val key = json.keys().asSequence().filter { it.startsWith(prefix) }.minByOrNull { it.length } ?: return null
         decrypt(json.getString(key))
     }.getOrNull()
 
