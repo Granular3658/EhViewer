@@ -210,7 +210,13 @@ macro_rules! with_session {
         let target: &Target = $target;
         let mut retried = false;
         loop {
-            let outcome = {
+            // The whole thing, connecting included, is what gets a second
+            // attempt: a cached session whose connection died under it fails in
+            // `session_in`, and `Disconnected` is exactly what that looks like.
+            // When the connect was outside this, the retry below never saw it --
+            // the operation came back failed, with nothing in the log either,
+            // and the screen said the directory was empty.
+            let outcome = async {
                 let mut guard = sessions().lock().await;
                 session_in(&mut guard, target).await?;
                 let $session = guard
@@ -218,7 +224,8 @@ macro_rules! with_session {
                     .ok_or_else(|| anyhow!("Session vanished"))?;
                 $session.last_used = Instant::now();
                 asking_for_credentials($body)
-            };
+            }
+            .await;
             match outcome {
                 Err(error) if !retried && retryable(&error) => {
                     // The session is the thing that is gone, so it goes before
