@@ -68,6 +68,34 @@ const GET_TIMEOUT: Duration = Duration::from_millis(1200);
 /// in a browser for SMB shares.
 const COMPUTER_TYPE: &str = "pub:Computer";
 
+/// Send multicast out one named interface rather than whichever the kernel
+/// would pick.
+///
+/// Shared with the mDNS client, which needs the same thing for the same reason:
+/// the group is joined on an interface, and a probe that leaves by another one
+/// is answered to an address the join does not cover.
+pub(crate) fn pin_multicast_interface(socket: &UdpSocket, interface: Ipv4Addr) -> Result<()> {
+    let raw = std::os::fd::AsRawFd::as_raw_fd(socket);
+    let address = u32::from(interface).to_be();
+    // SAFETY: `raw` is a live socket owned by the caller, and `address` is the
+    // network-byte-order form of the interface address.
+    let result = unsafe {
+        libc::setsockopt(
+            raw,
+            libc::IPPROTO_IP,
+            libc::IP_MULTICAST_IF,
+            &address as *const u32 as *const libc::c_void,
+            std::mem::size_of::<u32>() as libc::socklen_t,
+        )
+    };
+    ensure!(
+        result == 0,
+        "pinning the probe to {interface}: {}",
+        std::io::Error::last_os_error()
+    );
+    Ok(())
+}
+
 /// Ask the network which hosts speak WS-Discovery.
 ///
 /// Takes the address of the interface to listen on, or `None` to let the
@@ -83,26 +111,7 @@ pub fn discover(interface: Option<Ipv4Addr>) -> Result<Vec<Host>> {
         .join_multicast_v4(&GROUP, &interface)
         .with_context(|| format!("joining the discovery group on {interface}"))?;
     if !interface.is_unspecified() {
-        // Pin the outgoing probe to the same interface, or the kernel may send
-        // it out one the group was not joined on and the replies land nowhere.
-        let raw = std::os::fd::AsRawFd::as_raw_fd(&socket);
-        let address = u32::from(interface).to_be();
-        // SAFETY: `raw` is a live socket owned by `socket`, and `address` is the
-        // network-byte-order form of the interface address.
-        let result = unsafe {
-            libc::setsockopt(
-                raw,
-                libc::IPPROTO_IP,
-                libc::IP_MULTICAST_IF,
-                &address as *const u32 as *const libc::c_void,
-                std::mem::size_of::<u32>() as libc::socklen_t,
-            )
-        };
-        ensure!(
-            result == 0,
-            "pinning the probe to {interface}: {}",
-            std::io::Error::last_os_error()
-        );
+        pin_multicast_interface(&socket, interface)?;
     }
     socket.set_multicast_loop_v4(true)?;
     socket.set_read_timeout(Some(WINDOW))?;
