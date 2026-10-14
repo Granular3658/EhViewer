@@ -16,9 +16,10 @@
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, UdpSocket};
+use std::os::fd::FromRawFd;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 
 const GROUP: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
 const PORT: u16 = 5353;
@@ -43,6 +44,59 @@ pub struct MdnsHost {
     pub port: u16,
 }
 
+/// A socket on the mDNS port, shared with whoever else has it.
+///
+/// The port is never free: Android's `mdnsd` holds it for `NsdManager`, and it
+/// binds it with `SO_REUSEADDR` precisely so that a client can bind it too. A
+/// plain bind fails with the port in use, and the failure is invisible from the
+/// outside -- it looks exactly like a network where nobody answers.
+fn shared_socket() -> Result<UdpSocket> {
+    // SAFETY: the descriptor is closed on every path that does not hand it on,
+    // and each call passes a live one with the options it expects.
+    unsafe {
+        let raw = libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0);
+        ensure!(
+            raw >= 0,
+            "opening a udp socket: {}",
+            std::io::Error::last_os_error()
+        );
+        let on: libc::c_int = 1;
+        let result = libc::setsockopt(
+            raw,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            &on as *const libc::c_int as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            libc::close(raw);
+            return Err(error).context("asking to share the mdns port");
+        }
+        let address = libc::sockaddr_in {
+            sin_family: libc::AF_INET as libc::sa_family_t,
+            sin_port: PORT.to_be(),
+            sin_addr: libc::in_addr {
+                s_addr: libc::INADDR_ANY,
+            },
+            sin_zero: [0; 8],
+        };
+        let result = libc::bind(
+            raw,
+            &address as *const libc::sockaddr_in as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        );
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            libc::close(raw);
+            return Err(error).with_context(|| format!("binding UDP {PORT}"));
+        }
+        // SAFETY: `raw` is a bound udp socket that nothing else owns, so the
+        // ownership moves into the `UdpSocket` rather than being duplicated.
+        Ok(UdpSocket::from_raw_fd(raw))
+    }
+}
+
 /// Ask the network which hosts advertise an SMB share over mDNS.
 ///
 /// Takes the address of the interface to listen on, or `None` to let the
@@ -50,8 +104,7 @@ pub struct MdnsHost {
 /// interface up, the one the group is joined on is not always the one the
 /// answers come back on.
 pub fn discover(interface: Option<Ipv4Addr>) -> Result<Vec<MdnsHost>> {
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, PORT))
-        .with_context(|| format!("binding UDP {PORT}"))?;
+    let socket = shared_socket()?;
     let interface = interface.unwrap_or(Ipv4Addr::UNSPECIFIED);
     socket
         .join_multicast_v4(&GROUP, &interface)
@@ -100,11 +153,13 @@ pub fn discover(interface: Option<Ipv4Addr>) -> Result<Vec<MdnsHost>> {
     Ok(hosts)
 }
 
-/// A one-shot query for the service, asking for the answer to be unicast.
+/// A one-shot query for the service.
 ///
-/// The top bit of the class is the unicast-response bit: a responder that
-/// honours it answers to this socket rather than to the group, which is what a
-/// client that is not listening on the group port needs.
+/// The unicast-response bit is deliberately *not* set: an answer asked for
+/// unicast goes to one socket on the port, and the system's own responder is
+/// holding the port too, so which one gets it is a coin toss. A multicast
+/// answer is delivered to every socket that joined the group, this one among
+/// them.
 fn query() -> Vec<u8> {
     let mut query = vec![0u8, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0];
     for label in SERVICE.split('.') {
@@ -113,7 +168,7 @@ fn query() -> Vec<u8> {
     }
     query.push(0);
     query.extend_from_slice(&TYPE_PTR.to_be_bytes());
-    query.extend_from_slice(&0x8001u16.to_be_bytes());
+    query.extend_from_slice(&1u16.to_be_bytes());
     query
 }
 
@@ -293,9 +348,9 @@ mod tests {
         assert_eq!(hosts[0].port, 445);
     }
 
-    /// The query has to name the service, ask for a PTR, and set the
-    /// unicast-response bit, or a responder answers to the group and this
-    /// socket hears nothing.
+    /// The query has to name the service, ask for a PTR, and ask for the answer
+    /// by multicast: an answer asked for unicast goes to one socket on the port
+    /// and the system's own responder holds that port too.
     #[test]
     fn asks_for_the_service_by_name() {
         let query = query();
@@ -303,7 +358,7 @@ mod tests {
         let (name, after) = read_name(&query, 12).expect("a name");
         assert_eq!(name, SERVICE);
         assert_eq!(&query[after..after + 2], &TYPE_PTR.to_be_bytes());
-        assert_eq!(&query[after + 2..after + 4], &[0x80, 0x01]);
+        assert_eq!(&query[after + 2..after + 4], &[0x00, 0x01]);
     }
 
     #[test]
