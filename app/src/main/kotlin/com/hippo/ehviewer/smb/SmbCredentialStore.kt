@@ -19,6 +19,25 @@ data class SmbCredentials(
     val domain: String,
 )
 
+/**
+ * Split what a person types as a user name into a name and a domain.
+ *
+ * Accepts `user`, `DOMAIN\user` and `user@domain.com`, which are the three ways
+ * the same account is written on the three kinds of server this talks to.
+ */
+fun parseUserAndDomain(input: String): Pair<String, String> {
+    val trimmed = input.trim()
+    val backslash = trimmed.indexOf('\\')
+    if (backslash >= 0) {
+        return trimmed.substring(backslash + 1) to trimmed.substring(0, backslash)
+    }
+    val at = trimmed.indexOf('@')
+    if (at > 0) {
+        return trimmed.substring(0, at) to trimmed.substring(at + 1)
+    }
+    return trimmed to ""
+}
+
 object SmbCredentialStore {
     private const val KEY_ALIAS = "ehviewer_smb_credentials"
     private const val TRANSFORMATION = "AES/GCM/NoPadding"

@@ -58,12 +58,14 @@ import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.download.invalidateDownloadLocationCache
 import com.hippo.ehviewer.gallery.lastPageByDirectory
 import com.hippo.ehviewer.smb.SmbAuthRequired
+import com.hippo.ehviewer.smb.SmbCredentialStore
 import com.hippo.ehviewer.smb.SmbLocation
 import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.ui.LocalSnackBarHostState
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.main.NavigationIcon
 import com.hippo.ehviewer.ui.navToReader
+import com.hippo.ehviewer.ui.settings.SmbCredentialsDialog
 import com.hippo.ehviewer.ui.settings.SmbLocationDialog
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
@@ -419,17 +421,23 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
         )
     }
 
-    // Credentials, asked for at the level that was refused. It is the dialog the
-    // download settings use, so what is entered here is stored and reused the
-    // same way -- and its test button stays the gate, because on this screen the
-    // failure *is* about credentials, unlike the dialog that adds a location
-    // that has already been listed.
+    // Credentials, asked for at the level that was refused. A dialog of its own
+    // -- a name, a password, and a test -- rather than the one that adds a
+    // location: that one asks for a path, and a path is not part of the question
+    // the server asked.
     refused?.let { target ->
-        SmbLocationDialog(
-            initial = target,
+        SmbCredentialsDialog(
+            host = target.host,
+            port = target.port,
+            // Null when the refusal came before a share was named: the test then
+            // asks for the share list, which is a question that needs no path.
+            location = target.takeIf { it.share.isNotEmpty() },
+            // Prefilled with what was tried, so a wrong password is a correction
+            // rather than a retyping.
+            initial = SmbCredentialStore.find(target.host, target.port),
             onDismiss = { refused = null },
-            showMessage = { launchSnackbar(it) },
-            onSaved = {
+            onSaved = { credentials ->
+                SmbCredentialStore.put(target, credentials)
                 // The refused session is cached under the credentials it was
                 // built with, so it has to go before the listing is retried.
                 SmbRepository.invalidateSessions()

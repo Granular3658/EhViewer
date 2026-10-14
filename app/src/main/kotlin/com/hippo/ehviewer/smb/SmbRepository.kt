@@ -120,6 +120,31 @@ object SmbRepository {
         }
     }
 
+    /**
+     * Check credentials against a server, without needing a share to type.
+     *
+     * The share list is asked for over `IPC$`, the share every server has, so
+     * this answers "are these credentials accepted" -- which is the question a
+     * refusal raises, and one that can be asked with nothing but a name and a
+     * password. When the refusal happened at a known directory, that directory
+     * is asked for instead: it is the thing that actually failed, and a session
+     * the server accepts is not the same as a share it will open.
+     */
+    suspend fun testCredentials(
+        host: String,
+        port: Int,
+        location: SmbLocation?,
+        credentials: SmbCredentials,
+    ): Int = withContext(Dispatchers.IO) {
+        translatingAuth {
+            if (location == null) {
+                smbShares(host, port, credentials.user, credentials.password, credentials.domain).size
+            } else {
+                smbList(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain).size
+            }
+        }
+    }
+
     suspend fun stat(location: SmbLocation): Stat = withContext(Dispatchers.IO) {
         withTarget(location) { credentials ->
             val raw = smbStat(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain)
