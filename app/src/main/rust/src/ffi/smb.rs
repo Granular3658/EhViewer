@@ -77,8 +77,13 @@ pub fn smbTest(
 
 /// Hosts on the local network that answer WS-Discovery.
 ///
-/// Blocking for the length of the discovery window, so callers must not be on
+/// Blocking for the length of the discovery windows, so callers must not be on
 /// the main thread. Returns one `address` + tab + name per host, deduplicated.
+///
+/// Asks both ways a share announces itself -- WS-Discovery and mDNS -- because
+/// neither covers every host: a Samba server with `wsdd2` answers the first and
+/// a host with avahi answers the second, and a host with neither is not on the
+/// network to be found.
 ///
 /// Takes the address of the interface to listen on. Naming it is what makes the
 /// replies arrive on a device with more than one interface: joining the group
@@ -101,14 +106,29 @@ pub fn wsdDiscover(mut env: JNIEnv, _: JClass, interface: JString) -> jobjectArr
                     .with_context(|| format!("{address} is not an IPv4 address"))?,
             )
         };
-        let hosts = crate::wsd::discover(interface)?;
-        marshal_strings(
-            env,
-            hosts
-                .into_iter()
-                .map(|host| format!("{}\t{}", host.address, host.name.unwrap_or_default()))
-                .collect(),
-        )
+        let mut lines: Vec<String> = crate::wsd::discover(interface)?
+            .into_iter()
+            .map(|host| format!("{}\t{}", host.address, host.name.unwrap_or_default()))
+            .collect();
+        // mDNS is the other way a share announces itself, and the only way for a
+        // host that does not speak WS-Discovery at all. Its answer carries the
+        // port with the name, so it is written in the form the caller already
+        // reads.
+        //
+        // Where both answered, the WS-Discovery name wins: it is the name the
+        // device gave for itself, and mDNS is here to add the hosts that were
+        // missed and to name the ones that had no name.
+        for found in crate::mdns::discover(interface)? {
+            let prefix = format!("{}\t", found.address);
+            match lines.iter_mut().find(|line| line.starts_with(&prefix)) {
+                Some(line) if line.len() == prefix.len() => {
+                    *line = format!("{prefix}{}", found.name)
+                }
+                Some(_) => {}
+                None => lines.push(format!("{}:{}\t{}", found.address, found.port, found.name)),
+            }
+        }
+        marshal_strings(env, lines)
     })
 }
 

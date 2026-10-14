@@ -2,6 +2,7 @@
 
 mod ffi;
 pub mod img;
+pub mod mdns;
 pub mod parser;
 pub mod smb;
 #[cfg(feature = "android-26")]
