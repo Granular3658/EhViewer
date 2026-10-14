@@ -15,6 +15,7 @@
  */
 package com.hippo.ehviewer.util
 
+import android.content.res.Resources
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.res.pluralStringResource
@@ -97,7 +98,16 @@ object ReadableTime {
         char('-')
         secondFraction(3)
     }
-    private val resources = appCtx.resources
+
+    // Read on demand rather than into a field: `appCtx` is a global that a
+    // startup provider fills in, and an object's initializer runs whenever
+    // whatever touches the object first happens to run. When that was a
+    // composition that got there before the provider, the initializer threw --
+    // and a class whose initializer has thrown stays broken for the rest of the
+    // process, so the screen that formatted a time first crashed, and kept
+    // crashing, until the app was killed.
+    private val resources: Resources
+        get() = appCtx.resources
 
     @Composable
     fun getTimeAgo(time: Long): String {
