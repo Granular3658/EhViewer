@@ -342,6 +342,8 @@
     <string name="settings_download_smb_read_only">只读</string>
     <string name="settings_download_smb_credentials">凭据</string>
     <string name="settings_download_smb_credentials_for">用于 %s</string>
+    <string name="settings_download_smb_forget">忘记凭据</string>
+    <string name="settings_download_smb_forget_confirm">要忘记为 %s 保存的凭据吗？</string>
     <string name="settings_download_smb_path">路径</string>
     <string name="settings_download_smb_path_hint">主机[:445]/共享名/子路径</string>
     <string name="settings_download_smb_username">用户名（域\\用户）</string>

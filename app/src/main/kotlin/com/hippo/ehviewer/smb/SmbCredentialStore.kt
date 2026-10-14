@@ -118,6 +118,23 @@ object SmbCredentialStore {
         decrypt(json.getString(key))
     }.getOrNull()
 
+    /**
+     * Take back every credential stored for a server.
+     *
+     * Every one, not just the one that was looked up: the store keeps one per
+     * server, and "forget this server" that left a copy behind would be a button
+     * that does nothing the next time the same question is asked.
+     */
+    @Synchronized
+    fun forget(host: String, port: Int) {
+        val json = JSONObject(Settings.smbCredentials.value)
+        val prefix = "smb://$host:$port/"
+        for (key in json.keys().asSequence().filter { it.startsWith(prefix) }.toList()) {
+            json.remove(key)
+        }
+        Settings.smbCredentials.value = json.toString()
+    }
+
     @Synchronized
     fun put(location: SmbLocation, credentials: SmbCredentials) {
         val json = JSONObject(Settings.smbCredentials.value)
