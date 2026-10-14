@@ -160,26 +160,76 @@ async fn connect(target: &Target) -> Result<Session> {
     })
 }
 
-/// Borrow the cached session, connecting (or reconnecting) when it is missing
-/// or has been idle for too long.
+/// The session for a target, connecting when it is missing or has gone stale.
+async fn session_in(
+    guard: &mut HashMap<(String, u16, String, String, String), Session>,
+    target: &Target,
+) -> Result<()> {
+    let key = target.key();
+    let stale = match guard.get(&key) {
+        Some(session) => session.last_used.elapsed() >= IDLE_TIMEOUT,
+        None => true,
+    };
+    if stale {
+        let session = asking_for_credentials(connect(target).await)?;
+        guard.insert(key, session);
+    }
+    Ok(())
+}
+
+/// Whether a failure is worth another attempt on a session built from scratch.
+///
+/// A phone's network goes away and comes back -- Wi-Fi that slept, a server that
+/// dropped a connection it had no use for -- and what is gone is the connection
+/// the request travelled on, not the file. Reporting "cannot list" for it is
+/// what makes a browser look like it lost files that are right there.
+fn retryable(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<smb2::Error>().map(smb2::Error::kind),
+        Some(
+            smb2::ErrorKind::ConnectionLost
+                | smb2::ErrorKind::SessionExpired
+                | smb2::ErrorKind::TimedOut
+                | smb2::ErrorKind::Io
+        )
+    )
+}
+
+/// Run an operation on the cached session for a target.
+///
+/// One retry, on a connection built from scratch: the first attempt can lose its
+/// connection between the request going out and the answer coming back, and a
+/// caller asking for a listing has no way to tell that from a directory that is
+/// not there.
+///
+/// A loop rather than a closure around the body: the body contains `await`, and
+/// an async closure is not something this crate's Rust has. The loop runs it
+/// once more on the way out, and the body stays written once.
 macro_rules! with_session {
     ($target:expr, |$session:ident| $body:expr) => {{
         let target: &Target = $target;
-        let mut guard = sessions().lock().await;
-        let key = target.key();
-        let stale = match guard.get(&key) {
-            Some(session) => session.last_used.elapsed() >= IDLE_TIMEOUT,
-            None => true,
-        };
-        if stale {
-            let session = asking_for_credentials(connect(target).await)?;
-            guard.insert(key.clone(), session);
+        let mut retried = false;
+        loop {
+            let outcome = {
+                let mut guard = sessions().lock().await;
+                session_in(&mut guard, target).await?;
+                let $session = guard
+                    .get_mut(&target.key())
+                    .ok_or_else(|| anyhow!("Session vanished"))?;
+                $session.last_used = Instant::now();
+                asking_for_credentials($body)
+            };
+            match outcome {
+                Err(error) if !retried && retryable(&error) => {
+                    // The session is the thing that is gone, so it goes before
+                    // the second attempt builds another one.
+                    retried = true;
+                    sessions().lock().await.remove(&target.key());
+                    log::debug!(target: "smb", "retrying after: {error:#}");
+                }
+                outcome => break outcome,
+            }
         }
-        let $session = guard
-            .get_mut(&key)
-            .ok_or_else(|| anyhow!("Session vanished"))?;
-        $session.last_used = Instant::now();
-        asking_for_credentials($body)
     }};
 }
 

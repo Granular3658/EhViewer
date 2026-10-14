@@ -335,15 +335,16 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                     host = host,
                     share = share,
                     subPath = subPath,
+                    // Each segment goes to the level it names, the way a path
+                    // segment already does. The host's level is its shares and
+                    // the share's is its root -- not "one level up from here",
+                    // which is a different place depending on how deep the path
+                    // is, and reads as the tap having gone wrong.
                     onHost = {
-                        host = null
                         share = null
                         subPath = ""
                     },
-                    onShare = {
-                        share = null
-                        subPath = ""
-                    },
+                    onShare = { subPath = "" },
                     onSegment = { subPath = it },
                 )
             }
