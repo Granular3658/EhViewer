@@ -121,6 +121,15 @@ object SmbCredentialStore {
     @Synchronized
     fun put(location: SmbLocation, credentials: SmbCredentials) {
         val json = JSONObject(Settings.smbCredentials.value)
+        // One credential per server, not one per share of it. A server
+        // authenticates the session, and a credential left under another share
+        // of the same host is one that shadows what was just entered -- which is
+        // what made a corrected password fail to open the share it was entered
+        // for.
+        val prefix = "smb://${location.host}:${location.port}/"
+        for (key in json.keys().asSequence().filter { it.startsWith(prefix) }.toList()) {
+            json.remove(key)
+        }
         json.put(location.credentialKey, encrypt(credentials))
         Settings.smbCredentials.value = json.toString()
     }
