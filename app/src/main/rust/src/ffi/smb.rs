@@ -5,7 +5,7 @@ use crate::smb::{self, DEFAULT_PORT, Target};
 use anyhow::{Context as _, Result, ensure};
 use jni::JNIEnv;
 use jni::objects::{JByteBuffer, JClass, JObject, JString};
-use jni::sys::{jint, jlong, jlongArray, jobject, jobjectArray};
+use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jint, jlong, jlongArray, jobject, jobjectArray};
 use jni_fn::jni_fn;
 
 #[allow(clippy::too_many_arguments)]
@@ -75,27 +75,33 @@ pub fn smbTest(
     })
 }
 
-/// Hosts on the local network that answer WS-Discovery or mDNS, without waiting
-/// for the names that need a second request each.
+/// One host as the caller reads it: the address, the port when the source that
+/// found it knew one, a tab, and the name when it has one.
+fn host_line(host: crate::wsd::Host) -> String {
+    let address = match host.port {
+        Some(port) => format!("{}:{port}", host.address),
+        None => host.address,
+    };
+    format!("{address}\t{}", host.name.unwrap_or_default())
+}
+
+/// Start a scan of the local network. Returns at once, with nothing to show.
 ///
-/// Blocking for the length of the discovery windows, so callers must not be on
-/// the main thread. Returns one `address` + tab + name per host, deduplicated.
+/// A scan asks both ways a share announces itself -- WS-Discovery and mDNS --
+/// because neither covers every host: a Samba server with `wsdd2` answers the
+/// first and a host with avahi answers the second, and a host with neither is
+/// not on the network to be found.
 ///
-/// Asks both ways a share announces itself -- WS-Discovery and mDNS -- because
-/// neither covers every host: a Samba server with `wsdd2` answers the first and
-/// a host with avahi answers the second, and a host with neither is not on the
-/// network to be found.
-///
-/// The names it does carry come from the name service, which is one round trip
-/// each. A host whose name needs a metadata request is listed without one, and
-/// [`wsdResolveNames`] fills it in afterwards.
+/// The scan then waits out the windows a responder is allowed to take, which is
+/// time a list does not have to spend blank, so it runs on its own threads and
+/// the caller reads [`wsdScanPoll`] as answers arrive.
 ///
 /// Takes the address of the interface to listen on. Naming it is what makes the
 /// replies arrive on a device with more than one interface: joining the group
 /// without one lets the kernel choose, and the choice is not always the
 /// interface the answers come back on.
 #[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
-pub fn wsdDiscover(mut env: JNIEnv, _: JClass, interface: JString) -> jobjectArray {
+pub fn wsdScanStart(mut env: JNIEnv, _: JClass, interface: JString) -> jboolean {
     jni_throwing(&mut env, |env| {
         let address: String = env.get_string(&interface)?.into();
         // A missing or unparseable interface here is not something to fall back
@@ -111,75 +117,29 @@ pub fn wsdDiscover(mut env: JNIEnv, _: JClass, interface: JString) -> jobjectArr
                     .with_context(|| format!("{address} is not an IPv4 address"))?,
             )
         };
-        let mut lines: Vec<String> = crate::wsd::discover(interface)?
-            .into_iter()
-            .map(|host| format!("{}\t{}", host.address, host.name.unwrap_or_default()))
-            .collect();
-        // mDNS is the other way a share announces itself, and the only way for a
-        // host that does not speak WS-Discovery at all. Its answer carries the
-        // port with the name, so it is written in the form the caller already
-        // reads.
-        //
-        // Where both answered, the WS-Discovery name wins: it is the name the
-        // device gave for itself, and mDNS is here to add the hosts that were
-        // missed and to name the ones that had no name.
-        for found in crate::mdns::discover(interface)? {
-            let prefix = format!("{}\t", found.address);
-            match lines.iter_mut().find(|line| line.starts_with(&prefix)) {
-                Some(line) if line.len() == prefix.len() => {
-                    *line = format!("{prefix}{}", found.name)
-                }
-                Some(_) => {}
-                None => lines.push(format!("{}:{}\t{}", found.address, found.port, found.name)),
-            }
-        }
-        // Kept for the second half of the scan, which fills in the names this
-        // one could not wait for.
-        *last_lines().lock().expect("the line cache") = lines.clone();
-        marshal_strings(env, lines)
+        crate::wsd::start(interface);
+        Ok(JNI_TRUE)
     })
 }
 
-/// The lines of the last discovery, held between the two halves of a scan.
+/// What the running scan has so far, one `address` + tab + name per host.
 ///
-/// The second half needs the hosts the first one found, and the list is what
-/// the caller already has: keeping it here means the caller passes nothing back.
-fn last_lines() -> &'static std::sync::Mutex<Vec<String>> {
-    static LINES: std::sync::OnceLock<std::sync::Mutex<Vec<String>>> = std::sync::OnceLock::new();
-    LINES.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+/// A host appears as soon as it answers and is named when its name arrives, so
+/// the list fills in under the caller's eyes instead of appearing at the end.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn wsdScanPoll(mut env: JNIEnv, _: JClass) -> jobjectArray {
+    jni_throwing(&mut env, |env| {
+        let (hosts, _) = crate::wsd::poll();
+        marshal_strings(env, hosts.into_iter().map(host_line).collect())
+    })
 }
 
-/// Fill in the names the first half of the scan left out.
-///
-/// One HTTP request per nameless host, which is the half that cannot be made
-/// fast, only moved out of the way: the caller shows the list from
-/// [`wsdDiscover`] and calls this afterwards to replace it. The whole list comes
-/// back, so there is nothing to merge.
+/// Whether the running scan has finished, whether or not it found anything.
 #[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
-pub fn wsdResolveNames(mut env: JNIEnv, _: JClass) -> jobjectArray {
-    jni_throwing(&mut env, |env| {
-        let resolved = crate::wsd::resolve_names();
-        let mut lines = last_lines().lock().expect("the line cache").clone();
-        for line in lines.iter_mut() {
-            let Some((address, name)) = line.split_once('\t') else {
-                continue;
-            };
-            if !name.is_empty() {
-                continue;
-            }
-            // mDNS writes its hosts as `address:port`, and the resolved list is
-            // keyed by the address alone.
-            let bare = address.split(':').next().unwrap_or(address).to_owned();
-            let Some(found) = resolved
-                .iter()
-                .find(|host| host.address == bare)
-                .and_then(|host| host.name.clone())
-            else {
-                continue;
-            };
-            *line = format!("{bare}\t{found}");
-        }
-        marshal_strings(env, lines)
+pub fn wsdScanFinished(mut env: JNIEnv, _: JClass) -> jboolean {
+    jni_throwing(&mut env, |_| {
+        let (_, done) = crate::wsd::poll();
+        Ok(if done { JNI_TRUE } else { JNI_FALSE })
     })
 }
 

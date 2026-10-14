@@ -235,20 +235,20 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
             val lock = wifi?.createMulticastLock("ehviewer-wsd")?.apply { setReferenceCounted(false) }
             val found = runCatching {
                 lock?.acquire()
-                SmbRepository.discoverHosts(wifiInterfaceAddress(context))
+                SmbRepository.discoverHosts(wifiInterfaceAddress(context)) { soFar ->
+                    // Replaced, not appended: the previous scan described a
+                    // network that may not be the one this device is on any
+                    // more. The list fills in as answers arrive, so the wait is
+                    // a wait and not a freeze.
+                    discovered = ArrayList(soFar.map(::discoveredHostRow))
+                    // The wait is over as soon as there is something to look
+                    // at; the names keep arriving after that.
+                    if (soFar.isNotEmpty()) discovering = false
+                }
             }.onFailure { launchSnackbar(cannotList) }.getOrElse { emptyList() }
-            // Replaced, not appended: the previous scan described a network
-            // that may not be the one this device is on any more.
             discovered = ArrayList(found.map(::discoveredHostRow))
-            // The list is up, so the scan is finished as far as the person who
-            // tapped it is concerned. The names that cost a request each are
-            // still coming, and replace the rows in place when they arrive.
-            discovering = false
-            val named = runCatching { SmbRepository.discoverNames() }.getOrElse { emptyList() }
-            if (named.isNotEmpty()) {
-                discovered = ArrayList(named.map(::discoveredHostRow))
-            }
             runCatching { lock?.takeIf { it.isHeld }?.release() }
+            discovering = false
         }
     }
 
