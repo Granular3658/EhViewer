@@ -256,6 +256,7 @@ fn records(data: &[u8]) -> Option<Vec<Record>> {
 /// `PTR`, its port and host from the `SRV`, and the address from the host's `A`.
 fn parse(data: &[u8]) -> Vec<MdnsHost> {
     let Some(records) = records(data) else {
+        log::debug!(target: "mdns", "{} bytes that are not a response", data.len());
         return Vec::new();
     };
     let mut addresses: HashMap<String, Ipv4Addr> = HashMap::new();
@@ -284,10 +285,26 @@ fn parse(data: &[u8]) -> Vec<MdnsHost> {
             _ => {}
         }
     }
+    if instances.is_empty() {
+        // A response that answers something else is not a failure, but a
+        // response that names a service and cannot be joined is, and the two
+        // look the same without this.
+        log::debug!(
+            target: "mdns",
+            "{} record(s): {} instance(s), {} service(s), {} address(es)",
+            records.len(),
+            instances.len(),
+            services.len(),
+            addresses.len()
+        );
+    }
     instances
         .iter()
         .filter_map(|instance| {
-            let (port, target) = services.get(instance)?;
+            let Some((port, target)) = services.get(instance) else {
+                log::debug!(target: "mdns", "{instance} names no service");
+                return None;
+            };
             // The address record is for the host the service points at. A
             // responder that names it differently still starts with the same
             // label, which is the fallback that keeps it findable.
