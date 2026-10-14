@@ -227,6 +227,14 @@ macro_rules! with_session {
                     sessions().lock().await.remove(&target.key());
                     log::debug!(target: "smb", "retrying after: {error:#}");
                 }
+                Err(error) => {
+                    // The person gets "could not read this location"; this is
+                    // what it was. Without it, a report of that message has
+                    // nothing behind it -- the crate's own lines say what the
+                    // connection did, not what the operation asked for.
+                    log::warn!(target: "smb", "failed: {error:#}");
+                    break Err(error);
+                }
                 outcome => break outcome,
             }
         }
