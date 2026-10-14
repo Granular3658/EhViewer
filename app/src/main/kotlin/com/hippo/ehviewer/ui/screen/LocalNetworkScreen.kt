@@ -332,9 +332,15 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                     },
                 )
                 Breadcrumb(
+                    root = stringResource(R.string.local_network),
                     host = host,
                     share = share,
                     subPath = subPath,
+                    onRoot = {
+                        host = null
+                        share = null
+                        subPath = ""
+                    },
                     // Each segment goes to the level it names, the way a path
                     // segment already does. The host's level is its shares and
                     // the share's is its root -- not "one level up from here",
@@ -475,9 +481,11 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
 
 @Composable
 private fun Breadcrumb(
+    root: String,
     host: String?,
     share: String?,
     subPath: String,
+    onRoot: () -> Unit,
     onHost: () -> Unit,
     onShare: () -> Unit,
     onSegment: (String) -> Unit,
@@ -495,6 +503,17 @@ private fun Breadcrumb(
             .padding(horizontal = 16.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // The way back out of the browser. The host segment below goes to that
+        // host's shares, so without this there is nothing above a host and the
+        // list of hosts can only be reached with the back gesture.
+        Text(
+            text = root,
+            color = MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.clickable(onClick = onRoot),
+        )
+        Text(text = " / ", maxLines = 1, softWrap = false)
         Text(
             text = host,
             fontWeight = FontWeight.Bold,
