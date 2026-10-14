@@ -27,23 +27,10 @@ import com.hippo.ehviewer.smb.SmbCredentialStore
 import com.hippo.ehviewer.smb.SmbCredentials
 import com.hippo.ehviewer.smb.SmbLocation
 import com.hippo.ehviewer.smb.SmbRepository
+import com.hippo.ehviewer.smb.parseUserAndDomain
 import kotlinx.coroutines.launch
 
 private const val SMB_PREFIX = "smb://"
-
-/** Accepts `user`, `DOMAIN\user` and `user@domain.com` style input. */
-private fun splitUserAndDomain(input: String): Pair<String, String> {
-    val trimmed = input.trim()
-    val backslash = trimmed.indexOf('\\')
-    if (backslash >= 0) {
-        return trimmed.substring(backslash + 1) to trimmed.substring(0, backslash)
-    }
-    val at = trimmed.indexOf('@')
-    if (at > 0) {
-        return trimmed.substring(0, at) to trimmed.substring(at + 1)
-    }
-    return trimmed to ""
-}
 
 @Composable
 fun SmbLocationDialog(
@@ -97,7 +84,7 @@ fun SmbLocationDialog(
             .trimStart('/')
         if (withoutScheme.isEmpty()) return null
         val location = SmbLocation.parse(SMB_PREFIX + withoutScheme) ?: return null
-        val (user, domain) = splitUserAndDomain(username)
+        val (user, domain) = parseUserAndDomain(username)
         return location to SmbCredentials(user, password, domain)
     }
 

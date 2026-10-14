@@ -356,6 +356,8 @@
     <string name="settings_download_add_smb_location">Add SMB location</string>
     <string name="settings_download_edit_smb_location">Edit SMB location</string>
     <string name="settings_download_smb_read_only">Read-only</string>
+    <string name="settings_download_smb_credentials">Credentials</string>
+    <string name="settings_download_smb_credentials_for">For %s</string>
     <string name="settings_download_smb_path">Path</string>
     <string name="settings_download_smb_path_hint">host[:445]/share/subpath</string>
     <string name="settings_download_smb_username">Username (DOMAIN\\user)</string>
