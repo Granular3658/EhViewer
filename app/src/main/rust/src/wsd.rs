@@ -37,9 +37,13 @@ const NBNS_WORKSTATION: u8 = 0x00;
 /// then falls through to the metadata request.
 const NBNS_TIMEOUT: Duration = Duration::from_millis(800);
 
-/// How long to keep listening after the probe goes out. The specification
-/// allows a responder three seconds of randomised delay; waiting longer only
-/// delays the list, since a host that answers at all answers at once.
+/// How long to keep listening after the probe goes out.
+///
+/// A listening window, not a per-host timeout: the probe is sent and the socket
+/// is read until the deadline, so a host that answers late is still found. It is
+/// deliberately not shortened to make a scan feel quicker -- that trades a slow
+/// list for a short one -- and the list is filled in while the window runs
+/// instead (see [`start`] and [`poll`]).
 const WINDOW: Duration = Duration::from_millis(2500);
 
 /// A host that answered, named by the address it can be reached at.
