@@ -226,13 +226,19 @@ fn records(data: &[u8]) -> Option<Vec<Record>> {
     }
     let questions = u16::from_be_bytes([data[4], data[5]]) as usize;
     let answers = u16::from_be_bytes([data[6], data[7]]) as usize;
+    let authorities = u16::from_be_bytes([data[8], data[9]]) as usize;
+    let additionals = u16::from_be_bytes([data[10], data[11]]) as usize;
     let mut offset = 12;
     for _ in 0..questions {
         let (_, next) = read_name(data, offset)?;
         offset = next + 4;
     }
-    let mut out = Vec::with_capacity(answers);
-    for _ in 0..answers {
+    // All three sections, not just the answers: a multicast response carries
+    // the PTR as its answer and everything the PTR points at -- the SRV with
+    // the port, the A with the address -- as additional records. Reading only
+    // the answers finds the instance and none of what makes it usable.
+    let mut out = Vec::with_capacity(answers + authorities + additionals);
+    for _ in 0..(answers + authorities + additionals) {
         let (name, next) = read_name(data, offset)?;
         let rtype = u16::from_be_bytes([*data.get(next)?, *data.get(next + 1)?]);
         let length = u16::from_be_bytes([*data.get(next + 8)?, *data.get(next + 9)?]) as usize;
@@ -362,6 +368,23 @@ mod tests {
         assert_eq!(hosts[0].address, Ipv4Addr::new(172, 17, 0, 1));
         // The port comes from the SRV record, which is the whole reason this is
         // worth doing: WS-Discovery needs a second request to learn the same.
+        assert_eq!(hosts[0].port, 445);
+    }
+
+    /// The same records, in the shape a multicast answer arrives in: the PTR as
+    /// the answer and everything it points at as additional records. This is
+    /// how avahi answers the query the app actually sends, and reading only the
+    /// answer section finds the instance and nothing that makes it usable.
+    #[test]
+    fn reads_the_records_that_arrive_as_additional() {
+        let mut data = hex(AVAHI);
+        data[6..8].copy_from_slice(&1u16.to_be_bytes());
+        data[8..10].copy_from_slice(&0u16.to_be_bytes());
+        data[10..12].copy_from_slice(&4u16.to_be_bytes());
+        let hosts = parse(&data);
+        assert_eq!(hosts.len(), 1, "the instance and its records");
+        assert_eq!(hosts[0].name, "hermes1");
+        assert_eq!(hosts[0].address, Ipv4Addr::new(172, 17, 0, 1));
         assert_eq!(hosts[0].port, 445);
     }
 
