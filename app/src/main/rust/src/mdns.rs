@@ -269,21 +269,26 @@ fn parse(data: &[u8]) -> Vec<MdnsHost> {
     let mut services: HashMap<String, (u16, String)> = HashMap::new();
     let mut instances: Vec<String> = Vec::new();
     for record in &records {
+        // DNS names are compared without regard to case, and avahi does not
+        // keep one case for a name: it names the instance in lower case in the
+        // PTR and describes it in upper case in the SRV and TXT. Matching them
+        // as written finds the instance and none of its records.
+        let name = record.name.to_lowercase();
         match record.rtype {
             TYPE_A if record.length == 4 => {
                 let octets: [u8; 4] = match data[record.rdata..record.rdata + 4].try_into() {
                     Ok(octets) => octets,
                     Err(_) => continue,
                 };
-                addresses.insert(record.name.clone(), Ipv4Addr::from(octets));
+                addresses.insert(name, Ipv4Addr::from(octets));
             }
             TYPE_SRV if record.length > 6 => {
                 let port = u16::from_be_bytes([data[record.rdata + 4], data[record.rdata + 5]]);
                 if let Some((target, _)) = read_name(data, record.rdata + 6) {
-                    services.insert(record.name.clone(), (port, target));
+                    services.insert(name, (port, target.to_lowercase()));
                 }
             }
-            TYPE_PTR if record.name == SERVICE => {
+            TYPE_PTR if name == SERVICE => {
                 if let Some((instance, _)) = read_name(data, record.rdata) {
                     instances.push(instance);
                 }
@@ -307,7 +312,8 @@ fn parse(data: &[u8]) -> Vec<MdnsHost> {
     instances
         .iter()
         .filter_map(|instance| {
-            let Some((port, target)) = services.get(instance) else {
+            let lower = instance.to_lowercase();
+            let Some((port, target)) = services.get(&lower) else {
                 log::debug!(target: "mdns", "{instance} names no service");
                 return None;
             };
@@ -315,15 +321,17 @@ fn parse(data: &[u8]) -> Vec<MdnsHost> {
             // responder that names it differently still starts with the same
             // label, which is the fallback that keeps it findable.
             let address = addresses.get(target).or_else(|| {
-                let label = instance.split('.').next()?;
+                let label = lower.split('.').next()?;
                 addresses
                     .iter()
                     .find(|(name, _)| name.split('.').next() == Some(label))
                     .map(|(_, address)| address)
             })?;
+            // The instance label is the name to show, as the responder wrote it.
             let name = instance
-                .strip_suffix(&format!(".{SERVICE}"))
-                .unwrap_or(instance)
+                .split('.')
+                .next()
+                .unwrap_or(instance.as_str())
                 .to_owned();
             Some(MdnsHost {
                 name,
@@ -368,6 +376,31 @@ mod tests {
         assert_eq!(hosts[0].address, Ipv4Addr::new(172, 17, 0, 1));
         // The port comes from the SRV record, which is the whole reason this is
         // worth doing: WS-Discovery needs a second request to learn the same.
+        assert_eq!(hosts[0].port, 445);
+    }
+
+    /// The answer avahi actually sends to the multicast query the app makes: no
+    /// question echoed, five answers, and the instance named in lower case by
+    /// the PTR while the records describing it are upper case. This is the
+    /// capture that found the case mismatch.
+    const MULTICAST: &str = "
+        00 00 84 00 00 00 00 05 00 00 00 00
+        04 5f 73 6d 62 04 5f 74 63 70 05 6c 6f 63 61 6c 00 00 0c 00 01
+        00 00 11 94 00 0a 07 68 65 72 6d 65 73 31 c0 0c
+        07 48 45 52 4d 45 53 31 c0 0c 00 10 80 01 00 00 11 94 00 01 00
+        c0 31 00 21 80 01 00 00 00 78 00 10 00 00 00 00 01 bd 07 68 65 72 6d 65 73 31 c0 16
+        c0 58 00 1c 80 01 00 00 00 78 00 10 fe 80 00 00 00 00 00 00 00 42 0f ff fe 18 69 a2
+        c0 58 00 01 80 01 00 00 00 78 00 04 ac 11 00 01
+    ";
+
+    #[test]
+    fn reads_a_host_from_the_multicast_answer() {
+        let data = hex(MULTICAST);
+        assert_eq!(data.len(), 142, "the capture is 142 bytes");
+        let hosts = parse(&data);
+        assert_eq!(hosts.len(), 1, "one instance, one host");
+        assert_eq!(hosts[0].name, "hermes1");
+        assert_eq!(hosts[0].address, Ipv4Addr::new(172, 17, 0, 1));
         assert_eq!(hosts[0].port, 445);
     }
 
