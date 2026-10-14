@@ -66,7 +66,19 @@ object SmbRepository {
         throw error
     }
 
-    private fun credentials(location: SmbLocation): SmbCredentials = SmbCredentialStore.get(location) ?: SmbCredentials("", "", "")
+    /**
+     * The credentials for a location: its own, or its host's.
+     *
+     * A location is keyed by host, port and share, but a credential entered for
+     * the host covers everything on it -- a server authenticates the session,
+     * not the share -- and that is where one lands when the server refused
+     * before a share was named. Without the fallback, a password corrected at
+     * the host level would leave every share on that host using the one it
+     * replaced.
+     */
+    private fun credentials(location: SmbLocation): SmbCredentials = SmbCredentialStore.get(location)
+        ?: SmbCredentialStore.find(location.host, location.port)
+        ?: SmbCredentials("", "", "")
 
     private inline fun <T> withTarget(location: SmbLocation, block: (SmbCredentials) -> T): T = block(credentials(location))
 
