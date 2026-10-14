@@ -40,63 +40,84 @@ object ReadableTime {
     private const val DAY_MILLIS = 24 * HOUR_MILLIS
     private const val WEEK_MILLIS = 7 * DAY_MILLIS
     private const val YEAR_MILLIS = 365 * DAY_MILLIS
-    private val MULTIPLES = longArrayOf(
-        YEAR_MILLIS,
-        DAY_MILLIS,
-        HOUR_MILLIS,
-        MINUTE_MILLIS,
-        SECOND_MILLIS,
-    )
+
+    // Everything below is built on first use rather than while the object is
+    // being loaded. An object's initializer runs on whoever touches the object
+    // first -- here that was a composition on the advanced settings screen -- and
+    // it must not be able to fail there: a class whose initializer has thrown
+    // stays broken for the rest of the process, so one bad moment would take out
+    // every later use of a time format, on any screen, until the app was killed.
+    private val MULTIPLES by lazy {
+        longArrayOf(
+            YEAR_MILLIS,
+            DAY_MILLIS,
+            HOUR_MILLIS,
+            MINUTE_MILLIS,
+            SECOND_MILLIS,
+        )
+    }
     private const val SIZE = 5
-    private val UNITS = intArrayOf(
-        R.plurals.year,
-        R.plurals.day,
-        R.plurals.hour,
-        R.plurals.minute,
-        R.plurals.second,
-    )
-    private val DATE_FORMAT_WITHOUT_YEAR = LocalDate.Format {
-        monthName(MonthNames.ENGLISH_ABBREVIATED)
-        char(' ')
-        day(Padding.NONE)
+    private val UNITS by lazy {
+        intArrayOf(
+            R.plurals.year,
+            R.plurals.day,
+            R.plurals.hour,
+            R.plurals.minute,
+            R.plurals.second,
+        )
     }
-    private val DATE_FORMAT_WITH_YEAR = LocalDate.Format {
-        monthName(MonthNames.ENGLISH_ABBREVIATED)
-        char(' ')
-        day(Padding.NONE)
-        chars(", ")
-        year()
+    private val DATE_FORMAT_WITHOUT_YEAR by lazy {
+        LocalDate.Format {
+            monthName(MonthNames.ENGLISH_ABBREVIATED)
+            char(' ')
+            day(Padding.NONE)
+        }
     }
-    private val DATE_FORMAT_WITHOUT_YEAR_ZH = LocalDate.Format {
-        monthNumber(Padding.NONE)
-        char('月')
-        day(Padding.NONE)
-        char('日')
+    private val DATE_FORMAT_WITH_YEAR by lazy {
+        LocalDate.Format {
+            monthName(MonthNames.ENGLISH_ABBREVIATED)
+            char(' ')
+            day(Padding.NONE)
+            chars(", ")
+            year()
+        }
     }
-    private val DATE_FORMAT_WITH_YEAR_ZH = LocalDate.Format {
-        year()
-        char('年')
-        monthNumber(Padding.NONE)
-        char('月')
-        day(Padding.NONE)
-        char('日')
+    private val DATE_FORMAT_WITHOUT_YEAR_ZH by lazy {
+        LocalDate.Format {
+            monthNumber(Padding.NONE)
+            char('月')
+            day(Padding.NONE)
+            char('日')
+        }
+    }
+    private val DATE_FORMAT_WITH_YEAR_ZH by lazy {
+        LocalDate.Format {
+            year()
+            char('年')
+            monthNumber(Padding.NONE)
+            char('月')
+            day(Padding.NONE)
+            char('日')
+        }
     }
 
     // yyyy-MM-dd-HH-mm-ss-SSS
-    private val FILENAMABLE_DATE_FORMAT = LocalDateTime.Format {
-        year()
-        char('-')
-        monthNumber()
-        char('-')
-        day()
-        char('-')
-        hour()
-        char('-')
-        minute()
-        char('-')
-        second()
-        char('-')
-        secondFraction(3)
+    private val FILENAMABLE_DATE_FORMAT by lazy {
+        LocalDateTime.Format {
+            year()
+            char('-')
+            monthNumber()
+            char('-')
+            day()
+            char('-')
+            hour()
+            char('-')
+            minute()
+            char('-')
+            second()
+            char('-')
+            secondFraction(3)
+        }
     }
 
     // Read on demand rather than into a field: `appCtx` is a global that a
