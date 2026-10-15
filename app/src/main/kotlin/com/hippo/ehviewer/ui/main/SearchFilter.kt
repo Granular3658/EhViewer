@@ -47,11 +47,12 @@ import com.hippo.ehviewer.ui.tools.DialogState
 import com.hippo.ehviewer.ui.tools.awaitResult
 import kotlinx.coroutines.CoroutineScope
 
-// `arrayOf` rather than the collection literal upstream moved to: lint's analysis API
-// cannot resolve a top-level property whose initialiser is one, and the whole lint run
-// dies on it with KotlinIllegalArgumentExceptionWithAttachments out of
-// FirKotlinUastResolveProviderService.hasTypeForValueClassInSignature. Nothing else
-// about the table changes, and this can go back to `[...]` when that resolves.
+// `arrayOf` rather than the collection literal upstream moved to: lint's analysis API cannot
+// resolve a top-level property whose initialiser is one, and the whole lint run dies on it with
+// KotlinIllegalArgumentExceptionWithAttachments out of
+// FirKotlinUastResolveProviderService.hasTypeForValueClassInSignature -- on the default variant
+// too, not just marshmallow. Nothing else about the table changes, and this can go back to
+// `[...]` when that resolves.
 private val categoryTable = arrayOf(
     EhUtils.DOUJINSHI to R.string.doujinshi,
     EhUtils.MANGA to R.string.manga,

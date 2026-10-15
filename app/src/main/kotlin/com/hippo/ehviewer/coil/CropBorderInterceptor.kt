@@ -14,9 +14,6 @@ import com.ehviewer.core.util.logcat
 import com.hippo.ehviewer.image.copyBitmapToAHB
 import moe.tarsin.coroutines.runSuspendCatching
 
-// Inlined: both flags are compile-time constants, so nothing here reaches HardwareBuffer
-// on a device that does not have it. See AnimatedWebPDrawable for the same pair.
-@Suppress("InlinedApi")
 private const val USAGE = HardwareBuffer.USAGE_CPU_WRITE_RARELY or HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE
 
 object CropBorderInterceptor : Interceptor {
