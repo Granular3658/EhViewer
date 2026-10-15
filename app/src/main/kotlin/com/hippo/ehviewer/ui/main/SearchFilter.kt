@@ -47,7 +47,12 @@ import com.hippo.ehviewer.ui.tools.DialogState
 import com.hippo.ehviewer.ui.tools.awaitResult
 import kotlinx.coroutines.CoroutineScope
 
-private val categoryTable = [
+// `arrayOf` rather than the collection literal upstream moved to: lint's analysis API
+// cannot resolve a top-level property whose initialiser is one, and the whole lint run
+// dies on it with KotlinIllegalArgumentExceptionWithAttachments out of
+// FirKotlinUastResolveProviderService.hasTypeForValueClassInSignature. Nothing else
+// about the table changes, and this can go back to `[...]` when that resolves.
+private val categoryTable = arrayOf(
     EhUtils.DOUJINSHI to R.string.doujinshi,
     EhUtils.MANGA to R.string.manga,
     EhUtils.ARTIST_CG to R.string.artist_cg,
@@ -58,7 +63,7 @@ private val categoryTable = [
     EhUtils.COSPLAY to R.string.cosplay,
     EhUtils.ASIAN_PORN to R.string.asian_porn,
     EhUtils.MISC to R.string.misc,
-]
+)
 
 @Composable
 context(_: DialogState, _: CoroutineScope, _: Context)

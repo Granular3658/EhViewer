@@ -25,9 +25,17 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
+// Inlined: the two flags are compile-time constants, so their values are baked in and
+// nothing touches HardwareBuffer on a device without it. The frames that hold one are
+// only built under `isAtLeastQ` (see `allocFrame`).
+@Suppress("InlinedApi")
 private const val USAGE = HardwareBuffer.USAGE_CPU_WRITE_OFTEN or HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE
 
 private class Frame(val bitmap: Bitmap, val ahb: HardwareBuffer?, var timestamp: Int) : AutoCloseable {
+    // `ahb` is only ever non-null for a frame `allocFrame` built under `isAtLeastQ`, so
+    // this call cannot run on a device without HardwareBuffer -- which the version check
+    // that made it non-null is too far away for lint to follow.
+    @Suppress("NewApi")
     override fun close() {
         bitmap.recycle()
         ahb?.close()
