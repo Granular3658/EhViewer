@@ -18,6 +18,8 @@
 package com.hippo.ehviewer.image
 
 import android.graphics.Bitmap
+import android.graphics.drawable.AnimatedImageDrawable
+import android.graphics.drawable.Drawable
 import android.hardware.HardwareBuffer
 import androidx.compose.ui.unit.IntSize
 import arrow.core.Either
@@ -55,11 +57,16 @@ import com.hippo.ehviewer.jni.munmap
 import com.hippo.ehviewer.jni.rewriteGifSource
 import com.hippo.ehviewer.ktbuilder.execute
 import com.hippo.ehviewer.ktbuilder.imageRequest
+import java.lang.ref.PhantomReference
+import java.lang.ref.ReferenceQueue
 import java.nio.ByteBuffer
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.AtomicInt
 import kotlin.concurrent.atomics.decrementAndFetch
 import kotlin.concurrent.atomics.updateAndFetch
+import kotlin.concurrent.thread
 import okio.Path
 import splitties.init.appCtx
 
@@ -98,14 +105,41 @@ class Image private constructor(image: CoilImage, private val src: ImageSource) 
     private fun recycle() {
         when (val image = innerImage!!) {
             is DrawableImage -> {
-                (image.drawable as? AnimatedWebPDrawable)?.close()
-                src.close()
+                // The platform's animated drawable (Coil's AnimatedImageDecoder, which
+                // is what a GIF page becomes) decodes frames on a thread of its own and
+                // reads the source buffer as it goes. Nothing in the platform both
+                // stops it and waits for the frame in flight -- `stop()` only flips a
+                // flag -- so freeing the buffer here frees it under that read, and the
+                // read is a SIGSEGV on the animated image thread. That is what took the
+                // process down when a page was turned away from while still animating.
+                // So a source that drawable is reading is not freed here: the drawable
+                // keeps it, and it goes when the drawable is collected, which cannot
+                // happen while it is still able to decode.
+                if (!handOverToAnimatedDrawable(image.drawable)) {
+                    (image.drawable as? AnimatedWebPDrawable)?.close()
+                    src.close()
+                }
             }
             is BitmapImage -> {
                 image.bitmap.recycle()
             }
         }
         innerImage = null
+    }
+
+    /**
+     * Stops a platform animated drawable and gives it the source to release once it is
+     * collected, returning whether it took it.
+     *
+     * Only that drawable is treated this way. Ours is disposed synchronously -- it
+     * cancels and joins its decode before its decoder goes, which is the guarantee
+     * the platform does not offer -- and a static drawable never reads the source.
+     */
+    private fun handOverToAnimatedDrawable(drawable: Drawable?): Boolean {
+        if (!isAtLeastP || drawable !is AnimatedImageDrawable) return false
+        drawable.stop()
+        SourceRelease.track(drawable, src)
+        return true
     }
 
     companion object {
@@ -212,3 +246,39 @@ inline fun byteBufferSource(buffer: ByteBuffer, crossinline release: () -> Unit)
 external fun detectBorder(bitmap: Bitmap): IntArray
 external fun hasQrCode(bitmap: Bitmap): Boolean
 external fun copyBitmapToAHB(src: Bitmap, dst: HardwareBuffer, x: Int, y: Int)
+
+/**
+ * Releases an [ImageSource] once the drawable that reads it has been collected.
+ *
+ * A phantom reference rather than `java.lang.ref.Cleaner`: this app's `minSdk` is 26 and
+ * `Cleaner` arrived in API 33. The reference itself is held in [pending] because one that
+ * nothing reaches is collected before its referent is, and its action would never run.
+ */
+private object SourceRelease {
+    private val queue = ReferenceQueue<Drawable>()
+    private val pending = Collections.newSetFromMap(ConcurrentHashMap<DrawableSource, Boolean>())
+
+    init {
+        thread(isDaemon = true, name = "image-source-release") {
+            while (true) {
+                try {
+                    val released = queue.remove() as DrawableSource
+                    pending.remove(released)
+                    released.release()
+                } catch (_: InterruptedException) {
+                    // A daemon that holds nothing else; an interrupt leaves nothing to
+                    // unwind, so the next collection is waited for instead.
+                }
+            }
+        }
+    }
+
+    fun track(drawable: Drawable, source: ImageSource) {
+        pending.add(DrawableSource(drawable, source))
+    }
+
+    private class DrawableSource(drawable: Drawable, private val source: ImageSource) :
+        PhantomReference<Drawable>(drawable, queue) {
+        fun release() = source.close()
+    }
+}
