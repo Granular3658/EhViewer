@@ -47,8 +47,15 @@ import okio.Path
  * Also requires a 64-bit process: the reader is built on `xxhash-rust`'s xxh3,
  * which does not compile for 32-bit ARM at all, so on a 32-bit build the file
  * falls through to the archive reader rather than reaching a missing symbol.
+ *
+ * The name is read only up to a query or fragment, because this is also asked
+ * about the string form of a `content://` URI another app handed over, and a
+ * provider may append one (`.../1.dwarfs?size=...&time=...`). Without the trim
+ * such a file no longer looks like an image and the archive reader is given it
+ * instead, which then reports an archive with no content.
  */
-fun Path.isDwarfs() = name.endsWith(".dwarfs", ignoreCase = true) && Process.is64Bit()
+fun Path.isDwarfs() = name.substringBefore('?').substringBefore('#')
+    .endsWith(".dwarfs", ignoreCase = true) && Process.is64Bit()
 
 /**
  * Opens a DwarFS image as a gallery, the way an archive is opened.
