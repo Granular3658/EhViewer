@@ -153,6 +153,37 @@ corrosion_import_crate(
         FEATURES $<IF:$<VERSION_GREATER_EQUAL:${ANDROID_NATIVE_API_LEVEL},26>,android-26,android>
         FLAGS $<$<NOT:$<CONFIG:Debug>>:-Z build-std -Z build-std-features=>
 )
+# Corrosion hands cargo `CC_<rust target> = CMAKE_C_COMPILER` (Corrosion.cmake: "CC_${stripped_target_triple}
+# =${CMAKE_C_COMPILER}"), and for Android that is the NDK's bare `clang`: CMake carries the API level in a
+# separate `--target=<triple><level>` flag, not in the compiler path. The `cc` crate then compiles zstd-sys's
+# C with `--target=<rust target>` and no level, and NDK 30's cdefs.h refuses an unversioned triple
+# ("Unversioned target triples are not supported!") -- that guard wants __ANDROID_MIN_SDK_VERSION__, which
+# clang's driver only defines when the triple carries the level.
+#
+# Setting CC_<triple> here does not help: Corrosion appends its own assignment to the same key after ours in
+# the `cmake -E env` list, so the bare clang still wins. CFLAGS_<triple> is ours alone -- Corrosion sets no
+# CFLAGS -- and the crate appends it after its own --target, so the macro gets defined either way.
+get_filename_component(RUST_NDK_BIN ${CMAKE_C_COMPILER} DIRECTORY)
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+    set(RUST_TRIPLE aarch64-linux-android)
+    set(RUST_CC_WRAPPER aarch64-linux-android${ANDROID_NATIVE_API_LEVEL}-clang)
+elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
+    set(RUST_TRIPLE armv7-linux-androideabi)
+    set(RUST_CC_WRAPPER armv7a-linux-androideabi${ANDROID_NATIVE_API_LEVEL}-clang)
+elseif(ANDROID_ABI STREQUAL "x86_64")
+    set(RUST_TRIPLE x86_64-linux-android)
+    set(RUST_CC_WRAPPER x86_64-linux-android${ANDROID_NATIVE_API_LEVEL}-clang)
+endif()
+if(RUST_TRIPLE)
+    set(RUST_CC ${RUST_NDK_BIN}/${RUST_CC_WRAPPER})
+    string(REPLACE "-" "_" RUST_TRIPLE_U ${RUST_TRIPLE})
+    corrosion_set_env_vars(ehviewer_rust
+            CC_${RUST_TRIPLE}=${RUST_CC}
+            CC_${RUST_TRIPLE_U}=${RUST_CC}
+            CFLAGS_${RUST_TRIPLE}=-D__ANDROID_MIN_SDK_VERSION__=${ANDROID_NATIVE_API_LEVEL}
+            CFLAGS_${RUST_TRIPLE_U}=-D__ANDROID_MIN_SDK_VERSION__=${ANDROID_NATIVE_API_LEVEL}
+    )
+endif()
 corrosion_add_target_rustflags(ehviewer_rust $<$<NOT:$<CONFIG:Debug>>:-Z unstable-options -C panic=immediate-abort -Z location-detail=none -Z fmt-debug=none>)
 corrosion_link_libraries(ehviewer_rust android jnigraphics log webp webpdemux)
 
