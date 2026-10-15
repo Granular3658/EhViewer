@@ -71,6 +71,9 @@ import com.hippo.ehviewer.ui.settings.SmbLocationDialog
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import moe.tarsin.snackbar
 
@@ -288,29 +291,40 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
         // before the person looks up. Turning a failure into an empty list, as
         // this used to, reads as "this directory is empty", which is the one
         // thing a directory that could not be read is not.
+        // A cancellation is this effect being replaced, not the listing failing.
+        // The native call cannot be interrupted, so it still returns after the
+        // person has moved on -- and what it returns, a listing or the error it
+        // failed with, describes the host that was left rather than the one on
+        // screen now. A replaced effect therefore writes nothing: otherwise the
+        // last host's failure lands on this screen, over a list that did arrive,
+        // and reads as this host failing when it never did.
         if (s == null) {
-            names = runCatching { SmbRepository.shares(h, port) }
-                .onFailure { error ->
-                    if (error is SmbAuthRequired) {
-                        refused = SmbLocation(h, port, "", "")
-                    } else {
-                        Log.w("smb", "shares of $h:$port did not list", error)
-                        listingFailed = true
-                    }
+            val outcome = runCatching { SmbRepository.shares(h, port) }
+            if (!currentCoroutineContext().isActive) return@LaunchedEffect
+            outcome.onFailure { error ->
+                if (error is CancellationException) throw error
+                if (error is SmbAuthRequired) {
+                    refused = SmbLocation(h, port, "", "")
+                } else {
+                    Log.w("smb", "shares of $h:$port did not list", error)
+                    listingFailed = true
                 }
-                .getOrNull()
+            }
+            names = outcome.getOrNull()
         } else {
             val target = SmbLocation(h, port, s, subPath)
-            entries = runCatching { SmbRepository.list(target) }
-                .onFailure { error ->
-                    if (error is SmbAuthRequired) {
-                        refused = target
-                    } else {
-                        Log.w("smb", "listing $target did not list", error)
-                        listingFailed = true
-                    }
+            val outcome = runCatching { SmbRepository.list(target) }
+            if (!currentCoroutineContext().isActive) return@LaunchedEffect
+            outcome.onFailure { error ->
+                if (error is CancellationException) throw error
+                if (error is SmbAuthRequired) {
+                    refused = target
+                } else {
+                    Log.w("smb", "listing $target did not list", error)
+                    listingFailed = true
                 }
-                .getOrNull()
+            }
+            entries = outcome.getOrNull()
         }
     }
 
