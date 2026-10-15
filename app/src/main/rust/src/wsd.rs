@@ -86,20 +86,8 @@ pub(crate) fn pin_multicast_interface(socket: &UdpSocket, interface: Ipv4Addr) -
     let address = u32::from(interface).to_be();
     // SAFETY: `raw` is a live socket owned by the caller, and `address` is the
     // network-byte-order form of the interface address.
-    let result = unsafe {
-        libc::setsockopt(
-            raw,
-            libc::IPPROTO_IP,
-            libc::IP_MULTICAST_IF,
-            &address as *const u32 as *const libc::c_void,
-            std::mem::size_of::<u32>() as libc::socklen_t,
-        )
-    };
-    ensure!(
-        result == 0,
-        "pinning the probe to {interface}: {}",
-        std::io::Error::last_os_error()
-    );
+    let result = unsafe { libc::setsockopt(raw, libc::IPPROTO_IP, libc::IP_MULTICAST_IF, &address as *const u32 as *const libc::c_void, std::mem::size_of::<u32>() as libc::socklen_t) };
+    ensure!(result == 0, "pinning the probe to {interface}: {}", std::io::Error::last_os_error());
     Ok(())
 }
 
@@ -129,11 +117,7 @@ fn scan() -> &'static std::sync::Mutex<Scan> {
 /// because the sources do not have it at the same moment.
 fn remember(host: Host) {
     let mut scan = scan().lock().expect("the scan");
-    match scan
-        .hosts
-        .iter_mut()
-        .find(|seen| seen.address == host.address)
-    {
+    match scan.hosts.iter_mut().find(|seen| seen.address == host.address) {
         Some(existing) => {
             if existing.name.is_none() {
                 existing.name = host.name;
@@ -186,14 +170,7 @@ fn run(interface: Option<Ipv4Addr>) {
         scope.spawn(|| match crate::mdns::discover(interface) {
             Ok(found) => {
                 for host in found {
-                    remember(Host {
-                        endpoint: String::new(),
-                        address: host.address.to_string(),
-                        xaddrs: String::new(),
-                        types: String::new(),
-                        name: Some(host.name),
-                        port: Some(host.port),
-                    });
+                    remember(Host { endpoint: String::new(), address: host.address.to_string(), xaddrs: String::new(), types: String::new(), name: Some(host.name), port: Some(host.port) });
                 }
             }
             Err(error) => log::warn!(target: "wsd", "the mdns query failed: {error:#}"),
@@ -212,12 +189,9 @@ fn run(interface: Option<Ipv4Addr>) {
 /// answers come back on, the probe goes out and the replies never arrive --
 /// which is indistinguishable from a silent network.
 fn probe_and_listen(interface: Option<Ipv4Addr>) -> Result<()> {
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, PORT))
-        .with_context(|| format!("binding UDP {PORT}"))?;
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, PORT)).with_context(|| format!("binding UDP {PORT}"))?;
     let interface = interface.unwrap_or(Ipv4Addr::UNSPECIFIED);
-    socket
-        .join_multicast_v4(&GROUP, &interface)
-        .with_context(|| format!("joining the discovery group on {interface}"))?;
+    socket.join_multicast_v4(&GROUP, &interface).with_context(|| format!("joining the discovery group on {interface}"))?;
     if !interface.is_unspecified() {
         pin_multicast_interface(&socket, interface)?;
     }
@@ -239,17 +213,12 @@ fn probe_and_listen(interface: Option<Ipv4Addr>) -> Result<()> {
         let now = Instant::now();
         if now >= send_at {
             log::debug!(target: "wsd", "probing {GROUP}:{PORT} as {message_id}");
-            socket
-                .send_to(probe.as_bytes(), (GROUP, PORT))
-                .context("sending the probe")?;
+            socket.send_to(probe.as_bytes(), (GROUP, PORT)).context("sending the probe")?;
             send_at = now + resend_every;
         }
         // Wake for the next probe or for the end of the window, whichever comes
         // first, so the sends happen while the answers are being listened for.
-        let wait = send_at
-            .min(deadline)
-            .saturating_duration_since(Instant::now())
-            .max(Duration::from_millis(1));
+        let wait = send_at.min(deadline).saturating_duration_since(Instant::now()).max(Duration::from_millis(1));
         socket.set_read_timeout(Some(wait))?;
         let (len, from) = match socket.recv_from(&mut buffer) {
             Ok(received) => received,
@@ -286,27 +255,13 @@ fn probe_and_listen(interface: Option<Ipv4Addr>) -> Result<()> {
 /// timeout, and in a row that is the difference between a list that appears and
 /// one that does not. They are independent of each other, so they run together.
 fn name_everyone() {
-    let addresses: Vec<Ipv4Addr> = scan()
-        .lock()
-        .expect("the scan")
-        .hosts
-        .iter()
-        .filter(|host| host.name.is_none())
-        .filter_map(|host| host.address.parse().ok())
-        .collect();
+    let addresses: Vec<Ipv4Addr> = scan().lock().expect("the scan").hosts.iter().filter(|host| host.name.is_none()).filter_map(|host| host.address.parse().ok()).collect();
     if addresses.is_empty() {
         return;
     }
     let found: Vec<(Ipv4Addr, String)> = std::thread::scope(|scope| {
-        let running: Vec<_> = addresses
-            .into_iter()
-            .map(|address| scope.spawn(move || (address, nbns_name(address))))
-            .collect();
-        running
-            .into_iter()
-            .filter_map(|handle| handle.join().ok())
-            .filter_map(|(address, name)| name.map(|name| (address, name)))
-            .collect()
+        let running: Vec<_> = addresses.into_iter().map(|address| scope.spawn(move || (address, nbns_name(address)))).collect();
+        running.into_iter().filter_map(|handle| handle.join().ok()).filter_map(|(address, name)| name.map(|name| (address, name))).collect()
     });
     for (address, name) in found {
         keep_name(&address.to_string(), name);
@@ -318,14 +273,8 @@ fn name_everyone() {
 /// One HTTP request each, which is the part that costs more the more hosts there
 /// are. They are independent of each other, so they run together.
 fn name_the_rest() {
-    let targets: Vec<(String, String)> = scan()
-        .lock()
-        .expect("the scan")
-        .hosts
-        .iter()
-        .filter(|host| host.name.is_none() && !host.xaddrs.is_empty())
-        .map(|host| (host.address.clone(), host.xaddrs.clone()))
-        .collect();
+    let targets: Vec<(String, String)> =
+        scan().lock().expect("the scan").hosts.iter().filter(|host| host.name.is_none() && !host.xaddrs.is_empty()).map(|host| (host.address.clone(), host.xaddrs.clone())).collect();
     if targets.is_empty() {
         return;
     }
@@ -349,11 +298,7 @@ fn name_the_rest() {
                 })
             })
             .collect();
-        running
-            .into_iter()
-            .filter_map(|handle| handle.join().ok())
-            .filter_map(|(address, name)| name.map(|name| (address, name)))
-            .collect()
+        running.into_iter().filter_map(|handle| handle.join().ok()).filter_map(|(address, name)| name.map(|name| (address, name))).collect()
     });
     for (address, name) in found {
         keep_name(&address, name);
@@ -399,21 +344,11 @@ fn probe(message_id: &str) -> String {
 /// produces nineteen digits in the last group, which is not a UUID, and that
 /// is what cost a Windows host its reply.
 fn message_id() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
     // Mixing the pid in keeps probes from one run apart as well, and rotating
     // it keeps the low bits from being where the clock's own low bits are.
     let mixed = nanos ^ (std::process::id() as u128).rotate_left(32);
-    format!(
-        "urn:uuid:{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-        (mixed >> 96) & 0xffff_ffff,
-        (mixed >> 80) & 0xffff,
-        (mixed >> 64) & 0xffff,
-        (mixed >> 48) & 0xffff,
-        mixed & 0xfff_ffff_ffff
-    )
+    format!("urn:uuid:{:08x}-{:04x}-{:04x}-{:04x}-{:012x}", (mixed >> 96) & 0xffff_ffff, (mixed >> 80) & 0xffff, (mixed >> 64) & 0xffff, (mixed >> 48) & 0xffff, mixed & 0xfff_ffff_ffff)
 }
 
 /// Read one reply. Returns `None` for anything that is not a `ProbeMatches`
@@ -434,7 +369,7 @@ fn parse_match(text: &str, fallback: String) -> Option<Host> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(element)) => {
-                let name = String::from_utf8_lossy(element.name().as_ref()).to_string();
+                let name = element.name().as_ref().to_string();
                 if name.ends_with("Action") {
                     text_of = Some("action");
                 } else if name.ends_with("Address") {
@@ -447,9 +382,9 @@ fn parse_match(text: &str, fallback: String) -> Option<Host> {
             }
             Ok(Event::Text(value)) => {
                 field.clear();
-                if let Ok(decoded) = value.decode() {
-                    field.push_str(decoded.as_ref());
-                }
+                // quick-xml 0.42 hands text over as a string already: the bytes were
+                // decoded by the reader, so there is nothing left to `decode()`.
+                field.push_str(value.xml10_content().as_ref());
                 match text_of {
                     Some("action") => is_match = field.contains(MATCHES_ACTION),
                     Some("endpoint") if endpoint.is_none() => endpoint = Some(field.clone()),
@@ -517,11 +452,7 @@ fn nbns_name(address: Ipv4Addr) -> Option<String> {
 /// suffix is a service it offers, and the workgroup carries the group bit.
 /// Falling back to any unique name keeps a host with an unusual table usable.
 fn machine_name(names: &[NbnsName]) -> Option<String> {
-    names
-        .iter()
-        .find(|name| name.suffix == NBNS_WORKSTATION && !name.group)
-        .or_else(|| names.iter().find(|name| !name.group))
-        .map(|name| name.name.clone())
+    names.iter().find(|name| name.suffix == NBNS_WORKSTATION && !name.group).or_else(|| names.iter().find(|name| !name.group)).map(|name| name.name.clone())
 }
 
 /// Step over a length-prefixed name, returning the offset just past it.
@@ -582,9 +513,7 @@ fn parse_name_table(table: &[u8]) -> Vec<NbnsName> {
             let Some(entry) = table.get(start..start + stride) else {
                 break;
             };
-            let name = String::from_utf8_lossy(&entry[..15])
-                .trim_end_matches([' ', '\0'])
-                .to_owned();
+            let name = String::from_utf8_lossy(&entry[..15]).trim_end_matches([' ', '\0']).to_owned();
             if name.is_empty() {
                 continue;
             }
@@ -593,16 +522,8 @@ fn parse_name_table(table: &[u8]) -> Vec<NbnsName> {
             }
             // Sixteen-byte entries keep the group bit in the suffix byte;
             // eighteen-byte ones in the low byte of the two-byte flags.
-            let (suffix, group) = if stride == 18 {
-                (entry[15], entry[17] & 0x80 != 0)
-            } else {
-                (entry[15] & 0x7f, entry[15] & 0x80 != 0)
-            };
-            names.push(NbnsName {
-                name,
-                suffix,
-                group,
-            });
+            let (suffix, group) = if stride == 18 { (entry[15], entry[17] & 0x80 != 0) } else { (entry[15] & 0x7f, entry[15] & 0x80 != 0) };
+            names.push(NbnsName { name, suffix, group });
         }
         if readable > best_readable {
             best_readable = readable;
@@ -617,8 +538,7 @@ fn parse_name_table(table: &[u8]) -> Vec<NbnsName> {
 /// outright -- with the action appended it answers 400 -- so the plain form
 /// has to be tried first and the conforming one second.
 const CONTENT_TYPE: &str = "application/soap+xml";
-const CONTENT_TYPE_WITH_ACTION: &str =
-    "application/soap+xml; action=\"http://schemas.xmlsoap.org/ws/2004/09/transfer/Get\"";
+const CONTENT_TYPE_WITH_ACTION: &str = "application/soap+xml; action=\"http://schemas.xmlsoap.org/ws/2004/09/transfer/Get\"";
 
 /// Ask a host for its WS-Device Profile metadata and take the advertised
 /// computer name as a display label. The address stays the connection target.
@@ -670,13 +590,7 @@ fn ask(host: &str, port: u16, path: &str, url: &str) -> Option<String> {
 }
 
 /// One metadata request, to one address, with one content type.
-fn request_name(
-    host: &str,
-    port: u16,
-    path: &str,
-    url: &str,
-    content_type: &str,
-) -> Option<String> {
+fn request_name(host: &str, port: u16, path: &str, url: &str, content_type: &str) -> Option<String> {
     // Every remaining exit has to say why it left: a name that is missing
     // because a connection was refused, because the address did not resolve,
     // and because the answer was not what was expected are three different
@@ -702,10 +616,7 @@ fn request_name(
             return None;
         }
     };
-    for (what, result) in [
-        ("read", stream.set_read_timeout(Some(GET_TIMEOUT))),
-        ("write", stream.set_write_timeout(Some(GET_TIMEOUT))),
-    ] {
+    for (what, result) in [("read", stream.set_read_timeout(Some(GET_TIMEOUT))), ("write", stream.set_write_timeout(Some(GET_TIMEOUT)))] {
         if let Err(err) = result {
             log::debug!(target: "wsd", "metadata: {what} timeout failed: {err}");
             return None;
@@ -719,14 +630,8 @@ fn request_name(
 <soap:Header><wsa:To>{url}</wsa:To><wsa:Action>http://schemas.xmlsoap.org/ws/2004/09/transfer/Get</wsa:Action><wsa:MessageID>{message_id}</wsa:MessageID></soap:Header>
 <soap:Body><wst:Get/></soap:Body></soap:Envelope>"#
     );
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    stream
-        .write_all(request.as_bytes())
-        .map_err(|err| log::debug!(target: "wsd", "metadata: write failed: {err}"))
-        .ok()?;
+    let request = format!("POST {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+    stream.write_all(request.as_bytes()).map_err(|err| log::debug!(target: "wsd", "metadata: write failed: {err}")).ok()?;
 
     // wsdd2 and conforming responders close the connection after their reply.
     // Cap it so a broken endpoint cannot turn discovery into an unbounded read.
@@ -753,11 +658,7 @@ fn request_name(
             return None;
         }
     };
-    let status = match headers
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-    {
+    let status = match headers.lines().next().and_then(|line| line.split_whitespace().nth(1)) {
         Some(status) => status.to_owned(),
         None => {
             log::debug!(
@@ -816,7 +717,7 @@ fn parse_metadata_name(xml: &str) -> Option<String> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(element)) => {
-                let tag = String::from_utf8_lossy(element.name().as_ref()).to_string();
+                let tag = element.name().as_ref().to_string();
                 field = if tag.ends_with("Computer") {
                     Some("computer")
                 } else if tag.ends_with("FriendlyName") {
@@ -826,16 +727,14 @@ fn parse_metadata_name(xml: &str) -> Option<String> {
                 };
             }
             Ok(Event::Text(value)) => {
+                let content = value.xml10_content();
                 if let Some(which) = field
-                    && let Ok(decoded) = value.decode()
-                    && let Ok(text) = quick_xml::escape::unescape(&decoded)
+                    && let Ok(text) = quick_xml::escape::unescape(&content)
                 {
                     let value = text.trim();
                     if !value.is_empty() {
                         match which {
-                            "computer" if computer.is_none() => {
-                                computer = Some(value.split('/').next().unwrap_or(value).to_owned())
-                            }
+                            "computer" if computer.is_none() => computer = Some(value.split('/').next().unwrap_or(value).to_owned()),
                             "friendly" if friendly.is_none() => friendly = Some(value.to_owned()),
                             _ => {}
                         }
@@ -856,10 +755,7 @@ fn host_of(xaddrs: &str) -> Option<String> {
     let first = xaddrs.split_whitespace().next()?;
     let after_scheme = first.split("://").nth(1)?;
     let authority = after_scheme.split('/').next()?;
-    let host = authority
-        .rsplit_once(':')
-        .map(|(h, _)| h)
-        .unwrap_or(authority);
+    let host = authority.rsplit_once(':').map(|(h, _)| h).unwrap_or(authority);
     (!host.is_empty()).then(|| host.to_string())
 }
 
@@ -903,31 +799,19 @@ mod tests {
     #[test]
     fn reads_a_windows_10_match() {
         let host = parse_match(WINDOWS, "10.0.0.9".to_owned()).expect("a match");
-        assert_eq!(
-            host.endpoint,
-            "urn:uuid:6b0383b4-9e60-4c45-88cf-4c0e9e3920f5"
-        );
+        assert_eq!(host.endpoint, "urn:uuid:6b0383b4-9e60-4c45-88cf-4c0e9e3920f5");
         // The SMB address is the host, whatever port the metadata lives on.
         assert_eq!(host.address, "192.168.1.132");
-        assert_eq!(
-            host.xaddrs,
-            "http://192.168.1.132:5357/6b0383b4-9e60-4c45-88cf-4c0e9e3920f5/"
-        );
+        assert_eq!(host.xaddrs, "http://192.168.1.132:5357/6b0383b4-9e60-4c45-88cf-4c0e9e3920f5/");
         assert!(host.types.contains(COMPUTER_TYPE), "got {:?}", host.types);
     }
 
     #[test]
     fn reads_the_address_from_a_real_match() {
         let host = parse_match(MATCH, "10.0.0.9".to_owned()).expect("a match");
-        assert_eq!(
-            host.endpoint,
-            "urn:uuid:194f1cb3-ebc6-4351-b046-610419940dfa"
-        );
+        assert_eq!(host.endpoint, "urn:uuid:194f1cb3-ebc6-4351-b046-610419940dfa");
         assert_eq!(host.address, "172.32.3.100");
-        assert_eq!(
-            host.xaddrs,
-            "http://172.32.3.100:3702/194f1cb3-ebc6-4351-b046-610419940dfa"
-        );
+        assert_eq!(host.xaddrs, "http://172.32.3.100:3702/194f1cb3-ebc6-4351-b046-610419940dfa");
         assert_eq!(host.name, None);
     }
 
@@ -937,11 +821,7 @@ mod tests {
     #[test]
     fn the_xaddrs_of_the_wsdd2_reply_is_kept() {
         let host = parse_match(MATCH, "10.0.0.9".to_owned()).expect("a match");
-        assert!(
-            !host.xaddrs.is_empty(),
-            "xaddrs is empty while the address is {}",
-            host.address
-        );
+        assert!(!host.xaddrs.is_empty(), "xaddrs is empty while the address is {}", host.address);
         assert!(host.xaddrs.starts_with("http://"), "{:?}", host.xaddrs);
     }
 
@@ -977,51 +857,23 @@ mod tests {
 
     #[test]
     fn parses_http_metadata_endpoint() {
-        assert_eq!(
-            endpoint_parts("http://192.0.2.1:3702/uuid"),
-            Some(("192.0.2.1".to_owned(), 3702, "/uuid".to_owned()))
-        );
-        assert_eq!(
-            endpoint_parts("http://[fe80::1]:3702/uuid"),
-            Some(("fe80::1".to_owned(), 3702, "/uuid".to_owned()))
-        );
+        assert_eq!(endpoint_parts("http://192.0.2.1:3702/uuid"), Some(("192.0.2.1".to_owned(), 3702, "/uuid".to_owned())));
+        assert_eq!(endpoint_parts("http://[fe80::1]:3702/uuid"), Some(("fe80::1".to_owned(), 3702, "/uuid".to_owned())));
     }
 
     #[test]
     fn parses_the_xaddr_a_wsdd2_actually_advertises() {
-        let parts =
-            endpoint_parts("http://192.168.1.240:3702/7e24ab30-200e-4fca-a527-e10fd7ea4d55");
-        assert_eq!(
-            parts,
-            Some((
-                "192.168.1.240".to_owned(),
-                3702,
-                "/7e24ab30-200e-4fca-a527-e10fd7ea4d55".to_owned()
-            ))
-        );
-        let parts =
-            endpoint_parts("http://192.168.1.132:5357/6b0383b4-9e60-4c45-88cf-4c0e9e3920f5/");
-        assert_eq!(
-            parts,
-            Some((
-                "192.168.1.132".to_owned(),
-                5357,
-                "/6b0383b4-9e60-4c45-88cf-4c0e9e3920f5/".to_owned()
-            ))
-        );
+        let parts = endpoint_parts("http://192.168.1.240:3702/7e24ab30-200e-4fca-a527-e10fd7ea4d55");
+        assert_eq!(parts, Some(("192.168.1.240".to_owned(), 3702, "/7e24ab30-200e-4fca-a527-e10fd7ea4d55".to_owned())));
+        let parts = endpoint_parts("http://192.168.1.132:5357/6b0383b4-9e60-4c45-88cf-4c0e9e3920f5/");
+        assert_eq!(parts, Some(("192.168.1.132".to_owned(), 5357, "/6b0383b4-9e60-4c45-88cf-4c0e9e3920f5/".to_owned())));
     }
 
     #[test]
     fn takes_the_host_out_of_a_url() {
-        assert_eq!(
-            host_of("http://172.32.3.100:3702/x").as_deref(),
-            Some("172.32.3.100")
-        );
+        assert_eq!(host_of("http://172.32.3.100:3702/x").as_deref(), Some("172.32.3.100"));
         assert_eq!(host_of("http://nas.local/x").as_deref(), Some("nas.local"));
-        assert_eq!(
-            host_of("http://[fe80::1]:3702/x").as_deref(),
-            Some("[fe80::1]")
-        );
+        assert_eq!(host_of("http://[fe80::1]:3702/x").as_deref(), Some("[fe80::1]"));
         assert_eq!(host_of(""), None);
     }
 
@@ -1053,15 +905,9 @@ mod tests {
             assert!(request.contains("Host: 127.0.0.1:"), "{request}");
             // A charset parameter on the content type is answered with 400 by
             // at least one real responder, so it has to stay bare.
-            assert!(
-                request.contains("Content-Type: application/soap+xml\r\n"),
-                "{request}"
-            );
+            assert!(request.contains("Content-Type: application/soap+xml\r\n"), "{request}");
             assert!(request.contains("<wst:Get/>"), "{request}");
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/soap+xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
+            let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/soap+xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
             stream.write_all(response.as_bytes()).expect("write");
         });
 
@@ -1092,24 +938,11 @@ mod tests {
                 let len = stream.read(&mut seen).expect("read the request");
                 let request = std::str::from_utf8(&seen[..len]).expect("text");
                 if attempt == 0 {
-                    assert!(
-                        request.contains("Content-Type: application/soap+xml\r\n"),
-                        "{request}"
-                    );
-                    stream
-                        .write_all(
-                            b"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n",
-                        )
-                        .expect("write");
+                    assert!(request.contains("Content-Type: application/soap+xml\r\n"), "{request}");
+                    stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n").expect("write");
                 } else {
-                    assert!(
-                        request.contains("Content-Type: application/soap+xml; action=\"http://schemas.xmlsoap.org/ws/2004/09/transfer/Get\"\r\n"),
-                        "{request}"
-                    );
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
-                    );
+                    assert!(request.contains("Content-Type: application/soap+xml; action=\"http://schemas.xmlsoap.org/ws/2004/09/transfer/Get\"\r\n"), "{request}");
+                    let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
                     stream.write_all(response.as_bytes()).expect("write");
                 }
             }
@@ -1134,9 +967,7 @@ mod tests {
             let (mut stream, _) = listener.accept().expect("accept");
             let mut buffer = [0u8; 4096];
             let len = stream.read(&mut buffer).expect("read");
-            seen.lock()
-                .expect("lock")
-                .push(String::from_utf8_lossy(&buffer[..len]).to_string());
+            seen.lock().expect("lock").push(String::from_utf8_lossy(&buffer[..len]).to_string());
         });
 
         // The advertised host is unreachable, so the only way this can succeed
@@ -1145,11 +976,7 @@ mod tests {
         assert_eq!(name, None, "nothing was served, so there is no name");
         let requests = asked.lock().expect("lock");
         assert_eq!(requests.len(), 1, "the fallback request never arrived");
-        assert!(
-            requests[0].starts_with("POST /uuid HTTP/1.1\r\n"),
-            "{}",
-            requests[0]
-        );
+        assert!(requests[0].starts_with("POST /uuid HTTP/1.1\r\n"), "{}", requests[0]);
     }
 
     /// The name table a Samba host really sent, stride and all.

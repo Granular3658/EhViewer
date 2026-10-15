@@ -183,7 +183,7 @@ fun AnimatedVisibilityScope.AdvancedScreen(navigator: DestinationsNavigator) = S
                 step = 15,
                 title = stringResource(id = R.string.settings_advanced_smb_cache_size),
                 summary = stringResource(id = R.string.settings_advanced_smb_cache_size_summary),
-                state = Settings.smbCacheSize.asMutableState(),
+                pref = Settings.smbCacheSize,
             )
             SwitchPreference(
                 title = stringResource(id = R.string.settings_advanced_smb_cache_clear_on_exit),
@@ -198,7 +198,7 @@ fun AnimatedVisibilityScope.AdvancedScreen(navigator: DestinationsNavigator) = S
                 step = 6,
                 title = stringResource(id = R.string.settings_advanced_dwarfs_cache_size),
                 summary = stringResource(id = R.string.settings_advanced_dwarfs_cache_size_summary),
-                state = Settings.dwarfsCacheSize.asMutableState(),
+                pref = Settings.dwarfsCacheSize,
             )
             var currentLanguage by remember { mutableStateOf(getAppLanguage()) }
             val languages = remember { getLanguages() }
