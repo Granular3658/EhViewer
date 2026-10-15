@@ -39,7 +39,8 @@ tokio = { version = "1", features = ["macros"] }
 # The DwarFS reader is built on xxhash-rust's xxh3, which does not compile for
 # 32-bit ARM: it names `core::arch::aarch64` unconditionally, and every version
 # of it fails the same way. Keeping it to 64-bit targets leaves the armeabi-v7a
-# build alone, and `ffi/dwarfs_stub.rs` keeps the symbols present there.
+# build alone -- the `ffi::dwarfs` module is behind the same cfg, and the Kotlin
+# side checks the pointer width before choosing this loader.
 [target.'cfg(target_pointer_width = "64")'.dependencies]
 dwarfs = { version = "0.2", default-features = false, features = ["zstd"] }
 positioned-io = "0.3"
