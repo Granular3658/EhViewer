@@ -43,13 +43,30 @@ abstract class PageLoader(val scope: CoroutineScope, val info: GalleryInfo?, sta
     private val mutex = NamedMutex<Int>()
     private val semaphore = Semaphore(4)
 
+    private val cacheMaxSize = if (isAtLeastO) {
+        (OSUtils.totalMemory / 8).toInt().coerceIn(MIN_CACHE_SIZE, MAX_CACHE_SIZE)
+    } else {
+        (OSUtils.appMaxMemory / 3 * 2).toInt()
+    }
+
     private val cache = SieveCache<Int, Image>(
-        maxSize = if (isAtLeastO) {
-            (OSUtils.totalMemory / 8).toInt().coerceIn(MIN_CACHE_SIZE, MAX_CACHE_SIZE)
-        } else {
-            (OSUtils.appMaxMemory / 3 * 2).toInt()
+        maxSize = cacheMaxSize,
+        // A size larger than `maxSize` is the one thing this cache cannot take.
+        // `SieveCache.put` trims before it links the entry it has just added, so an
+        // entry bigger than the whole budget leaves `trimToSize` with a size to
+        // bring down and an empty node list to bring it down from -- and its
+        // `findEvictionCandidate` then reads that list through its "no node"
+        // sentinel, `nodes[0x7fffffff]`, which throws
+        // ArrayIndexOutOfBoundsException (index 2147483647) and takes the page
+        // with it. A page can be that big: the budget is a fraction of device
+        // memory, and a long strip decodes to more than it. The sum is taken in
+        // Long and capped at the budget, so the page is reported as one budget's
+        // worth: it is kept (it is the page on screen) and the cache goes on
+        // evicting around it.
+        sizeOf = { _, v ->
+            val size = v.allocationSize + v.sourceBufferSize
+            size.coerceIn(1L, cacheMaxSize.toLong()).toInt()
         },
-        sizeOf = { _, v -> (v.allocationSize + v.sourceBufferSize).toInt() },
         onEntryRemoved = { k, o, n, _ -> if (o.unpin()) n ?: notifyPageWait(k) },
     )
 
