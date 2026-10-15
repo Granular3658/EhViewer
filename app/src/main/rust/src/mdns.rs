@@ -55,37 +55,16 @@ fn shared_socket() -> Result<UdpSocket> {
     // and each call passes a live one with the options it expects.
     unsafe {
         let raw = libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0);
-        ensure!(
-            raw >= 0,
-            "opening a udp socket: {}",
-            std::io::Error::last_os_error()
-        );
+        ensure!(raw >= 0, "opening a udp socket: {}", std::io::Error::last_os_error());
         let on: libc::c_int = 1;
-        let result = libc::setsockopt(
-            raw,
-            libc::SOL_SOCKET,
-            libc::SO_REUSEADDR,
-            &on as *const libc::c_int as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        );
+        let result = libc::setsockopt(raw, libc::SOL_SOCKET, libc::SO_REUSEADDR, &on as *const libc::c_int as *const libc::c_void, std::mem::size_of::<libc::c_int>() as libc::socklen_t);
         if result != 0 {
             let error = std::io::Error::last_os_error();
             libc::close(raw);
             return Err(error).context("asking to share the mdns port");
         }
-        let address = libc::sockaddr_in {
-            sin_family: libc::AF_INET as libc::sa_family_t,
-            sin_port: PORT.to_be(),
-            sin_addr: libc::in_addr {
-                s_addr: libc::INADDR_ANY,
-            },
-            sin_zero: [0; 8],
-        };
-        let result = libc::bind(
-            raw,
-            &address as *const libc::sockaddr_in as *const libc::sockaddr,
-            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
-        );
+        let address = libc::sockaddr_in { sin_family: libc::AF_INET as libc::sa_family_t, sin_port: PORT.to_be(), sin_addr: libc::in_addr { s_addr: libc::INADDR_ANY }, sin_zero: [0; 8] };
+        let result = libc::bind(raw, &address as *const libc::sockaddr_in as *const libc::sockaddr, std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t);
         if result != 0 {
             let error = std::io::Error::last_os_error();
             libc::close(raw);
@@ -106,9 +85,7 @@ fn shared_socket() -> Result<UdpSocket> {
 pub fn discover(interface: Option<Ipv4Addr>) -> Result<Vec<MdnsHost>> {
     let socket = shared_socket()?;
     let interface = interface.unwrap_or(Ipv4Addr::UNSPECIFIED);
-    socket
-        .join_multicast_v4(&GROUP, &interface)
-        .with_context(|| format!("joining the mdns group on {interface}"))?;
+    socket.join_multicast_v4(&GROUP, &interface).with_context(|| format!("joining the mdns group on {interface}"))?;
     if !interface.is_unspecified() {
         crate::wsd::pin_multicast_interface(&socket, interface)?;
     }
@@ -116,9 +93,7 @@ pub fn discover(interface: Option<Ipv4Addr>) -> Result<Vec<MdnsHost>> {
 
     let query = query();
     log::debug!(target: "mdns", "asking for {SERVICE} on {GROUP}:{PORT}");
-    socket
-        .send_to(&query, (GROUP, PORT))
-        .context("sending the mdns query")?;
+    socket.send_to(&query, (GROUP, PORT)).context("sending the mdns query")?;
 
     let deadline = Instant::now() + WINDOW;
     let mut buffer = vec![0u8; 9000];
@@ -244,12 +219,7 @@ fn records(data: &[u8]) -> Option<Vec<Record>> {
         let length = u16::from_be_bytes([*data.get(next + 8)?, *data.get(next + 9)?]) as usize;
         let rdata = next + 10;
         data.get(rdata..rdata + length)?;
-        out.push(Record {
-            name,
-            rtype,
-            rdata,
-            length,
-        });
+        out.push(Record { name, rtype, rdata, length });
         offset = rdata + length;
     }
     Some(out)
@@ -322,22 +292,11 @@ fn parse(data: &[u8]) -> Vec<MdnsHost> {
             // label, which is the fallback that keeps it findable.
             let address = addresses.get(target).or_else(|| {
                 let label = lower.split('.').next()?;
-                addresses
-                    .iter()
-                    .find(|(name, _)| name.split('.').next() == Some(label))
-                    .map(|(_, address)| address)
+                addresses.iter().find(|(name, _)| name.split('.').next() == Some(label)).map(|(_, address)| address)
             })?;
             // The instance label is the name to show, as the responder wrote it.
-            let name = instance
-                .split('.')
-                .next()
-                .unwrap_or(instance.as_str())
-                .to_owned();
-            Some(MdnsHost {
-                name,
-                address: *address,
-                port: *port,
-            })
+            let name = instance.split('.').next().unwrap_or(instance.as_str()).to_owned();
+            Some(MdnsHost { name, address: *address, port: *port })
         })
         .collect()
 }
@@ -347,9 +306,7 @@ mod tests {
     use super::*;
 
     fn hex(text: &str) -> Vec<u8> {
-        text.split_whitespace()
-            .map(|byte| u8::from_str_radix(byte, 16).expect("hex byte"))
-            .collect()
+        text.split_whitespace().map(|byte| u8::from_str_radix(byte, 16).expect("hex byte")).collect()
     }
 
     /// A response avahi actually sent for `_smb._tcp.local`: one instance, its

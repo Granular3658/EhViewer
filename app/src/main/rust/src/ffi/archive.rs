@@ -27,12 +27,7 @@ use log::error;
 ///
 /// `buf` must be valid for writes of `len` bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn smb_archive_read(
-    handle: u64,
-    offset: u64,
-    buf: *mut u8,
-    len: usize,
-) -> isize {
+pub unsafe extern "C" fn smb_archive_read(handle: u64, offset: u64, buf: *mut u8, len: usize) -> isize {
     if buf.is_null() {
         return -1;
     }

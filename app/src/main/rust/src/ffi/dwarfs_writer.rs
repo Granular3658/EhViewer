@@ -105,17 +105,7 @@ pub fn dwarfsWriterOpen(mut env: JNIEnv, _: JClass, fd: jint) -> jlong {
         let writer = section::Writer::new(FdWriter { fd })?;
         let chunker = CdcChunker::new(BasicChunker::new(writer, builder.block_size(), compress));
         let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
-        writers()
-            .lock()
-            .map_err(|_| anyhow!("the writer table is poisoned"))?
-            .insert(
-                handle,
-                Writer {
-                    builder,
-                    chunker: Some(chunker),
-                    compress,
-                },
-            );
+        writers().lock().map_err(|_| anyhow!("the writer table is poisoned"))?.insert(handle, Writer { builder, chunker: Some(chunker), compress });
         Ok(handle as jlong)
     })
 }
@@ -123,24 +113,13 @@ pub fn dwarfsWriterOpen(mut env: JNIEnv, _: JClass, fd: jint) -> jlong {
 /// Appends one chunk of entries. Returns how many were written, or -1 when no
 /// writer is open.
 #[jni_fn("com.hippo.ehviewer.jni.DwarfsKt")]
-pub fn dwarfsWriterAppend(
-    mut env: JNIEnv,
-    _: JClass,
-    handle: jlong,
-    fd_batch: JIntArray,
-    names: JObjectArray,
-    size: jint,
-) -> jint {
+pub fn dwarfsWriterAppend(mut env: JNIEnv, _: JClass, handle: jlong, fd_batch: JIntArray, names: JObjectArray, size: jint) -> jint {
     jni_throwing(&mut env, |env| {
         if size <= 0 {
             return Ok(0 as jint);
         }
-        let mut table = writers()
-            .lock()
-            .map_err(|_| anyhow!("the writer table is poisoned"))?;
-        let writer = table
-            .get_mut(&(handle as u64))
-            .ok_or_else(|| anyhow!("no DwarFS writer for handle {handle}"))?;
+        let mut table = writers().lock().map_err(|_| anyhow!("the writer table is poisoned"))?;
+        let writer = table.get_mut(&(handle as u64)).ok_or_else(|| anyhow!("no DwarFS writer for handle {handle}"))?;
 
         let mut fds = vec![0i32; size as usize];
         env.get_int_array_region(&fd_batch, 0, &mut fds)?;
@@ -150,15 +129,10 @@ pub fn dwarfsWriterAppend(
             let name = env.get_object_array_element(&names, i as i32)?;
             let name: String = env.get_string(&JString::from(name))?.into();
             let meta = InodeMetadata::new(0o644);
-            let chunker = writer
-                .chunker
-                .as_mut()
-                .ok_or_else(|| anyhow!("the writer is already closed"))?;
+            let chunker = writer.chunker.as_mut().ok_or_else(|| anyhow!("the writer is already closed"))?;
             let mut reader = FdReader { fd: *fd as RawFd };
             let chunks = chunker.put_reader(&mut reader)?;
-            writer
-                .builder
-                .put_file(writer.builder.root(), &name, &meta, chunks)?;
+            writer.builder.put_file(writer.builder.root(), &name, &meta, chunks)?;
             written += 1;
         }
         Ok(written as jint)
@@ -170,19 +144,9 @@ pub fn dwarfsWriterAppend(
 #[jni_fn("com.hippo.ehviewer.jni.DwarfsKt")]
 pub fn dwarfsWriterClose(mut env: JNIEnv, _: JClass, handle: jlong) -> jint {
     jni_throwing(&mut env, |_| {
-        let writer = writers()
-            .lock()
-            .map_err(|_| anyhow!("the writer table is poisoned"))?
-            .remove(&(handle as u64))
-            .ok_or_else(|| anyhow!("no DwarFS writer for handle {handle}"))?;
-        let Writer {
-            builder,
-            chunker,
-            compress,
-        } = writer;
-        let mut section_writer = chunker
-            .ok_or_else(|| anyhow!("the writer is already closed"))?
-            .finish()?;
+        let writer = writers().lock().map_err(|_| anyhow!("the writer table is poisoned"))?.remove(&(handle as u64)).ok_or_else(|| anyhow!("no DwarFS writer for handle {handle}"))?;
+        let Writer { builder, chunker, compress } = writer;
+        let mut section_writer = chunker.ok_or_else(|| anyhow!("the writer is already closed"))?.finish()?;
         section_writer.write_metadata_sections(&builder.finish()?, compress)?;
         section_writer.finish()?;
         Ok(0 as jint)

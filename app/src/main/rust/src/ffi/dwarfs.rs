@@ -51,14 +51,7 @@ struct FdSource {
 impl ReadAt for FdSource {
     fn read_at(&self, pos: u64, buf: &mut [u8]) -> io::Result<usize> {
         loop {
-            let n = unsafe {
-                libc::pread(
-                    self.fd,
-                    buf.as_mut_ptr().cast(),
-                    buf.len(),
-                    pos as libc::off_t,
-                )
-            };
+            let n = unsafe { libc::pread(self.fd, buf.as_mut_ptr().cast(), buf.len(), pos as libc::off_t) };
             if n >= 0 {
                 return Ok(n as usize);
             }
@@ -94,8 +87,7 @@ impl ReadAt for SmbSource {
             return Ok(0);
         }
         let len = (buf.len() as u64).min(self.size - pos);
-        let data = crate::smb_cache::read_window(self.handle, pos, len)
-            .map_err(|err| io::Error::other(format!("{err:#}")))?;
+        let data = crate::smb_cache::read_window(self.handle, pos, len).map_err(|err| io::Error::other(format!("{err:#}")))?;
         let n = data.len().min(buf.len());
         buf[..n].copy_from_slice(&data[..n]);
         Ok(n)
@@ -153,17 +145,9 @@ struct Image {
 
 impl Image {
     fn read_into(&mut self, page: usize, buf: &mut [u8]) -> Result<()> {
-        let entry = self
-            .entries
-            .get(page)
-            .ok_or_else(|| anyhow!("page {page} out of range"))?;
+        let entry = self.entries.get(page).ok_or_else(|| anyhow!("page {page} out of range"))?;
         let path: Vec<String> = entry.path.split('/').map(str::to_owned).collect();
-        let file = self
-            .index
-            .get_path(path.iter().map(String::as_str))
-            .ok_or_else(|| anyhow!("{} left the index", entry.path))?
-            .as_file()
-            .ok_or_else(|| anyhow!("{} is not a file", entry.path))?;
+        let file = self.index.get_path(path.iter().map(String::as_str)).ok_or_else(|| anyhow!("{} left the index", entry.path))?.as_file().ok_or_else(|| anyhow!("{} is not a file", entry.path))?;
         // Serialised on the archive, which owns the block cache: one reader at a
         // time keeps decompression bounded, and a repeated read hits the cache.
         let mut reader = file.as_reader(&mut self.archive);
@@ -177,21 +161,14 @@ impl Image {
 fn collect(dir: Dir<'_>, prefix: &str, out: &mut Vec<Entry>) {
     for entry in dir.entries() {
         let name = entry.name();
-        let path = if prefix.is_empty() {
-            name.to_owned()
-        } else {
-            format!("{prefix}/{name}")
-        };
+        let path = if prefix.is_empty() { name.to_owned() } else { format!("{prefix}/{name}") };
         let inode = entry.inode();
         if let Some(inner) = inode.as_dir() {
             collect(inner, &path, out);
         } else if let Some(file) = inode.as_file()
             && is_playable(name)
         {
-            out.push(Entry {
-                path,
-                size: file.as_chunks().total_size(),
-            });
+            out.push(Entry { path, size: file.as_chunks().total_size() });
         }
     }
 }
@@ -204,12 +181,7 @@ fn images() -> &'static Mutex<HashMap<u64, Arc<Mutex<Image>>>> {
 }
 
 fn lookup(handle: jlong) -> Result<Arc<Mutex<Image>>> {
-    images()
-        .lock()
-        .map_err(|_| anyhow!("the image table is poisoned"))?
-        .get(&(handle as u64))
-        .cloned()
-        .ok_or_else(|| anyhow!("no DwarFS image for handle {handle}"))
+    images().lock().map_err(|_| anyhow!("the image table is poisoned"))?.get(&(handle as u64)).cloned().ok_or_else(|| anyhow!("no DwarFS image for handle {handle}"))
 }
 
 unsafe extern "C" {
@@ -245,23 +217,11 @@ pub fn dwarfsOpen(mut env: JNIEnv, _: JClass, fd: jint, cache_mb: jint) -> jlong
 /// The size comes from the caller because the handle cannot be stat'ed cheaply
 /// and it already had to be read to open the file.
 #[jni_fn("com.hippo.ehviewer.jni.DwarfsKt")]
-pub fn dwarfsOpenSmb(
-    mut env: JNIEnv,
-    _: JClass,
-    handle: jlong,
-    size: jlong,
-    cache_mb: jint,
-) -> jlong {
+pub fn dwarfsOpenSmb(mut env: JNIEnv, _: JClass, handle: jlong, size: jlong, cache_mb: jint) -> jlong {
     jni_throwing(&mut env, |_| {
         let size = size as u64;
         ensure!(size > 0, "the image is empty");
-        open(
-            Source::Smb(SmbSource {
-                handle: handle as u64,
-                size,
-            }),
-            cache_mb,
-        )
+        open(Source::Smb(SmbSource { handle: handle as u64, size }), cache_mb)
     })
 }
 
@@ -280,15 +240,8 @@ fn open(source: Source, cache_mb: jint) -> Result<jlong> {
     entries.sort_by(|a, b| a.path.cmp(&b.path));
 
     let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
-    let image = Arc::new(Mutex::new(Image {
-        index,
-        archive,
-        entries,
-    }));
-    images()
-        .lock()
-        .map_err(|_| anyhow!("the image table is poisoned"))?
-        .insert(handle, image);
+    let image = Arc::new(Mutex::new(Image { index, archive, entries }));
+    images().lock().map_err(|_| anyhow!("the image table is poisoned"))?.insert(handle, image);
     Ok(handle as jlong)
 }
 
@@ -307,10 +260,7 @@ pub fn dwarfsPageName(mut env: JNIEnv, _: JClass, handle: jlong, page: jint) -> 
     jni_throwing(&mut env, |env| {
         let image = lookup(handle)?;
         let image = image.lock().map_err(|_| anyhow!("the image is poisoned"))?;
-        let entry = image
-            .entries
-            .get(page as usize)
-            .ok_or_else(|| anyhow!("page {page} out of range"))?;
+        let entry = image.entries.get(page as usize).ok_or_else(|| anyhow!("page {page} out of range"))?;
         Ok(env.new_string(&entry.path)?.into_raw())
     })
 }
@@ -326,11 +276,7 @@ pub fn dwarfsReadPage(mut env: JNIEnv, _: JClass, handle: jlong, page: jint) -> 
     jni_throwing(&mut env, |env| {
         let image = lookup(handle)?;
         let mut image = image.lock().map_err(|_| anyhow!("the image is poisoned"))?;
-        let size = image
-            .entries
-            .get(page as usize)
-            .ok_or_else(|| anyhow!("page {page} out of range"))?
-            .size as usize;
+        let size = image.entries.get(page as usize).ok_or_else(|| anyhow!("page {page} out of range"))?.size as usize;
         ensure!(size > 0, "page {page} is empty");
 
         let addr = unsafe { malloc(size) };
@@ -347,10 +293,7 @@ pub fn dwarfsReadPage(mut env: JNIEnv, _: JClass, handle: jlong, page: jint) -> 
         );
         let buf = unsafe { std::slice::from_raw_parts_mut(addr.cast::<u8>(), size) };
         match image.read_into(page as usize, buf) {
-            Ok(()) => Ok(unsafe {
-                env.new_direct_byte_buffer(addr.cast::<u8>(), size)?
-                    .into_raw()
-            }),
+            Ok(()) => Ok(unsafe { env.new_direct_byte_buffer(addr.cast::<u8>(), size)?.into_raw() }),
             Err(err) => {
                 // The buffer never reached Java, so it has to go back here.
                 log::debug!(
@@ -365,21 +308,11 @@ pub fn dwarfsReadPage(mut env: JNIEnv, _: JClass, handle: jlong, page: jint) -> 
 }
 
 #[jni_fn("com.hippo.ehviewer.jni.DwarfsKt")]
-pub fn dwarfsReadPageToFd(
-    mut env: JNIEnv,
-    _: JClass,
-    handle: jlong,
-    page: jint,
-    fd: jint,
-) -> jboolean {
+pub fn dwarfsReadPageToFd(mut env: JNIEnv, _: JClass, handle: jlong, page: jint, fd: jint) -> jboolean {
     jni_throwing(&mut env, |_| {
         let image = lookup(handle)?;
         let mut image = image.lock().map_err(|_| anyhow!("the image is poisoned"))?;
-        let size = image
-            .entries
-            .get(page as usize)
-            .ok_or_else(|| anyhow!("page {page} out of range"))?
-            .size as usize;
+        let size = image.entries.get(page as usize).ok_or_else(|| anyhow!("page {page} out of range"))?.size as usize;
         ensure!(size > 0, "page {page} is empty");
 
         let mut buf = vec![0u8; size];

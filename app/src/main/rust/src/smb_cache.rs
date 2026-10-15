@@ -50,13 +50,7 @@ struct Memfd {
 impl Memfd {
     fn create(size: u64) -> Result<Self> {
         // SAFETY: plain syscall; `name` is a valid NUL-terminated C string.
-        let raw = unsafe {
-            libc::syscall(
-                libc::SYS_memfd_create,
-                c"ehviewer-smb-cache".as_ptr(),
-                libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
-            )
-        };
+        let raw = unsafe { libc::syscall(libc::SYS_memfd_create, c"ehviewer-smb-cache".as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
         if raw < 0 {
             return Err(anyhow!("memfd_create failed: {}", Error::last_os_error()));
         }
@@ -66,10 +60,7 @@ impl Memfd {
         // FileChannel.map) see the real length.
         let rc = unsafe { libc::ftruncate(fd.as_raw_fd(), size as libc::off_t) };
         if rc != 0 {
-            return Err(anyhow!(
-                "ftruncate memfd failed: {}",
-                Error::last_os_error()
-            ));
+            return Err(anyhow!("ftruncate memfd failed: {}", Error::last_os_error()));
         }
         Ok(Self { fd })
     }
@@ -87,11 +78,7 @@ impl Memfd {
         }
         // SAFETY: as above.
         unsafe {
-            libc::fcntl(
-                fd,
-                libc::F_ADD_SEALS,
-                libc::F_SEAL_SHRINK | libc::F_SEAL_GROW,
-            );
+            libc::fcntl(fd, libc::F_ADD_SEALS, libc::F_SEAL_SHRINK | libc::F_SEAL_GROW);
         }
     }
 }
@@ -138,17 +125,7 @@ static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 fn cache() -> &'static Mutex<Cache> {
-    CACHE.get_or_init(|| {
-        Mutex::new(Cache {
-            by_id: HashMap::new(),
-            by_key: HashMap::new(),
-            windows: HashMap::new(),
-            window_by_id: HashMap::new(),
-            sizes: HashMap::new(),
-            lru: Vec::new(),
-            total: 0,
-        })
-    })
+    CACHE.get_or_init(|| Mutex::new(Cache { by_id: HashMap::new(), by_key: HashMap::new(), windows: HashMap::new(), window_by_id: HashMap::new(), sizes: HashMap::new(), lru: Vec::new(), total: 0 }))
 }
 
 /// Cap on the unpinned (evictable) tail, in bytes. Configurable at runtime via
@@ -200,10 +177,7 @@ fn evict() {
     let mut guard = cache().lock().unwrap();
     while guard.total > cap {
         // A window is always evictable; a memfd region only once nothing maps it.
-        let victim = guard.lru.iter().copied().find(|&id| {
-            guard.by_id.get(&id).is_some_and(|e| e.pins == 0)
-                || guard.window_by_id.contains_key(&id)
-        });
+        let victim = guard.lru.iter().copied().find(|&id| guard.by_id.get(&id).is_some_and(|e| e.pins == 0) || guard.window_by_id.contains_key(&id));
         // Nothing is evictable, so the cap cannot be met -- give up rather than
         // spin. That makes the cap a *soft* limit: `total` is allowed to exceed
         // it, and does whenever more regions are in use than it allows. A reader
@@ -297,16 +271,7 @@ fn identity(handle: u64) -> Result<Key> {
             size
         }
     };
-    Ok((
-        target.host,
-        target.port,
-        target.share,
-        target.sub,
-        target.user,
-        target.domain,
-        target.pass,
-        size,
-    ))
+    Ok((target.host, target.port, target.share, target.sub, target.user, target.domain, target.pass, size))
 }
 
 /// One window, from the cache or from the share. A short result means the offset
@@ -341,15 +306,7 @@ fn window(key: &Key, handle: u64, index: u64) -> Result<Arc<[u8]>> {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     guard.total = guard.total.saturating_add(fetched.len() as u64);
     guard.windows.insert((key.clone(), index), id);
-    guard.window_by_id.insert(
-        id,
-        Window {
-            key: key.clone(),
-            index,
-            bytes: fetched.clone(),
-            accessed: true,
-        },
-    );
+    guard.window_by_id.insert(id, Window { key: key.clone(), index, bytes: fetched.clone(), accessed: true });
     guard.lru.push(id);
     drop(guard);
     evict();
@@ -441,10 +398,7 @@ fn dup_rewind(mem: &Memfd) -> Result<i32> {
     // SAFETY: memfd fds are regular file descriptors and can be dup'd.
     let fd = unsafe { libc::dup(mem.fd.as_raw_fd()) };
     if fd < 0 {
-        return Err(anyhow!(
-            "dup memfd failed: {}",
-            std::io::Error::last_os_error()
-        ));
+        return Err(anyhow!("dup memfd failed: {}", std::io::Error::last_os_error()));
     }
     // SAFETY: plain lseek on an fd we own.
     unsafe { libc::lseek(fd, 0, libc::SEEK_SET) };
@@ -459,11 +413,7 @@ fn reopen(mem: &Memfd) -> Result<i32> {
     // argument without O_CREAT.
     let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
     if fd < 0 {
-        return Err(anyhow!(
-            "open {} failed: {}",
-            path.to_string_lossy(),
-            std::io::Error::last_os_error()
-        ));
+        return Err(anyhow!("open {} failed: {}", path.to_string_lossy(), std::io::Error::last_os_error()));
     }
     Ok(fd)
 }
@@ -477,16 +427,7 @@ pub fn open_memfd(target: &Target) -> Result<(i32, u64, u64)> {
     ensure!(!stat.is_directory, "refusing to cache a directory");
     let size = stat.size;
     ensure!(size > 0, "empty file cannot be cached");
-    let key: Key = (
-        target.host.clone(),
-        target.port,
-        target.share.clone(),
-        target.sub.clone(),
-        target.user.clone(),
-        target.domain.clone(),
-        target.pass.clone(),
-        size,
-    );
+    let key: Key = (target.host.clone(), target.port, target.share.clone(), target.sub.clone(), target.user.clone(), target.domain.clone(), target.pass.clone(), size);
 
     // Fast path: already resident.
     {
@@ -496,10 +437,7 @@ pub fn open_memfd(target: &Target) -> Result<(i32, u64, u64)> {
                 entry.pins += 1;
             }
             touch(&mut guard, id);
-            let entry = guard
-                .by_id
-                .get(&id)
-                .ok_or_else(|| anyhow!("lost cache entry"))?;
+            let entry = guard.by_id.get(&id).ok_or_else(|| anyhow!("lost cache entry"))?;
             let fd = open_for_consumer(&entry.mem)?;
             return Ok((fd, size, id));
         }
@@ -512,16 +450,7 @@ pub fn open_memfd(target: &Target) -> Result<(i32, u64, u64)> {
         let fd = mem.fd.as_raw_fd();
         // SAFETY: a fresh memfd of `size` bytes, mapped read/write so we can
         // copy the file into it, then downgraded to read-only.
-        let ptr = unsafe {
-            mmap(
-                std::ptr::null_mut(),
-                size as libc::size_t,
-                PROT_READ | PROT_WRITE,
-                MAP_SHARED,
-                fd,
-                0,
-            )
-        };
+        let ptr = unsafe { mmap(std::ptr::null_mut(), size as libc::size_t, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0) };
         if ptr == libc::MAP_FAILED {
             return Err(anyhow!("mmap memfd region failed"));
         }
@@ -569,16 +498,7 @@ pub fn open_memfd(target: &Target) -> Result<(i32, u64, u64)> {
         id
     } else {
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        guard.by_id.insert(
-            id,
-            Entry {
-                key: key.clone(),
-                mem,
-                size,
-                pins: 0,
-                accessed: false,
-            },
-        );
+        guard.by_id.insert(id, Entry { key: key.clone(), mem, size, pins: 0, accessed: false });
         guard.by_key.insert(key.clone(), id);
         guard.lru.push(id);
         guard.total = guard.total.saturating_add(size);
@@ -595,10 +515,7 @@ pub fn open_memfd(target: &Target) -> Result<(i32, u64, u64)> {
     evict();
 
     let guard = cache().lock().unwrap();
-    let entry = guard
-        .by_id
-        .get(&id)
-        .ok_or_else(|| anyhow!("lost cache entry"))?;
+    let entry = guard.by_id.get(&id).ok_or_else(|| anyhow!("lost cache entry"))?;
     let fd = open_for_consumer(&entry.mem)?;
     Ok((fd, size, id))
 }

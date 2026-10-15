@@ -50,16 +50,10 @@ pub const AUTH_REQUIRED: &str = "smb-auth-required";
 /// Generic over nothing: the body hands back an `anyhow` error, and a caller
 /// that has the server's own error type converts it before the body returns.
 fn asking_for_credentials<T>(result: Result<T>) -> Result<T> {
-    result.map_err(
-        |error| match error.downcast_ref::<smb2::Error>().map(smb2::Error::kind) {
-            Some(
-                smb2::ErrorKind::AuthRequired
-                | smb2::ErrorKind::SigningRequired
-                | smb2::ErrorKind::AccessDenied,
-            ) => error.context(AUTH_REQUIRED),
-            _ => error,
-        },
-    )
+    result.map_err(|error| match error.downcast_ref::<smb2::Error>().map(smb2::Error::kind) {
+        Some(smb2::ErrorKind::AuthRequired | smb2::ErrorKind::SigningRequired | smb2::ErrorKind::AccessDenied) => error.context(AUTH_REQUIRED),
+        _ => error,
+    })
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -76,13 +70,7 @@ pub struct Target {
 
 impl Target {
     fn key(&self) -> (String, u16, String, String, String) {
-        (
-            self.host.clone(),
-            self.port,
-            self.share.clone(),
-            self.user.clone(),
-            self.domain.clone(),
-        )
+        (self.host.clone(), self.port, self.share.clone(), self.user.clone(), self.domain.clone())
     }
 
     fn addr(&self) -> String {
@@ -98,19 +86,12 @@ struct Session {
 
 fn runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
-    RT.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .expect("Failed to build SMB runtime")
-    })
+    RT.get_or_init(|| tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("Failed to build SMB runtime"))
 }
 
 #[allow(clippy::type_complexity)]
 fn sessions() -> &'static AsyncMutex<HashMap<(String, u16, String, String, String), Session>> {
-    static SESSIONS: OnceLock<AsyncMutex<HashMap<(String, u16, String, String, String), Session>>> =
-        OnceLock::new();
+    static SESSIONS: OnceLock<AsyncMutex<HashMap<(String, u16, String, String, String), Session>>> = OnceLock::new();
     SESSIONS.get_or_init(|| AsyncMutex::new(HashMap::new()))
 }
 
@@ -125,12 +106,7 @@ fn handles() -> &'static Mutex<HashMap<u64, (Target, FileHandle)>> {
 }
 
 fn handle_entry(handle: u64) -> Result<(Target, FileHandle)> {
-    handles()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .cloned()
-        .ok_or_else(|| anyhow!("Invalid SMB handle {handle}"))
+    handles().lock().unwrap().get(&handle).cloned().ok_or_else(|| anyhow!("Invalid SMB handle {handle}"))
 }
 
 fn writers() -> &'static Mutex<HashMap<u64, WriteHandle>> {
@@ -153,18 +129,11 @@ async fn connect(target: &Target) -> Result<Session> {
     };
     let mut client = SmbClient::connect(config).await?;
     let tree = client.connect_share(&target.share).await?;
-    Ok(Session {
-        client,
-        tree,
-        last_used: Instant::now(),
-    })
+    Ok(Session { client, tree, last_used: Instant::now() })
 }
 
 /// The session for a target, connecting when it is missing or has gone stale.
-async fn session_in(
-    guard: &mut HashMap<(String, u16, String, String, String), Session>,
-    target: &Target,
-) -> Result<()> {
+async fn session_in(guard: &mut HashMap<(String, u16, String, String, String), Session>, target: &Target) -> Result<()> {
     let key = target.key();
     let stale = match guard.get(&key) {
         Some(session) => session.last_used.elapsed() >= IDLE_TIMEOUT,
@@ -184,15 +153,7 @@ async fn session_in(
 /// the request travelled on, not the file. Reporting "cannot list" for it is
 /// what makes a browser look like it lost files that are right there.
 fn retryable(error: &anyhow::Error) -> bool {
-    matches!(
-        error.downcast_ref::<smb2::Error>().map(smb2::Error::kind),
-        Some(
-            smb2::ErrorKind::ConnectionLost
-                | smb2::ErrorKind::SessionExpired
-                | smb2::ErrorKind::TimedOut
-                | smb2::ErrorKind::Io
-        )
-    )
+    matches!(error.downcast_ref::<smb2::Error>().map(smb2::Error::kind), Some(smb2::ErrorKind::ConnectionLost | smb2::ErrorKind::SessionExpired | smb2::ErrorKind::TimedOut | smb2::ErrorKind::Io))
 }
 
 /// Run an operation on the cached session for a target.
@@ -260,21 +221,8 @@ pub fn list_dir(target: &Target) -> Result<Vec<Entry>> {
     runtime().block_on(async {
         with_session!(target, |session| {
             let path = &target.sub;
-            let entries = timeout(
-                OP_TIMEOUT,
-                session.client.list_directory(&mut session.tree, path),
-            )
-            .await
-            .map_err(|_| anyhow!("Timed out listing {path:?}"))??;
-            Ok(entries
-                .into_iter()
-                .filter(|e| e.name != "." && e.name != "..")
-                .map(|e| Entry {
-                    name: e.name,
-                    is_directory: e.is_directory,
-                    size: e.size,
-                })
-                .collect())
+            let entries = timeout(OP_TIMEOUT, session.client.list_directory(&mut session.tree, path)).await.map_err(|_| anyhow!("Timed out listing {path:?}"))??;
+            Ok(entries.into_iter().filter(|e| e.name != "." && e.name != "..").map(|e| Entry { name: e.name, is_directory: e.is_directory, size: e.size }).collect())
         })
     })
 }
@@ -292,27 +240,11 @@ pub struct Stat {
 /// travels over: `list_shares` opens the `srvsvc` named pipe and asks for
 /// `NetShareEnumAll` there, so which tree the session was built on is
 /// irrelevant. Admin shares (names ending in `$`) are dropped by `smb2`.
-pub fn list_shares(
-    host: &str,
-    port: u16,
-    user: &str,
-    pass: &str,
-    domain: &str,
-) -> Result<Vec<String>> {
-    let target = Target {
-        host: host.to_owned(),
-        port,
-        share: "IPC$".to_owned(),
-        sub: String::new(),
-        user: user.to_owned(),
-        pass: pass.to_owned(),
-        domain: domain.to_owned(),
-    };
+pub fn list_shares(host: &str, port: u16, user: &str, pass: &str, domain: &str) -> Result<Vec<String>> {
+    let target = Target { host: host.to_owned(), port, share: "IPC$".to_owned(), sub: String::new(), user: user.to_owned(), pass: pass.to_owned(), domain: domain.to_owned() };
     runtime().block_on(async {
         with_session!(&target, |session| {
-            let shares = timeout(OP_TIMEOUT, session.client.list_shares())
-                .await
-                .map_err(|_| anyhow!("Timed out listing the shares of {host}"))??;
+            let shares = timeout(OP_TIMEOUT, session.client.list_shares()).await.map_err(|_| anyhow!("Timed out listing the shares of {host}"))??;
             Ok(shares.into_iter().map(|share| share.name).collect())
         })
     })
@@ -322,20 +254,9 @@ pub fn stat(target: &Target) -> Result<Stat> {
     runtime().block_on(async {
         with_session!(target, |session| {
             let path = &target.sub;
-            let info = timeout(OP_TIMEOUT, session.client.stat(&mut session.tree, path))
-                .await
-                .map_err(|_| anyhow!("Timed out stat-ing {path:?}"))??;
-            let modified_millis = info
-                .modified
-                .to_system_time()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-            Ok(Stat {
-                is_directory: info.is_directory,
-                size: info.size,
-                modified_millis,
-            })
+            let info = timeout(OP_TIMEOUT, session.client.stat(&mut session.tree, path)).await.map_err(|_| anyhow!("Timed out stat-ing {path:?}"))??;
+            let modified_millis = info.modified.to_system_time().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64).unwrap_or(0);
+            Ok(Stat { is_directory: info.is_directory, size: info.size, modified_millis })
         })
     })
 }
@@ -346,16 +267,11 @@ pub fn open(target: &Target) -> Result<(u64, u64)> {
         with_session!(target, |session| {
             let path = &target.sub;
             let Session { client, tree, .. } = session;
-            let reader = timeout(OP_TIMEOUT, client.open_file_reader(tree, path))
-                .await
-                .map_err(|_| anyhow!("Timed out opening {path:?}"))??;
+            let reader = timeout(OP_TIMEOUT, client.open_file_reader(tree, path)).await.map_err(|_| anyhow!("Timed out opening {path:?}"))??;
             let size = reader.size();
             static NEXT: AtomicU64 = AtomicU64::new(1);
             let handle = NEXT.fetch_add(1, Ordering::Relaxed);
-            handles().lock().unwrap().insert(
-                handle,
-                (target.clone(), Arc::new(AsyncMutex::new(Some(reader)))),
-            );
+            handles().lock().unwrap().insert(handle, (target.clone(), Arc::new(AsyncMutex::new(Some(reader)))));
             Ok((handle, size))
         })
     })
@@ -364,24 +280,15 @@ pub fn open(target: &Target) -> Result<(u64, u64)> {
 /// The target an open handle belongs to, so the window cache can key by file
 /// rather than by handle and survive a close and reopen.
 pub fn target_of(handle: u64) -> Option<Target> {
-    handles()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .map(|(target, _)| target.clone())
+    handles().lock().unwrap().get(&handle).map(|(target, _)| target.clone())
 }
 
 fn read_once(handle: u64, offset: u64, len: u64) -> Result<Vec<u8>> {
     let (_, reader) = handle_entry(handle)?;
     runtime().block_on(async {
         let guard = reader.lock().await;
-        let reader = guard
-            .as_ref()
-            .ok_or_else(|| anyhow!("SMB handle {handle} is closed"))?;
-        timeout(READ_TIMEOUT, reader.read_at(offset, len))
-            .await
-            .map_err(|_| anyhow!("Timed out reading {len} bytes at {offset}"))?
-            .map_err(anyhow::Error::from)
+        let reader = guard.as_ref().ok_or_else(|| anyhow!("SMB handle {handle} is closed"))?;
+        timeout(READ_TIMEOUT, reader.read_at(offset, len)).await.map_err(|_| anyhow!("Timed out reading {len} bytes at {offset}"))?.map_err(anyhow::Error::from)
     })
 }
 
@@ -396,10 +303,7 @@ fn reopen(handle: u64, target: &Target) -> Result<()> {
             // The server's error is converted here rather than by the caller:
             // the body has to hand back one error type for the macro to read
             // the status off, and this path used to leave it to its caller.
-            timeout(OP_TIMEOUT, client.open_file_reader(tree, &target.sub))
-                .await
-                .map_err(|_| anyhow!("Timed out reopening {:?}", target.sub))?
-                .map_err(anyhow::Error::from)
+            timeout(OP_TIMEOUT, client.open_file_reader(tree, &target.sub)).await.map_err(|_| anyhow!("Timed out reopening {:?}", target.sub))?.map_err(anyhow::Error::from)
         })?;
         let (_, file) = handle_entry(handle)?;
         *file.lock().await = Some(reader);
@@ -439,10 +343,7 @@ pub fn close(handle: u64) -> Result<()> {
         let Some(reader) = guard.take() else {
             return Ok(());
         };
-        timeout(OP_TIMEOUT, reader.close())
-            .await
-            .map_err(|_| anyhow!("Timed out closing SMB handle {handle}"))?
-            .map_err(anyhow::Error::from)
+        timeout(OP_TIMEOUT, reader.close()).await.map_err(|_| anyhow!("Timed out closing SMB handle {handle}"))?.map_err(anyhow::Error::from)
     })
 }
 
@@ -453,15 +354,10 @@ pub fn create(target: &Target) -> Result<u64> {
     runtime().block_on(async {
         with_session!(target, |session| {
             let Session { client, tree, .. } = session;
-            let writer = timeout(OP_TIMEOUT, client.create_file_writer(tree, &target.sub))
-                .await
-                .map_err(|_| anyhow!("Timed out creating {:?}", target.sub))??;
+            let writer = timeout(OP_TIMEOUT, client.create_file_writer(tree, &target.sub)).await.map_err(|_| anyhow!("Timed out creating {:?}", target.sub))??;
             static NEXT: AtomicU64 = AtomicU64::new(1);
             let handle = NEXT.fetch_add(1, Ordering::Relaxed);
-            writers()
-                .lock()
-                .unwrap()
-                .insert(handle, Arc::new(AsyncMutex::new(Some(writer))));
+            writers().lock().unwrap().insert(handle, Arc::new(AsyncMutex::new(Some(writer))));
             Ok(handle)
         })
     })
@@ -469,21 +365,11 @@ pub fn create(target: &Target) -> Result<u64> {
 
 /// Push a chunk of bytes to a writer opened with `create`.
 pub fn write(handle: u64, data: Vec<u8>) -> Result<()> {
-    let writer = writers()
-        .lock()
-        .unwrap()
-        .get(&handle)
-        .cloned()
-        .ok_or_else(|| anyhow!("Invalid SMB write handle {handle}"))?;
+    let writer = writers().lock().unwrap().get(&handle).cloned().ok_or_else(|| anyhow!("Invalid SMB write handle {handle}"))?;
     runtime().block_on(async {
         let mut guard = writer.lock().await;
-        let writer = guard
-            .as_mut()
-            .ok_or_else(|| anyhow!("SMB write handle {handle} is closed"))?;
-        timeout(OP_TIMEOUT, writer.write_chunk(&data))
-            .await
-            .map_err(|_| anyhow!("Timed out writing {} bytes", data.len()))?
-            .map_err(anyhow::Error::from)
+        let writer = guard.as_mut().ok_or_else(|| anyhow!("SMB write handle {handle} is closed"))?;
+        timeout(OP_TIMEOUT, writer.write_chunk(&data)).await.map_err(|_| anyhow!("Timed out writing {} bytes", data.len()))?.map_err(anyhow::Error::from)
     })
 }
 
@@ -499,10 +385,7 @@ pub fn write_close(handle: u64) -> Result<u64> {
         let Some(writer) = guard.take() else {
             return Ok(0);
         };
-        timeout(OP_TIMEOUT, writer.finish())
-            .await
-            .map_err(|_| anyhow!("Timed out closing SMB write handle {handle}"))?
-            .map_err(anyhow::Error::from)
+        timeout(OP_TIMEOUT, writer.finish()).await.map_err(|_| anyhow!("Timed out closing SMB write handle {handle}"))?.map_err(anyhow::Error::from)
     })
 }
 
@@ -514,9 +397,7 @@ pub fn mkdir(target: &Target) -> Result<()> {
             let path = &target.sub;
             let Session { client, tree, .. } = session;
             let conn = client.connection_mut();
-            timeout(OP_TIMEOUT, tree.create_directory(conn, path))
-                .await
-                .map_err(|_| anyhow!("Timed out creating directory {path:?}"))??;
+            timeout(OP_TIMEOUT, tree.create_directory(conn, path)).await.map_err(|_| anyhow!("Timed out creating directory {path:?}"))??;
             Ok(())
         })
     })
@@ -539,9 +420,7 @@ pub fn delete(target: &Target) -> Result<()> {
             if matches!(as_file, Ok(Ok(()))) {
                 return Ok(());
             }
-            timeout(OP_TIMEOUT, tree.delete_directory(conn, path))
-                .await
-                .map_err(|_| anyhow!("Timed out deleting {path:?}"))??;
+            timeout(OP_TIMEOUT, tree.delete_directory(conn, path)).await.map_err(|_| anyhow!("Timed out deleting {path:?}"))??;
             Ok(())
         })
     })
@@ -554,9 +433,7 @@ pub fn rename(from: &Target, to_sub: &str) -> Result<()> {
         with_session!(from, |session| {
             let Session { client, tree, .. } = session;
             let conn = client.connection_mut();
-            timeout(OP_TIMEOUT, tree.rename(conn, &from.sub, to_sub))
-                .await
-                .map_err(|_| anyhow!("Timed out renaming {:?} -> {:?}", from.sub, to_sub))??;
+            timeout(OP_TIMEOUT, tree.rename(conn, &from.sub, to_sub)).await.map_err(|_| anyhow!("Timed out renaming {:?} -> {:?}", from.sub, to_sub))??;
             Ok(())
         })
     })
