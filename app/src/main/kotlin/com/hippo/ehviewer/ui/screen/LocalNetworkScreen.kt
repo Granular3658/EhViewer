@@ -409,10 +409,19 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                     },
                 )
                 listingFailed -> Empty(text = cannotList)
-                share == null -> NameList(names = names, onOpen = { name ->
-                    share = name
-                    subPath = ""
-                })
+                share == null -> NameList(
+                    names = names,
+                    onOpen = { name ->
+                        share = name
+                        subPath = ""
+                    },
+                    // The share itself: a location that keeps the whole share is
+                    // the share's root, which is the one directory the listing
+                    // under it can never offer.
+                    onAddToDownloadLocations = { name ->
+                        host?.let { savingLocation = SmbLocation(it, port, name, "") }
+                    },
+                )
                 else -> EntryList(
                     entries = entries,
                     listState = entryListState,
@@ -664,8 +673,13 @@ private fun HostList(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NameList(names: List<String>?, onOpen: (String) -> Unit) {
+private fun NameList(
+    names: List<String>?,
+    onOpen: (String) -> Unit,
+    onAddToDownloadLocations: (String) -> Unit,
+) {
     if (names == null) {
         Empty(text = "")
         return
@@ -674,14 +688,34 @@ private fun NameList(names: List<String>?, onOpen: (String) -> Unit) {
         Empty(text = stringResource(id = R.string.local_network_empty))
         return
     }
+    var menuFor by remember { mutableStateOf<String?>(null) }
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         items(names) { name ->
-            Text(
-                text = "$name/",
-                modifier = Modifier.fillMaxWidth()
-                    .clickable { onOpen(name) }
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-            )
+            Box {
+                Text(
+                    text = "$name/",
+                    modifier = Modifier.fillMaxWidth()
+                        .combinedClickable(
+                            onClick = { onOpen(name) },
+                            // A share is a location in its own right, not only a
+                            // place that has directories under it: pointing a
+                            // download location at the share is what keeps the
+                            // whole of it, and until this there was no way to
+                            // ask for that from here.
+                            onLongClick = { menuFor = name },
+                        )
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                )
+                DropdownMenu(expanded = menuFor == name, onDismissRequest = { menuFor = null }) {
+                    DropdownMenuItem(
+                        text = { Text(text = stringResource(id = R.string.local_network_add_to_download_locations)) },
+                        onClick = {
+                            menuFor = null
+                            onAddToDownloadLocations(name)
+                        },
+                    )
+                }
+            }
             HorizontalDivider()
         }
     }
