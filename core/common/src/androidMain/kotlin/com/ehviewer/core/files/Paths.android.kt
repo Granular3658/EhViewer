@@ -65,7 +65,33 @@ fun Path.toUri(): Uri {
     val uri = str.replaceFirst("content:/", "content://").toUri()
     val path = requireNotNull(uri.encodedPath) { "Invalid path: $str" }
     val paths = path.split('/').dropWhile { it.isEmpty() }
-    return if (paths.size > 4 && paths[0] == "tree") {
+    return if (paths.size > 1 && paths[0] == "tree" && paths.getOrNull(2) != "document") {
+        // `tree/<treeId>` is what the system picker hands out, and a download
+        // location stores exactly that; appending a child to it yields
+        // `tree/<treeId>/<child>`, which is not a shape any documents provider
+        // accepts. `query` calls `enforceTree`, `isChildDocument` answers false,
+        // and the provider writes a SecurityException to the parcel -- the
+        // "FileSystemProvider.isChildDocument" / "Writing exception to parcel"
+        // spam in logcat, once per path asked about. Rewrite it as the document
+        // URI the provider expects: the document id is the tree's own id plus the
+        // appended segments, encoded into a single segment.
+        val treeId = paths[1]
+        val root = Uri.decode(treeId)
+        val remainder = paths.subList(2, paths.size)
+        val documentId = if (remainder.isEmpty()) {
+            root
+        } else {
+            val prefix = if (root.endsWith(':')) root else "$root/"
+            remainder.joinToString("/", prefix, uri.encodedFragment?.let { "#$it" }.orEmpty())
+        }
+        uri.buildUpon().apply {
+            path(null)
+            appendEncodedPath(paths[0])
+            appendEncodedPath(treeId)
+            appendEncodedPath("document")
+            appendPath(documentId)
+        }.build()
+    } else if (paths.size > 4 && paths[0] == "tree") {
         uri.buildUpon().apply {
             path(null)
             repeat(3) { i ->

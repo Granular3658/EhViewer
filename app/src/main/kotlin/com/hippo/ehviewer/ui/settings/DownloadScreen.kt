@@ -443,7 +443,11 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                 title = stringResource(id = R.string.settings_download_restore_download_items),
                 summary = stringResource(id = R.string.settings_download_restore_download_items_summary),
             ) {
-                var restoreDirCount = 0
+                // The scan below fans out through `parMapNotNull`, so these are touched
+                // from several threads: a plain `var` loses updates and the numbers in
+                // the snackbar stop adding up.
+                val knownCount = java.util.concurrent.atomic.AtomicInteger()
+                val restoredCount = java.util.concurrent.atomic.AtomicInteger()
                 suspend fun getRestoreItem(file: Path): RestoreItem? {
                     // An SMB candidate was listed through the client, so it is
                     // already known to be a directory; asking `file.isDirectory`
@@ -494,15 +498,10 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                         val (gid, token) = (if (smb != null) readSmbIds(smb) else readPathIds(file)) ?: return null
                         val dirname = file.name
                         if (DownloadManager.containDownloadInfo(gid)) {
-                            // Restore download dir to avoid redownload
-                            val dbdirname = EhDB.getDownloadDirname(gid)
-                            if (null == dbdirname || dirname != dbdirname) {
-                                restoreDirCount++
-                            }
-                            // Written whether or not the name changed: this is the
-                            // scan that knows where the directory is, and a
-                            // download whose name was already right is exactly
-                            // the one that still has no location recorded.
+                            // Already in the list, so there is nothing to add: record
+                            // where its directory is (this scan is what knows) and
+                            // count it as a duplicate for the report.
+                            knownCount.incrementAndGet()
                             DownloadManager.recordDownloadDir(gid, dirname, location)
                             return null
                         }
@@ -542,8 +541,8 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     val result = candidates.parMapNotNull(concurrency = 4) { getRestoreItem(it) }.also {
                         fillGalleryListByApi(it, EhUrl.referer)
                     }
-                    if (result.isEmpty()) {
-                        launchSnackbar(RESTORE_COUNT_MSG(restoreDirCount))
+                    if (result.isEmpty() && knownCount.get() == 0) {
+                        launchSnackbar(RESTORE_NOT_FOUND)
                     } else {
                         // The write-back fans out over every restored directory. Each
                         // one writes its ComicInfo.xml through the content provider,
@@ -552,14 +551,16 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                         // unbounded, that empties the pool and the coroutine never
                         // returns. Keep it small: this is a metadata write, not a
                         // throughput path.
-                        val count = result.parMap(concurrency = 4) {
+                        result.parMap(concurrency = 4) {
                             if (it.pages != 0) {
                                 DownloadManager.recordDownloadDir(it.gid, it.dirname, it.location)
-                                DownloadManager.restoreDownload(it.galleryInfo, it.dirname, it.location)
+                                if (DownloadManager.restoreDownload(it.galleryInfo, it.dirname, it.location)) {
+                                    restoredCount.incrementAndGet()
+                                }
                                 SpiderDen(it.galleryInfo, it.dirname).writeComicInfo(false)
                             }
-                        }.size
-                        launchSnackbar(RESTORE_COUNT_MSG(count + restoreDirCount))
+                        }
+                        launchSnackbar(RESTORE_COUNT_MSG(restoredCount.get(), knownCount.get()))
                     }
                 }.onFailure {
                     logcat(it)
@@ -605,7 +606,7 @@ private class RestoreItem(
     val galleryInfo: BaseGalleryInfo = BaseGalleryInfo(gid, token),
 ) : GalleryInfo by galleryInfo
 private val RESTORE_NOT_FOUND = appCtx.getString(R.string.settings_download_restore_not_found)
-private val RESTORE_COUNT_MSG = { cnt: Int -> if (cnt == 0) RESTORE_NOT_FOUND else appCtx.getString(R.string.settings_download_restore_successfully, cnt) }
+private val RESTORE_COUNT_MSG = { restored: Int, duplicates: Int -> appCtx.getString(R.string.settings_download_restore_successfully_deduped, restored, duplicates) }
 private val NO_REDUNDANCY = appCtx.getString(R.string.settings_download_clean_redundancy_no_redundancy)
 private val CLEAR_REDUNDANCY_DONE = { cnt: Int -> appCtx.getString(R.string.settings_download_clean_redundancy_done, cnt) }
 private val FINAL_CLEAR_REDUNDANCY_MSG = { cnt: Int -> if (cnt == 0) NO_REDUNDANCY else CLEAR_REDUNDANCY_DONE(cnt) }
