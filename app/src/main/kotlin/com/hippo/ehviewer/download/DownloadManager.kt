@@ -981,14 +981,18 @@ val DownloadInfo.downloadDir: Path?
  * it costs a round trip per location on a share, and asking a local provider about
  * a directory that in fact lives on one makes it answer with a missing-file error,
  * which it writes to the parcel and logs as `FileSystemProvider.isChildDocument`,
- * once per call.
+ * once per call. The search therefore only asks locations of the recorded
+ * location's kind: a directory does not move between a share and local storage
+ * without the user copying it, and asking the wrong kind is what produced that log.
  *
  * `DownloadInfo.downloadDir` deliberately does not search: it resolves the path
  * the download list labels each row with, where a wrong answer is cosmetic and a
  * search per row is not.
  */
 fun resolveDownloadDir(location: String?, dirname: String): Path = recordedLocationPath(location)?.let { it / dirname }?.takeIf { it.isDirectory }
-    ?: writableDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
+    ?: writableDownloadLocations
+        .filter { location == null || location.substringBefore(':') == it.toString().substringBefore(':') }
+        .firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
     ?: (defaultDownloadLocation / dirname)
 
 /**
