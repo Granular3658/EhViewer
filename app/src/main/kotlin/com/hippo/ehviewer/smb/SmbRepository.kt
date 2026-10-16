@@ -266,12 +266,18 @@ object SmbRepository {
         }
     }
 
-    /** Writes the bytes to the writer opened by [create]. */
-    fun write(handle: Long, data: ByteArray) {
-        val buf = ByteBuffer.allocateDirect(data.size)
-        buf.put(data)
-        buf.flip()
-        smbWrite(handle, buf, data.size)
+    /**
+     * Writes the first [length] bytes of [data] to the writer opened by [create].
+     *
+     * [direct] is scratch space the caller owns and reuses. Taking it in rather
+     * than allocating here is what keeps a gallery write off the allocation path:
+     * this used to allocate one direct buffer per 64 KiB chunk.
+     */
+    fun write(handle: Long, data: ByteArray, length: Int, direct: ByteBuffer) {
+        direct.clear()
+        direct.put(data, 0, length)
+        direct.flip()
+        smbWrite(handle, direct, length)
     }
 
     /** Flushes and closes the writer, returning the total bytes written. */

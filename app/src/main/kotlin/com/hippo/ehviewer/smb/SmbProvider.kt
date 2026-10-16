@@ -230,9 +230,12 @@ class SmbProvider : ContentProvider() {
                     handle = runBlocking { SmbRepository.create(location) }
                     ParcelFileDescriptor.AutoCloseInputStream(readSide).use { input ->
                         val buffer = ByteArray(64 * 1024)
+                        // One direct buffer for the whole stream, the way the read
+                        // path above reuses its own.
+                        val direct = java.nio.ByteBuffer.allocateDirect(buffer.size)
                         var n: Int
                         while (input.read(buffer).also { n = it } != -1) {
-                            if (n > 0) SmbRepository.write(handle.value, buffer.copyOf(n))
+                            if (n > 0) SmbRepository.write(handle.value, buffer, n, direct)
                         }
                     }
                     runBlocking { SmbRepository.writeClose(handle.value) }

@@ -223,7 +223,9 @@ pub fn smbWrite(mut env: JNIEnv, _: JClass, handle: jlong, buffer: JByteBuffer, 
         let len = len as usize;
         ensure!(len <= capacity, "Buffer too small: {len} > {capacity}");
         let ptr = env.get_direct_buffer_address(&buffer)?;
-        let data = unsafe { std::slice::from_raw_parts(ptr, len).to_vec() };
+        // SAFETY: `get_direct_buffer_address` errors on a null pointer, the
+        // caller's direct buffer outlives the call, and the slice is only read.
+        let data = unsafe { std::slice::from_raw_parts(ptr, len) };
         smb::write(handle as u64, data)?;
         Ok(len as jint)
     })

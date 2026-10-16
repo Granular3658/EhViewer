@@ -2,9 +2,10 @@
 //!
 //! A share is addressed by [`Target`], sessions are cached per
 //! (host, port, share, user, domain) and dropped after a minute of idleness.
-//! Reads go through `read_at`, so a caller can fetch ranges in any order
-//! without holding the session lock: an open file is an `Arc<FileReader>` that
-//! outlives the client borrow.
+//! Each session has its own lock, so an operation that has to connect one
+//! target never holds up another target's work. Reads go through `read_at`, so
+//! a caller can fetch ranges in any order without holding the session lock at
+//! all: an open file is an `Arc<FileReader>` that outlives the client borrow.
 //!
 //! Verified against a local Samba server: guest/anonymous, NTLM, SMB2 and
 //! SMB3 dialects. Servers that force encryption on the whole connection are
@@ -89,10 +90,25 @@ fn runtime() -> &'static Runtime {
     RT.get_or_init(|| tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("Failed to build SMB runtime"))
 }
 
-#[allow(clippy::type_complexity)]
-fn sessions() -> &'static AsyncMutex<HashMap<(String, u16, String, String, String), Session>> {
-    static SESSIONS: OnceLock<AsyncMutex<HashMap<(String, u16, String, String, String), Session>>> = OnceLock::new();
-    SESSIONS.get_or_init(|| AsyncMutex::new(HashMap::new()))
+type Key = (String, u16, String, String, String);
+
+/// A target's session, or the empty slot waiting for one.
+type Slot = Arc<AsyncMutex<Option<Session>>>;
+
+/// Session slots, keyed by target.
+///
+/// This lock is a plain `Mutex` and is only ever held long enough to fetch or
+/// insert a slot. What serialises the work on a session is the *slot's* lock, so
+/// a server that has gone to sleep makes the operations going to it wait for the
+/// connect and nothing else's. With one lock for the whole map, one slow host
+/// held up every operation in the process -- connecting included.
+fn sessions() -> &'static Mutex<HashMap<Key, Slot>> {
+    static SESSIONS: OnceLock<Mutex<HashMap<Key, Slot>>> = OnceLock::new();
+    SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn session_slot(key: &Key) -> Slot {
+    sessions().lock().unwrap().entry(key.clone()).or_insert_with(|| Arc::new(AsyncMutex::new(None))).clone()
 }
 
 type FileHandle = Arc<AsyncMutex<Option<FileReader>>>;
@@ -132,16 +148,17 @@ async fn connect(target: &Target) -> Result<Session> {
     Ok(Session { client, tree, last_used: Instant::now() })
 }
 
-/// The session for a target, connecting when it is missing or has gone stale.
-async fn session_in(guard: &mut HashMap<(String, u16, String, String, String), Session>, target: &Target) -> Result<()> {
-    let key = target.key();
-    let stale = match guard.get(&key) {
+/// Fill a target's slot when it is empty or its session has gone stale.
+///
+/// Called with the slot's own lock held, so the connect this may do blocks that
+/// target's operations and no other target's.
+async fn session_in(slot: &mut Option<Session>, target: &Target) -> Result<()> {
+    let stale = match slot.as_ref() {
         Some(session) => session.last_used.elapsed() >= IDLE_TIMEOUT,
         None => true,
     };
     if stale {
-        let session = asking_for_credentials(connect(target).await)?;
-        guard.insert(key, session);
+        *slot = Some(asking_for_credentials(connect(target).await)?);
     }
     Ok(())
 }
@@ -178,11 +195,10 @@ macro_rules! with_session {
             // the operation came back failed, with nothing in the log either,
             // and the screen said the directory was empty.
             let outcome = async {
-                let mut guard = sessions().lock().await;
+                let slot = session_slot(&target.key());
+                let mut guard = slot.lock().await;
                 session_in(&mut guard, target).await?;
-                let $session = guard
-                    .get_mut(&target.key())
-                    .ok_or_else(|| anyhow!("Session vanished"))?;
+                let $session = guard.as_mut().ok_or_else(|| anyhow!("Session vanished"))?;
                 $session.last_used = Instant::now();
                 asking_for_credentials($body)
             }
@@ -190,9 +206,11 @@ macro_rules! with_session {
             match outcome {
                 Err(error) if !retried && retryable(&error) => {
                     // The session is the thing that is gone, so it goes before
-                    // the second attempt builds another one.
+                    // the second attempt builds another one. Emptying the slot
+                    // rather than removing it keeps the map entry the second
+                    // attempt's `session_slot` looks for.
                     retried = true;
-                    sessions().lock().await.remove(&target.key());
+                    *session_slot(&target.key()).lock().await = None;
                     log::debug!(target: "smb", "retrying after: {error:#}");
                 }
                 Err(error) => {
@@ -295,9 +313,9 @@ fn read_once(handle: u64, offset: u64, len: u64) -> Result<Vec<u8>> {
 /// Reopen the file behind a handle on a fresh session.
 fn reopen(handle: u64, target: &Target) -> Result<()> {
     runtime().block_on(async {
-        // Drop the cached session first. The handle died with it, and the
-        // session macro would otherwise hand back the same dead connection.
-        sessions().lock().await.remove(&target.key());
+        // Empty the slot first. The handle died with the session, and the macro
+        // would otherwise hand back the same dead connection.
+        *session_slot(&target.key()).lock().await = None;
         let reader = with_session!(target, |session| {
             let Session { client, tree, .. } = session;
             // The server's error is converted here rather than by the caller:
@@ -364,12 +382,15 @@ pub fn create(target: &Target) -> Result<u64> {
 }
 
 /// Push a chunk of bytes to a writer opened with `create`.
-pub fn write(handle: u64, data: Vec<u8>) -> Result<()> {
+///
+/// The chunk is borrowed: the caller's buffer is only read, and copying it into
+/// an owned `Vec` first was one more copy per 64 KiB on the way to the server.
+pub fn write(handle: u64, data: &[u8]) -> Result<()> {
     let writer = writers().lock().unwrap().get(&handle).cloned().ok_or_else(|| anyhow!("Invalid SMB write handle {handle}"))?;
     runtime().block_on(async {
         let mut guard = writer.lock().await;
         let writer = guard.as_mut().ok_or_else(|| anyhow!("SMB write handle {handle} is closed"))?;
-        timeout(OP_TIMEOUT, writer.write_chunk(&data)).await.map_err(|_| anyhow!("Timed out writing {} bytes", data.len()))?.map_err(anyhow::Error::from)
+        timeout(OP_TIMEOUT, writer.write_chunk(data)).await.map_err(|_| anyhow!("Timed out writing {} bytes", data.len()))?.map_err(anyhow::Error::from)
     })
 }
 
@@ -442,5 +463,27 @@ pub fn rename(from: &Target, to_sub: &str) -> Result<()> {
 /// Drop every cached session. Called when a location's credentials change, so
 /// the next call re-authenticates instead of reusing the old login.
 pub fn invalidate() {
-    runtime().block_on(sessions().lock()).clear();
+    sessions().lock().unwrap().clear();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target(host: &str, share: &str) -> Target {
+        Target { host: host.to_owned(), port: DEFAULT_PORT, share: share.to_owned(), sub: String::new(), user: String::new(), pass: String::new(), domain: String::new() }
+    }
+
+    /// The lock that serialises a target's operations is the *slot's*, so two
+    /// targets must not share one: that is what keeps a slow host from holding
+    /// up everything else. One target must keep getting the same slot, or a
+    /// retry would build a second connection beside the cached one.
+    #[test]
+    fn slots_are_per_target() {
+        let a = target("nas-slot-test", "share");
+        let b = target("nas-slot-test", "other");
+        assert!(Arc::ptr_eq(&session_slot(&a.key()), &session_slot(&a.key())));
+        assert!(!Arc::ptr_eq(&session_slot(&a.key()), &session_slot(&b.key())));
+        invalidate();
+    }
 }

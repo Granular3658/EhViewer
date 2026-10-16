@@ -433,12 +433,16 @@ pub fn open_memfd(target: &Target) -> Result<(i32, u64, u64)> {
     {
         let mut guard = cache().lock().unwrap();
         if let Some(&id) = guard.by_key.get(&key) {
+            let entry = guard.by_id.get(&id).ok_or_else(|| anyhow!("lost cache entry"))?;
+            // Open before pinning. A failed `open`/`dup` returns from here, and
+            // the caller never learns the id -- so a pin taken first could never
+            // be released and the region would stay unevictable for the life of
+            // the process.
+            let fd = open_for_consumer(&entry.mem)?;
             if let Some(entry) = guard.by_id.get_mut(&id) {
                 entry.pins += 1;
             }
             touch(&mut guard, id);
-            let entry = guard.by_id.get(&id).ok_or_else(|| anyhow!("lost cache entry"))?;
-            let fd = open_for_consumer(&entry.mem)?;
             return Ok((fd, size, id));
         }
     }
@@ -514,10 +518,23 @@ pub fn open_memfd(target: &Target) -> Result<(i32, u64, u64)> {
 
     evict();
 
-    let guard = cache().lock().unwrap();
-    let entry = guard.by_id.get(&id).ok_or_else(|| anyhow!("lost cache entry"))?;
-    let fd = open_for_consumer(&entry.mem)?;
-    Ok((fd, size, id))
+    let opened = {
+        let guard = cache().lock().unwrap();
+        match guard.by_id.get(&id) {
+            Some(entry) => open_for_consumer(&entry.mem),
+            None => Err(anyhow!("lost cache entry")),
+        }
+    };
+    match opened {
+        Ok(fd) => Ok((fd, size, id)),
+        // The pin above is only there to keep `evict` off the region while it is
+        // opened. A failed open has to give it back, or nothing can: the caller
+        // never learns the id, so it can never call `release_memfd`.
+        Err(error) => {
+            release_memfd(id);
+            Err(error)
+        }
+    }
 }
 
 /// Drop a consumer's reference to a cached region. Only once `pins` returns to
