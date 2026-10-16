@@ -14,6 +14,7 @@ import android.util.Log
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.runBlocking
@@ -24,7 +25,24 @@ import kotlinx.coroutines.runBlocking
  * and image-decoder threads never block while waiting for the network.
  */
 class SmbProvider : ContentProvider() {
-    private val executor = Executors.newCachedThreadPool()
+    /**
+     * One slot per stream that may be open at once.
+     *
+     * A stream holds a thread blocked on the network plus a 64 KiB buffer, so
+     * without a limit a burst of opens -- or one leaked descriptor -- grows both
+     * without bound. A caller that finds every slot taken waits rather than
+     * fails, so this throttles instead of refusing, and the queue is fair so the
+     * order opens arrive in is kept.
+     */
+    private val streamSlots = Semaphore(MAX_STREAMS, true)
+
+    /**
+     * One worker per stream, and no more. The pool and [streamSlots] are the same
+     * size deliberately: the slots bound how many streams may exist, the pool
+     * bounds how many threads they can occupy, and neither is any use without the
+     * other.
+     */
+    private val executor = Executors.newFixedThreadPool(MAX_STREAMS)
 
     /**
      * `.../smb/<location>` lists the children of a directory,
@@ -147,6 +165,21 @@ class SmbProvider : ContentProvider() {
     }
 
     /**
+     * Opens a pipe with a stream slot held, giving the slot back if the pipe
+     * cannot be created. Taking the slot before the pipe is what bounds
+     * descriptors as well as threads: a stream waiting for a worker owns nothing.
+     */
+    private fun <T> withStreamSlot(open: () -> T): T {
+        streamSlots.acquire()
+        return try {
+            open()
+        } catch (t: Throwable) {
+            streamSlots.release()
+            throw t
+        }
+    }
+
+    /**
      * Opens an SMB location, returning the descriptor together with its declared
      * length: the real file size for the in-memory path, or -1 for the streaming
      * pipe (its length is only known once fully read).
@@ -179,7 +212,7 @@ class SmbProvider : ContentProvider() {
                     return pfd to memfd.size
                 }
             }
-            val (readSide, writeSide) = ParcelFileDescriptor.createPipe()
+            val (readSide, writeSide) = withStreamSlot { ParcelFileDescriptor.createPipe() }
             executor.execute {
                 var handle: SmbHandle? = null
                 try {
@@ -208,11 +241,12 @@ class SmbProvider : ContentProvider() {
                             .onFailure { Log.e(TAG, "Failed to close SMB handle: $uri", it) }
                     }
                     runCatching { writeSide.close() }
+                    streamSlots.release()
                 }
             }
             return readSide to -1L
         } else if (mode.contains('w', ignoreCase = true)) {
-            val (readSide, writeSide) = ParcelFileDescriptor.createPipe()
+            val (readSide, writeSide) = withStreamSlot { ParcelFileDescriptor.createPipe() }
             // Write mode: the caller writes into `writeSide`; we drain `readSide`
             // on a worker thread and forward the bytes to the Rust SMB writer.
             // That forwarding is asynchronous, so a caller that closes the
@@ -249,6 +283,7 @@ class SmbProvider : ContentProvider() {
                     runCatching { readSide.close() }
                     runCatching { writeSide.close() }
                     finished.countDown()
+                    streamSlots.release()
                 }
             }
             val pfd = object : ParcelFileDescriptor(writeSide) {
@@ -304,5 +339,16 @@ class SmbProvider : ContentProvider() {
 
     private companion object {
         const val TAG = "SmbProvider"
+
+        /**
+         * How many streams may be open at once.
+         *
+         * Must stay comfortably above the widest fan-out in the app: the archive
+         * writer opens one stream per page in a chunk (`ARCHIVE_CHUNK`, 32) and
+         * the native side drains those descriptors **in order**, so a limit below
+         * that would leave it waiting on a stream that cannot start until the ones
+         * it is not reading have finished -- a deadlock, not a slow path.
+         */
+        const val MAX_STREAMS = 64
     }
 }
