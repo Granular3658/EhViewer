@@ -272,7 +272,6 @@
     <string name="settings_download_restore_download_items_summary">Restaurar todos los elementos de descarga en la ruta de descarga</string>
     <string name="settings_download_restore_not_found">No se han encontrado elementos para restaurar</string>
     <string name="settings_download_restore_failed">Restauración fallida</string>
-    <string name="settings_download_restore_successfully">Restauración de %d elementos completados</string>
     <string name="settings_download_clean_redundancy">Borrar imágenes sobrantes</string>
     <string name="settings_download_clean_redundancy_summary">Elimina las imágenes almacenadas en la ruta de descarga que no se encuentran en la lista de descarga</string>
     <string name="settings_download_clean_redundancy_no_redundancy">Sin imágenes para borrar</string>
