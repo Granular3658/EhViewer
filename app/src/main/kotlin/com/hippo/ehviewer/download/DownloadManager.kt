@@ -973,6 +973,25 @@ val DownloadInfo.downloadDir: Path?
     }
 
 /**
+ * The directory a gallery's files are in, for the code that has to *find* them.
+ *
+ * The recorded location is asked first: one stat, and in the common case it is
+ * right. Searching every configured location stays as the fallback, because a
+ * directory that has moved between locations cannot be found any other way -- but
+ * it costs a round trip per location on a share, and asking a local provider about
+ * a directory that in fact lives on one makes it answer with a missing-file error,
+ * which it writes to the parcel and logs as `FileSystemProvider.isChildDocument`,
+ * once per call.
+ *
+ * `DownloadInfo.downloadDir` deliberately does not search: it resolves the path
+ * the download list labels each row with, where a wrong answer is cosmetic and a
+ * search per row is not.
+ */
+fun resolveDownloadDir(location: String?, dirname: String): Path = recordedLocationPath(location)?.let { it / dirname }?.takeIf { it.isDirectory }
+    ?: writableDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
+    ?: (defaultDownloadLocation / dirname)
+
+/**
  * The configured location a recorded location string names, or null if it is not
  * one any more -- a location removed from the settings still has its downloads,
  * and their directories are then found the slow way.

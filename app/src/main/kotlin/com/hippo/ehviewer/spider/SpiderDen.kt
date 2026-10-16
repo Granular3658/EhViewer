@@ -44,10 +44,8 @@ import com.hippo.ehviewer.client.getImageKey
 import com.hippo.ehviewer.coil.read
 import com.hippo.ehviewer.coil.suspendEdit
 import com.hippo.ehviewer.download.DownloadManager
-import com.hippo.ehviewer.download.allDownloadLocations
-import com.hippo.ehviewer.download.defaultDownloadLocation
+import com.hippo.ehviewer.download.resolveDownloadDir
 import com.hippo.ehviewer.download.tempDownloadDir
-import com.hippo.ehviewer.download.writableDownloadLocations
 import com.hippo.ehviewer.gallery.PageLoader
 import com.hippo.ehviewer.gallery.isDwarfs
 import com.hippo.ehviewer.gallery.useArchivePageLoader
@@ -128,9 +126,8 @@ class SpiderDen(val info: GalleryInfo) {
             tempDownloadDir.takeIf { saveAsCbz } ?: downloadDir
         }
 
-    constructor(info: GalleryInfo, dirname: String) : this(info) {
-        downloadDir = allDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
-            ?: (defaultDownloadLocation / dirname)
+    constructor(info: GalleryInfo, dirname: String, location: String? = null) : this(info) {
+        downloadDir = resolveDownloadDir(location, dirname)
     }
 
     @Volatile
@@ -678,11 +675,13 @@ suspend fun GalleryInfo.downloadDirname(): String {
  * purpose: reading has to find the files wherever they are, and skipping them
  * here made the reader fall through to the (empty) local default directory and
  * re-download everything from the network.
+ *
+ * The location the app recorded is asked first, and the search is only the
+ * fallback for a directory that moved -- see [resolveDownloadDir].
  */
 suspend fun getGalleryDownloadDir(info: GalleryInfo): Path {
     val dirname = info.downloadDirname()
-    val dir = allDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
-        ?: (defaultDownloadLocation / dirname)
+    val dir = resolveDownloadDir(EhDB.getDownloadLocation(info.gid), dirname)
     dir.recordDownloadLocation(info.gid, dirname)
     return dir
 }
@@ -693,8 +692,7 @@ suspend fun getGalleryDownloadDir(info: GalleryInfo): Path {
  */
 suspend fun getGalleryWritableDownloadDir(info: GalleryInfo): Path {
     val dirname = info.downloadDirname()
-    val dir = writableDownloadLocations.firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
-        ?: (defaultDownloadLocation / dirname)
+    val dir = resolveDownloadDir(EhDB.getDownloadLocation(info.gid), dirname)
     dir.recordDownloadLocation(info.gid, dirname)
     return dir
 }

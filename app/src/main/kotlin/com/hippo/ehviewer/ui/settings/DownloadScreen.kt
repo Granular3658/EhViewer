@@ -429,7 +429,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     }.apply {
                         fillGalleryListByApi(this, EhUrl.referer)
                         val toUpdate = parMap(concurrency = 4) { di ->
-                            di.galleryInfo.also { SpiderDen(it, di.dirname!!).writeComicInfo(false) }
+                            di.galleryInfo.also { SpiderDen(it, di.dirname!!, di.location).writeComicInfo(false) }
                         }
                         EhDB.updateGalleryInfo(toUpdate)
                         launchSnackbar(string(R.string.settings_download_reload_metadata_successfully, toUpdate.size))
@@ -557,7 +557,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                                 if (DownloadManager.restoreDownload(it.galleryInfo, it.dirname, it.location)) {
                                     restoredCount.incrementAndGet()
                                 }
-                                SpiderDen(it.galleryInfo, it.dirname).writeComicInfo(false)
+                                SpiderDen(it.galleryInfo, it.dirname, it.location).writeComicInfo(false)
                             }
                         }
                         launchSnackbar(RESTORE_COUNT_MSG(restoredCount.get(), knownCount.get()))

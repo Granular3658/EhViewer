@@ -102,6 +102,17 @@ object EhDB {
         return raw?.dirname
     }
 
+    /**
+     * The location the app recorded for a download, if any. Read together with the
+     * directory name so a caller can resolve the directory without searching every
+     * configured location for it.
+     */
+    suspend fun getDownloadLocation(gid: Long): String? {
+        val dao = db.downloadDirnameDao()
+        val raw = dao.load(gid)
+        return raw?.location
+    }
+
     suspend fun putDownloadDirname(gid: Long, dirname: String) {
         val dao = db.downloadDirnameDao()
         dao.upsert(DownloadDirname(gid, dirname))

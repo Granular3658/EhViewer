@@ -288,7 +288,7 @@ fun AnimatedVisibilityScope.GalleryDetailScreen(args: GalleryDetailScreenArgs, n
                                         val msg = runCatching {
                                             bgWork {
                                                 withIOContext {
-                                                    SpiderDen(info, dirname).exportAsArchive(file, format)
+                                                    SpiderDen(info, dirname, downloadInfo.location).exportAsArchive(file, format)
                                                 }
                                             }
                                             exportSuccess
