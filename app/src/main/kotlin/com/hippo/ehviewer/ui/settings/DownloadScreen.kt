@@ -446,8 +446,15 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                 // The scan below fans out through `parMapNotNull`, so these are touched
                 // from several threads: a plain `var` loses updates and the numbers in
                 // the snackbar stop adding up.
-                val knownCount = java.util.concurrent.atomic.AtomicInteger()
+                val duplicateCount = java.util.concurrent.atomic.AtomicInteger()
                 val restoredCount = java.util.concurrent.atomic.AtomicInteger()
+                // One gallery can sit in several locations at once. Only the first
+                // directory found for a gallery stands for the list entry; every later
+                // one is a duplicate of it, and counts as one whether or not the list
+                // already had the entry. Counting directories instead reported one
+                // restore and no duplicates for three copies of one gallery, and three
+                // duplicates once the list had the entry.
+                val seenGids = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
                 suspend fun getRestoreItem(file: Path): RestoreItem? {
                     // An SMB candidate was listed through the client, so it is
                     // already known to be a directory; asking `file.isDirectory`
@@ -497,11 +504,13 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     return runSuspendCatching {
                         val (gid, token) = (if (smb != null) readSmbIds(smb) else readPathIds(file)) ?: return null
                         val dirname = file.name
+                        if (!seenGids.add(gid)) {
+                            duplicateCount.incrementAndGet()
+                            return null
+                        }
                         if (DownloadManager.containDownloadInfo(gid)) {
                             // Already in the list, so there is nothing to add: record
-                            // where its directory is (this scan is what knows) and
-                            // count it as a duplicate for the report.
-                            knownCount.incrementAndGet()
+                            // where its directory is (this scan is what knows).
                             DownloadManager.recordDownloadDir(gid, dirname, location)
                             return null
                         }
@@ -541,7 +550,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     val result = candidates.parMapNotNull(concurrency = 4) { getRestoreItem(it) }.also {
                         fillGalleryListByApi(it, EhUrl.referer)
                     }
-                    if (result.isEmpty() && knownCount.get() == 0) {
+                    if (result.isEmpty() && duplicateCount.get() == 0) {
                         launchSnackbar(RESTORE_NOT_FOUND)
                     } else {
                         // The write-back fans out over every restored directory. Each
@@ -560,7 +569,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                                 SpiderDen(it.galleryInfo, it.dirname, it.location).writeComicInfo(false)
                             }
                         }
-                        launchSnackbar(RESTORE_COUNT_MSG(restoredCount.get(), knownCount.get()))
+                        launchSnackbar(RESTORE_COUNT_MSG(restoredCount.get(), duplicateCount.get()))
                     }
                 }.onFailure {
                     logcat(it)
