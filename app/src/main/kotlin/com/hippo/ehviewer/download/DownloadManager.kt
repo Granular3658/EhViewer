@@ -311,6 +311,14 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
     }
 
     suspend fun restoreDownload(galleryInfo: BaseGalleryInfo, dirname: String, location: String? = null) {
+        // Already known: the caller has just recorded the directory on the entry that
+        // is already in the list (`recordDownloadDir`), so there is nothing to add.
+        // Inserting a second entry is not harmless -- `insertWith` never replaces an
+        // equal element, and the downloads screen renders this list with
+        // `key = { it.gid }`, so two entries for one gid make it throw. Same guard as
+        // `addDownload` uses.
+        if (containDownloadInfo(galleryInfo.gid)) return
+
         val info = DownloadInfo(galleryInfo.asEntity(), dirname, location)
         info.state = DownloadInfo.STATE_NONE
 
