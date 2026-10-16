@@ -206,9 +206,19 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
     )
     val hint = stringResource(R.string.search_bar_hint, title)
     val list = if (DownloadManager.isInitialized) {
+        // The list handed to the Lazy layout has to keep its identity. `items(list, …)`
+        // captures it and indexes it from the interval content, while the layout's
+        // measured items come from the previous composition: replacing the list object
+        // leaves the two out of step for a frame, and the query then indexes the new,
+        // shorter list with an old index. Deleting every download made the list empty
+        // and that query threw `IndexOutOfBoundsException: index: 1, size: 0`. Updating
+        // one snapshot list in place keeps the measurements and the content it queries
+        // in step, whatever the filter and the sort change.
+        val filtered = remember { mutableStateListOf<DownloadInfo>() }
         remember(filterState, invalidateKey) {
-            DownloadManager.downloadInfoList.filterTo(mutableStateListOf()) { info ->
-                filterState.take(info)
+            filtered.apply {
+                clear()
+                addAll(DownloadManager.downloadInfoList.filter { info -> filterState.take(info) })
             }.also {
                 launch {
                     delay(200)
