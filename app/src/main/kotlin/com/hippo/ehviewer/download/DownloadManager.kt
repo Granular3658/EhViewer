@@ -951,20 +951,21 @@ val writableDownloadLocations: List<Path>
  * Resolved per-download and cached: the naive version performed a filesystem stat
  * per list item per recomposition, on the main thread.
  *
- * The location the download was recorded in is asked first, and on its own. Going
- * through every configured location instead means asking a local provider whether
- * it holds a directory that in fact lives on a share -- it answers with a
- * missing-file error, which is what a `FileSystemProvider` logging
- * "Failed to determine if primary:eh/<name> is child of primary:eh" is -- and
- * taking whichever location happens to hold a directory of the same name, rather
- * than the one the download is actually in.
+ * Only the location the download was recorded in is asked, and on its own. Probing
+ * every configured location instead costs a stat per location per download -- for a
+ * share that is a round trip of unknown latency -- and asking a local provider
+ * whether it holds a directory that in fact lives on a share makes it answer with a
+ * missing-file error, which it writes to the parcel and logs as
+ * `FileSystemProvider.isChildDocument` / `Writing exception to parcel`, once per
+ * download. A download whose location was never recorded falls back to the default
+ * location: the restore scan is what records an old download's location, and until
+ * it has run there is nothing to tell the candidates apart by.
  */
 val DownloadInfo.downloadDir: Path?
     get() = dirname?.let { name ->
         val key = "${location.orEmpty()}/$name"
         downloadDirCache[key] ?: run {
             val resolved = recordedLocationPath(location)?.let { it / name }
-                ?: writableDownloadLocations.firstNotNullOfOrNull { loc -> (loc / name).takeIf { it.isDirectory } }
                 ?: (defaultDownloadLocation / name)
             downloadDirCache[key] = resolved
             resolved
