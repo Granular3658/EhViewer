@@ -19,6 +19,13 @@ than by a number: `list.chunked(25).parMap { ... }` cannot exceed 25 no matter
 what the list holds. Writing `concurrency = 25` there would be noise; writing the
 reason is not.
 
+The same hazard has a second half. A fan-out whose bodies each open an SMB stream
+has to stay inside the stream cap (`MAX_STREAMS` in `SmbProvider`), because the
+native archive writer drains the descriptors it was handed **in order**: a
+fan-out wider than the cap leaves it waiting on a stream that cannot start until
+the ones it is not reading have finished. That is a deadlock rather than a slow
+path, so the two constants are checked against each other here as well.
+
 Run from the repository root:  python3 scripts/check_par_fanout.py
 """
 
@@ -33,6 +40,11 @@ CALL = re.compile(r"\b(parMap|parMapNotNull|parMapIndexed|parForEach|parForEachI
 BOUNDED = re.compile(r"\bconcurrency\s*=")
 JUSTIFIED = re.compile(r"//\s*unbounded\s*:")
 LOOKAHEAD = 4  # the argument list may be broken across lines
+
+# The two constants that have to stay ordered: how many SMB streams may be open
+# at once, and the widest fan-out that opens them.
+MAX_STREAMS = re.compile(r"const val MAX_STREAMS\s*=\s*(\d+)")
+ARCHIVE_CHUNK = re.compile(r"const val ARCHIVE_CHUNK\s*=\s*(\d+)")
 
 
 def is_comment(line: str) -> bool:
@@ -97,21 +109,55 @@ def check(path: Path) -> list[tuple[int, str]]:
     return findings
 
 
+def constant(pattern: re.Pattern[str]) -> int | None:
+    """The value of a `const val` in the Kotlin sources, if it is declared anywhere."""
+    for path in kotlin_sources():
+        match = pattern.search(path.read_text(encoding="utf-8"))
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def check_stream_cap() -> list[str]:
+    """The stream cap has to be wider than the fan-out it is expected to serve.
+
+    A constant that cannot be found is a failure rather than a pass: a rename
+    would otherwise take the check with it, silently.
+    """
+    cap = constant(MAX_STREAMS)
+    fanout = constant(ARCHIVE_CHUNK)
+    if cap is None or fanout is None:
+        missing = " and ".join(name for name, value in (("MAX_STREAMS", cap), ("ARCHIVE_CHUNK", fanout)) if value is None)
+        return [f"{missing} not found under {', '.join(ROOTS)}, so this check cannot run"]
+    if cap <= fanout:
+        return [f"MAX_STREAMS is {cap} and ARCHIVE_CHUNK is {fanout}: the cap must be greater, or the archive writer deadlocks waiting on a stream its own fan-out cannot start"]
+    return []
+
+
 def main() -> int:
     failures: list[str] = []
     for path in kotlin_sources():
         for line_number, text in check(path):
             failures.append(f"{path}:{line_number}: {text}")
+    cap_failures = check_stream_cap()
 
-    if not failures:
+    if not failures and not cap_failures:
         return 0
 
-    print("Unbounded parallel fan-out. Name `concurrency = ...`, or say why it cannot grow:", file=sys.stderr)
-    print(file=sys.stderr)
-    for failure in failures:
-        print(f"  {failure}", file=sys.stderr)
-    print(file=sys.stderr)
-    print(f"{len(failures)} call(s) to fix.", file=sys.stderr)
+    if failures:
+        print("Unbounded parallel fan-out. Name `concurrency = ...`, or say why it cannot grow:", file=sys.stderr)
+        print(file=sys.stderr)
+        for failure in failures:
+            print(f"  {failure}", file=sys.stderr)
+        print(file=sys.stderr)
+        print(f"{len(failures)} call(s) to fix.", file=sys.stderr)
+
+    if cap_failures:
+        print("SMB stream cap out of step with the fan-out it serves:", file=sys.stderr)
+        print(file=sys.stderr)
+        for failure in cap_failures:
+            print(f"  {failure}", file=sys.stderr)
+
     return 1
 
 
