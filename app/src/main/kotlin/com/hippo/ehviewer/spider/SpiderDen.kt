@@ -427,7 +427,13 @@ class SpiderDen(val info: GalleryInfo) {
                 }
                 comicInfoFile.openFileDescriptor("r")
             }
-            val arcFd = closeable { file.openFileDescriptor("rw") }
+            // `rwt`, not `rw`: AOSP's `parseMode` maps "rw" to O_RDWR|O_CREAT with
+            // no O_TRUNC, so rewriting a shorter archive into a file that already
+            // has content leaves the old tail behind -- and a zip reader searching
+            // backwards for the end-of-central-directory finds the stale one, i.e.
+            // a damaged archive. "rwt" truncates on open, which is what a writer
+            // that starts at offset 0 needs.
+            val arcFd = closeable { file.openFileDescriptor("rwt") }
             val writer = openWriter(arcFd.fd, format)
             val pages = loader.size
             var written = 0
@@ -537,7 +543,9 @@ class SpiderDen(val info: GalleryInfo) {
             ?.let { location -> runCatching { SmbRepository.list(location) }.getOrNull() }
             ?.associate { it.name to it.size }
             .orEmpty()
-        val arcFd = closeable { file.openFileDescriptor("rw") }
+        // "rwt": a writer that starts at offset 0 has to truncate, or a shorter
+        // rewrite keeps the previous archive's tail. See the note in repack().
+        val arcFd = closeable { file.openFileDescriptor("rwt") }
         val writer = openWriter(arcFd.fd, format)
         var written = 0
         try {
