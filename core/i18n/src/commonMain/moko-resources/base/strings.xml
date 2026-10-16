@@ -404,7 +404,7 @@
     <string name="settings_download_restore_download_items_summary">Restore all download items in download location</string>
     <string name="settings_download_restore_not_found">Not found download items to restore</string>
     <string name="settings_download_restore_failed">Restore failed</string>
-    <string name="settings_download_restore_successfully_deduped">Restored %1$d items (%2$d duplicates)</string>
+    <string name="settings_download_restore_successfully">Restored %1$d items (%2$d duplicates)</string>
     <string name="settings_download_clean_redundancy">Clear download redundancy</string>
     <string name="settings_download_clean_redundancy_summary">Remove gallery images which are not in download list but in download location</string>
     <string name="settings_download_clean_redundancy_no_redundancy">No redundancy</string>

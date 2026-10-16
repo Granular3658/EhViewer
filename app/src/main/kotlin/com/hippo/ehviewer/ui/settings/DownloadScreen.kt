@@ -615,7 +615,7 @@ private class RestoreItem(
     val galleryInfo: BaseGalleryInfo = BaseGalleryInfo(gid, token),
 ) : GalleryInfo by galleryInfo
 private val RESTORE_NOT_FOUND = appCtx.getString(R.string.settings_download_restore_not_found)
-private val RESTORE_COUNT_MSG = { restored: Int, duplicates: Int -> appCtx.getString(R.string.settings_download_restore_successfully_deduped, restored, duplicates) }
+private val RESTORE_COUNT_MSG = { restored: Int, duplicates: Int -> appCtx.getString(R.string.settings_download_restore_successfully, restored, duplicates) }
 private val NO_REDUNDANCY = appCtx.getString(R.string.settings_download_clean_redundancy_no_redundancy)
 private val CLEAR_REDUNDANCY_DONE = { cnt: Int -> appCtx.getString(R.string.settings_download_clean_redundancy_done, cnt) }
 private val FINAL_CLEAR_REDUNDANCY_MSG = { cnt: Int -> if (cnt == 0) NO_REDUNDANCY else CLEAR_REDUNDANCY_DONE(cnt) }

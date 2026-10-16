@@ -344,6 +344,7 @@
     <string name="settings_download_restore_download_items_summary">ダウンロードディレクトリのダウンロードタスクを復元します</string>
     <string name="settings_download_restore_not_found">復元可能なダウンロードが見つかりません</string>
     <string name="settings_download_restore_failed">復元できませんでした</string>
+    <string name="settings_download_restore_successfully">%1$d 件のタスクが復元されました（%2$d 件の重複）</string>
     <string name="settings_download_clean_redundancy">ダウンロードフォルダの不要なファイルを整理</string>
     <string name="settings_download_clean_redundancy_summary">ダウンロードディレクトリからダウンロードタスクにない画像ファイルを削除します</string>
     <string name="settings_download_clean_redundancy_no_redundancy">不要なファイルが見つかりませんでした</string>
