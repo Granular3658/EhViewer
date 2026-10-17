@@ -79,8 +79,17 @@ import moe.tarsin.snackbar
 
 private const val DEFAULT_SMB_PORT = 445
 
-/** Extensions [navToReader] knows how to open as a gallery. */
-private val ARCHIVE_SUFFIXES = listOf(".zip", ".cbz", ".dwarfs")
+/**
+ * Extensions [navToReader] knows how to open as a gallery.
+ *
+ * `.rar` and `.7z` go through the same libarchive pull model `.zip` does, so
+ * they open off a share without any new C. They have no central directory to
+ * jump by, though: listing one walks every entry, and a solid archive has to
+ * decompress as it walks, so opening one from a share reads linearly through
+ * the file. The suffix is allowed for that reason, not because the read is
+ * cheap.
+ */
+private val ARCHIVE_SUFFIXES = listOf(".zip", ".cbz", ".dwarfs", ".rar", ".7z")
 
 /**
  * Extensions the reader decodes: the list the share provider maps to image

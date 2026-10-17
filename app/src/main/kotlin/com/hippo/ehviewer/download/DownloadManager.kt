@@ -1006,10 +1006,10 @@ private fun recordedLocationPath(location: String?): Path? = location?.let { sav
  * The gallery's single-file archive, if it has one.
  *
  * An image comes first: it is the one a user built themselves, and if both are
- * somehow present the one they made deliberately is the one to read. A `.zip`
- * is last because it is the only one this app never writes.
+ * somehow present the one they made deliberately is the one to read. `.zip`,
+ * `.rar` and `.7z` are last because they are the ones this app never writes.
  */
 val DownloadInfo.archiveFile get() = downloadDir?.run {
-    find("$gid.dwarfs") ?: find("$gid.cbz") ?: find("$gid.zip")
+    find("$gid.dwarfs") ?: find("$gid.cbz") ?: find("$gid.zip") ?: find("$gid.rar") ?: find("$gid.7z")
 }
 val GalleryInfo.tempDownloadDir get() = AppConfig.externalTempPersistDir?.let { it / "$gid" }
