@@ -404,6 +404,11 @@ static archive_ctx *archive_alloc_ctx() {
     ctx->using = 1;
     archive_read_support_format_tar(ctx->arc);
     archive_read_support_format_7zip(ctx->arc);
+    /* RAR4 and RAR5 are separate readers in libarchive, and RAR4 files are still
+     * common enough to meet. RAR4 has no index to jump by and its solid blocks
+     * decompress from the start, so a late page costs the walk -- the same cost
+     * the other formats already pay over a share. */
+    archive_read_support_format_rar(ctx->arc);
     archive_read_support_format_rar5(ctx->arc);
     archive_read_support_format_zip(ctx->arc);
     archive_read_support_filter_gzip(ctx->arc);
