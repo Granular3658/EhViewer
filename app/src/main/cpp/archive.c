@@ -327,14 +327,19 @@ static size_t archive_map_entries_index(archive_ctx *ctx, bool sort) {
                 entries_capacity = entries_capacity ? entries_capacity * 2 : 256;
                 entries = realloc(entries, entries_capacity * sizeof(entry));
             }
+            /* The whole struct, not just the fields this function happens to
+             * set: `addr` is written only by fill_entry_zero_copy, and that call
+             * stops happening as soon as the first entry says the archive cannot
+             * be zero-copied. Every later entry would then keep whatever the
+             * realloc'd slot held -- and a stale decode buffer there reads as a
+             * mapped page, so extractToByteBuffer hands that garbage address to
+             * Java as a direct buffer. */
+            memset(&entries[count], 0, sizeof(entry));
             entries[count].filename = strdup(name);
             entries[count].index = count;
             ssize_t size = archive_entry_size(ctx->entry);
             max_file_size = max(size, max_file_size);
             entries[count].size = size;
-            entries[count].offset = 0;
-            entries[count].csize = 0;
-            entries[count].method = 0;
             // We don't expect zero copy if first content can't do zero copy
             if (zero_copy) zero_copy = fill_entry_zero_copy(ctx->arc, &entries[count]);
             count++;
