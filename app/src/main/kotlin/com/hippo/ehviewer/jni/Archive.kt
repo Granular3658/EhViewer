@@ -8,6 +8,7 @@ external fun openArchiveSmb(handle: Long, size: Long, sortEntries: Boolean): Int
 external fun extractToByteBuffer(index: Int): ByteBuffer?
 external fun extractToFd(index: Int, fd: Int): Boolean
 external fun getExtension(index: Int): String
+external fun lastArchiveError(): String?
 external fun needPassword(): Boolean
 external fun providePassword(str: String): Boolean
 external fun closeArchive()

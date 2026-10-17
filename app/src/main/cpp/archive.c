@@ -25,6 +25,7 @@
 #include <pthread.h>
 #include <sys/mman.h>
 #include <limits.h>
+#include <stdio.h>
 #include <unistd.h>
 
 #include <jni.h>
@@ -72,6 +73,16 @@ static void *decode_buffer[MAX_PARALLEL_DECOMP];
 static bool need_encrypt = false;
 static char *passwd = NULL;
 static void *archiveAddr = MAP_FAILED;
+
+/* The last thing libarchive said, so the reader can show why an archive opened
+ * with fewer entries than it holds -- a solid RAR4 stops at the first one, and
+ * "1 page" with no reason reads as the file being wrong. */
+static char last_error[256];
+
+static void remember_archive_error(struct archive *arc) {
+    const char *message = archive_error_string(arc);
+    snprintf(last_error, sizeof(last_error), "%s", message ? message : "unknown archive error");
+}
 static size_t archiveSize = 0;
 static bool archiveIsSmb = false;
 static uint64_t archiveSmbHandle = 0;
@@ -320,7 +331,8 @@ static size_t archive_map_entries_central_dir(bool sort) {
 static size_t archive_map_entries_index(archive_ctx *ctx, bool sort) {
     size_t count = 0;
     bool zero_copy = true;
-    while (archive_read_next_header(ctx->arc, &ctx->entry) == ARCHIVE_OK) {
+    int status;
+    while ((status = archive_read_next_header(ctx->arc, &ctx->entry)) == ARCHIVE_OK) {
         const char *name = archive_entry_pathname(ctx->entry);
         if (archive_entry_is_file(ctx->entry) && filename_is_playable_file(name)) {
             if (count == entries_capacity) {
@@ -341,9 +353,18 @@ static size_t archive_map_entries_index(archive_ctx *ctx, bool sort) {
             max_file_size = max(size, max_file_size);
             entries[count].size = size;
             // We don't expect zero copy if first content can't do zero copy
-            if (zero_copy) zero_copy = fill_entry_zero_copy(ctx->arc, &entries[count]);
+            /* Zero copy can only be found where the archive is mapped, so
+             * probing without a mapping only consumes the first entry's data
+             * block for nothing. */
+            if (zero_copy && archiveAddr != MAP_FAILED)
+                zero_copy = fill_entry_zero_copy(ctx->arc, &entries[count]);
             count++;
         }
+    }
+    if (status != ARCHIVE_EOF) {
+        LOGE("archive walk stopped at entry %zu: %d %s", count, status,
+             archive_error_string(ctx->arc) ? archive_error_string(ctx->arc) : "(no message)");
+        remember_archive_error(ctx->arc);
     }
     if (sort) qsort(entries, count, sizeof(entry), compare_entries);
     return count;
@@ -400,6 +421,7 @@ static void archive_release_ctx(archive_ctx *ctx) {
 
 static archive_ctx *archive_alloc_ctx() {
     archive_ctx *ctx = calloc(1, sizeof(archive_ctx));
+    last_error[0] = 0;
     ctx->arc = archive_read_new();
     ctx->using = 1;
     archive_read_support_format_tar(ctx->arc);
@@ -440,6 +462,7 @@ static archive_ctx *archive_alloc_ctx() {
     }
     if (err < ARCHIVE_OK) {
         LOGE("%s%s", "Open archive failed: ", archive_error_string(ctx->arc));
+        remember_archive_error(ctx->arc);
         archive_read_free(ctx->arc);
         free(ctx);
         return NULL;
@@ -702,6 +725,13 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_extractToByteBuffer(JNIEnv *env, jclass th
         }
     }
     return 0;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_hippo_ehviewer_jni_ArchiveKt_lastArchiveError(JNIEnv *env, jclass thiz) {
+    EH_UNUSED(thiz);
+    if (!last_error[0]) return NULL;
+    return (*env)->NewStringUTF(env, last_error);
 }
 
 JNIEXPORT void JNICALL

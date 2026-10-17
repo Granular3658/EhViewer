@@ -15,6 +15,9 @@
  */
 package com.hippo.ehviewer.gallery
 
+import android.os.Handler
+import android.os.Looper
+import android.widget.Toast
 import arrow.autoCloseScope
 import com.ehviewer.core.files.isSmb
 import com.ehviewer.core.files.openFileDescriptor
@@ -28,6 +31,7 @@ import com.hippo.ehviewer.jni.closeArchive
 import com.hippo.ehviewer.jni.extractToByteBuffer
 import com.hippo.ehviewer.jni.extractToFd
 import com.hippo.ehviewer.jni.getExtension
+import com.hippo.ehviewer.jni.lastArchiveError
 import com.hippo.ehviewer.jni.needPassword
 import com.hippo.ehviewer.jni.openArchive
 import com.hippo.ehviewer.jni.openArchiveSmb
@@ -40,6 +44,7 @@ import com.hippo.ehviewer.util.displayName
 import kotlinx.coroutines.coroutineScope
 import moe.tarsin.kt.install
 import okio.Path
+import splitties.init.appCtx
 
 typealias PasswdInvalidator = (String) -> Boolean
 typealias PasswdProvider = suspend (PasswdInvalidator) -> String
@@ -74,7 +79,15 @@ suspend inline fun <T> useArchivePageLoader(
                 { _, _ -> closeArchive() },
             )
         }
-        check(size > 0) { "Archive have no content!" }
+        check(size > 0) { lastArchiveError() ?: "Archive have no content!" }
+        // An archive that opened with fewer entries than it holds says why here:
+        // a solid RAR4 stops at the first one, and "1 page" with no reason reads
+        // as the file being wrong rather than the format being unreadable.
+        lastArchiveError()?.let { reason ->
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(appCtx, reason, Toast.LENGTH_LONG).show()
+            }
+        }
         if (needPassword() && archivePasswds.none(::providePassword)) {
             archivePasswds += passwdProvider(::providePassword)
         }
