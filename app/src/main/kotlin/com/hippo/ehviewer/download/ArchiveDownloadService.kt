@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.text.format.Formatter
+import android.util.Log
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -68,6 +69,8 @@ import okio.Path
  * next attempt asks the server for the rest of it, so stopping is cheap.
  */
 class ArchiveDownloadService : Service(), CoroutineScope {
+    private val tag = "ArchiveDownloadService"
+
     override val coroutineContext = Dispatchers.IO + SupervisorJob()
 
     private val notifyManager by lazy { NotificationManagerCompat.from(this) }
@@ -177,13 +180,14 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         res: String,
         isHath: Boolean,
         useCachedLink: Boolean = true,
+        useRange: Boolean = true,
     ): Path? {
         val spiderDen = SpiderDen(galleryDetail).apply { initDownloadDir() }
         val dir = spiderDen.downloadDir ?: return null
         val part = dir.resolve("$gid.zip.part")
         // Whatever is already there is the start of the same file: ask for the
         // rest instead of downloading it again.
-        val existing = SystemFileSystem.metadataOrNull(part)?.size ?: 0L
+        val existing = if (useRange) SystemFileSystem.metadataOrNull(part)?.size ?: 0L else 0L
         // Re-downloading within a week costs nothing, so a resume reuses the link
         // it already has instead of asking for another one: every request counts
         // against the weekly limit on how often an archive may be fetched again.
@@ -193,11 +197,12 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         try {
             download(galleryDetail, gid, url, part, existing, fromCache = cached != null)
         } catch (_: StaleLinkException) {
-            // A link the server no longer honours is worthless. Ask for a fresh one
-            // and try once more, rather than failing a download the user already
-            // paid for.
+            // The server would not serve this link, or would not serve it for a
+            // range. Either way the resume cannot continue: forget the link, ask
+            // for a fresh one and take the file from the start rather than failing
+            // a download the user has already paid for.
             forgetUrl(dir, gid)
-            return prepare(galleryDetail, gid, res, isHath, useCachedLink = false)
+            return prepare(galleryDetail, gid, res, isHath, useCachedLink = false, useRange = false)
         }
         return part
     }
@@ -221,7 +226,11 @@ class ArchiveDownloadService : Service(), CoroutineScope {
             }
             if (existing > 0) header("Range", "bytes=$existing-")
         }.execute { response ->
+            Log.d(tag, "archive $gid: ${response.status}, range=${existing > 0}, cached=$fromCache, url=$url")
             if (fromCache && response.status.value in 400..499) throw StaleLinkException(response.status)
+            // A range this server will not serve is not a reason to lose the whole
+            // download: retry from the start with a fresh link.
+            if (existing > 0 && response.status.value in 400..499) throw StaleLinkException(response.status)
             val resuming = existing > 0 && response.status == HttpStatusCode.PartialContent
             if (existing > 0 && !resuming) part.delete()
             val length = response.contentLength() ?: 0L
