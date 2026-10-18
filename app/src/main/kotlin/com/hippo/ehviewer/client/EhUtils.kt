@@ -45,6 +45,8 @@ import com.materialkolor.hct.Hct
 import com.materialkolor.ktx.from
 import com.materialkolor.ktx.toColor
 import com.materialkolor.utils.ColorUtils.lstarFromArgb
+import io.ktor.client.plugins.HttpTimeoutConfig
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.prepareRequest
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.contentLength
@@ -217,10 +219,24 @@ object EhUtils {
         try {
             ktorClient.prepareRequest(url) {
                 applyEhConfig(EhUrl.getGalleryDetailUrl(gid, galleryDetail.token), EhUrl.origin)
+                // An archive is tens of megabytes; the client's ten second request
+                // timeout is right for a page and wrong for a file. Bound the gap
+                // between bytes instead of the whole transfer.
+                timeout {
+                    requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
+                    socketTimeoutMillis = 60_000
+                }
             }.execute { response ->
                 Log.d(TAG, "archive $gid: ${response.status}, length=${response.contentLength()}, url=$url")
                 response.status.ensureSuccess()
                 response.bodyAsChannel().copyTo(part)
+                // A 200 is not enough: while the archive is still being prepared
+                // the archiver answers with a page saying so, and that page must
+                // not become the gallery's archive.
+                val head = SystemFileSystem.read(part) { readByteArray(2) }
+                check(head.size == 2 && head[0] == 'P'.code.toByte() && head[1] == 'K'.code.toByte()) {
+                    "The archiver returned a page instead of an archive"
+                }
                 Log.d(TAG, "archive $gid: copied ${SystemFileSystem.metadataOrNull(part)?.size} to $part")
             }
             part moveTo target
