@@ -280,7 +280,7 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     override fun sink(file: Path, mustCreate: Boolean): Sink = when {
         file.isSmb || file.isPhysicalFile() -> file.outputStream().sink()
         else -> (
-            contentResolver.openOutputStream(file.toUri(), "wt")
+            contentResolver.openOutputStream(ensureDocument(file), "wt")
                 ?: throw FileNotFoundException("Failed to open $file for writing")
             ).sink()
     }
@@ -313,9 +313,25 @@ class AndroidFileSystem(context: Context) : FileSystem() {
         // ParcelFileDescriptor handed to FileOutputStream is not owned by it, and
         // when the descriptor is collected its finalizer closes the fd under the
         // stream -- which is an EBADF part way through a long transfer.
-        val stream = contentResolver.openOutputStream(file.toUri(), "wt")
+        val stream = contentResolver.openOutputStream(ensureDocument(file), "wt")
             ?: throw FileNotFoundException("Failed to open $file for writing")
         return stream.asSink()
+    }
+
+    /**
+     * The URI of a document that exists, creating it if it does not.
+     *
+     * Opening a content URI does not create the document behind it. The provider
+     * first checks that the document belongs to the tree, and for one that does
+     * not exist yet that check throws `Failed to determine if ... is child of ...`
+     * rather than answering false. A directory is created the same way, and a new
+     * file has to be as well.
+     */
+    private fun ensureDocument(file: Path): Uri {
+        if (metadataOrNull(file) != null) return file.toUri()
+        val parent = file.parent ?: throw FileNotFoundException("No parent for $file")
+        return DocumentsContract.createDocument(contentResolver, parent.toUri(), "application/octet-stream", file.name)
+            ?: throw FileNotFoundException("Failed to create $file")
     }
 
     /**
