@@ -16,6 +16,7 @@
 package com.hippo.ehviewer.client
 
 import android.content.Context
+import android.util.Log
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -25,6 +26,9 @@ import androidx.compose.runtime.Stable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import arrow.core.memoize
+import com.ehviewer.core.files.SystemFileSystem
+import com.ehviewer.core.files.delete
+import com.ehviewer.core.files.moveTo
 import com.ehviewer.core.model.GalleryDetail
 import com.ehviewer.core.model.GalleryInfo
 import com.ehviewer.core.network.EhCookieStore
@@ -43,7 +47,9 @@ import com.materialkolor.ktx.toColor
 import com.materialkolor.utils.ColorUtils.lstarFromArgb
 import io.ktor.client.request.prepareRequest
 import io.ktor.client.statement.bodyAsChannel
-import okio.FileSystem
+import io.ktor.http.contentLength
+
+private const val TAG = "EhUtils"
 
 object EhUtils {
     const val NONE = -1 // Use it for homepage
@@ -212,12 +218,15 @@ object EhUtils {
             ktorClient.prepareRequest(url) {
                 applyEhConfig(EhUrl.getGalleryDetailUrl(gid, galleryDetail.token), EhUrl.origin)
             }.execute { response ->
+                Log.d(TAG, "archive $gid: ${response.status}, length=${response.contentLength()}, url=$url")
                 response.status.ensureSuccess()
                 response.bodyAsChannel().copyTo(part)
+                Log.d(TAG, "archive $gid: copied ${SystemFileSystem.metadataOrNull(part)?.size} to $part")
             }
-            FileSystem.SYSTEM.atomicMove(part, target)
+            part moveTo target
+            Log.d(TAG, "archive $gid: moved to $target")
         } finally {
-            FileSystem.SYSTEM.delete(part, mustExist = false)
+            part.delete()
         }
         // The gallery is now readable from this directory; without the record the
         // file would sit on disk and the app would still go to the network.
