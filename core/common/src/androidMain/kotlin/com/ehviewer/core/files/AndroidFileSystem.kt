@@ -293,22 +293,33 @@ class AndroidFileSystem(context: Context) : FileSystem() {
         TODO("Not yet implemented")
     }
 
-    fun rawSink(file: Path) = file.outputStream().asSink()
-
     /**
-     * Opens for writing without discarding what is already there.
+     * A sink for a path that may not be a file on this device.
      *
-     * A share has to be asked for append mode explicitly: `openOutputStream`
-     * alone truncates, and an interrupted transfer would then lose the bytes it
-     * had already received instead of continuing from them.
+     * `Path.outputStream()` only understands files. A download location chosen
+     * through the document picker is a content URI, so the provider has to be
+     * asked for the stream instead.
+     *
+     * Append is not asked of the provider: several of them ignore `"wa"` and
+     * truncate, which would throw away the bytes an interrupted transfer had
+     * already received. The descriptor is opened read/write and seeked past what
+     * is there instead, which the platform does honour.
      */
-    fun rawAppendSink(file: Path): RawSink {
+    fun rawSink(file: Path, append: Boolean = false): RawSink {
         if (file.isSmb) {
-            val stream = contentResolver.openOutputStream(file.toUri(), "wa")
-                ?: throw FileNotFoundException("Failed to open SMB file for appending: $file")
+            val stream = contentResolver.openOutputStream(file.toUri(), if (append) "wa" else "w")
+                ?: throw FileNotFoundException("Failed to open SMB file for writing: $file")
             return stream.asSink()
         }
-        return FileOutputStream(file.toFile(), true).asSink()
+        if (file.isPhysicalFile()) {
+            return FileOutputStream(file.toFile(), append).asSink()
+        }
+        val fd = openFileDescriptor(file, if (append) "rw" else "rwt")
+        val out = FileOutputStream(fd.fileDescriptor)
+        if (append) {
+            out.channel.position(metadataOrNull(file)?.size ?: 0L)
+        }
+        return out.asSink()
     }
 
     fun rawSource(file: Path) = file.inputStream().asSource()

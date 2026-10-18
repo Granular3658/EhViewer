@@ -16,7 +16,7 @@ actual inline fun <T> Path.read(f: Source.() -> T) = PlatformSystemFileSystem.ra
 
 actual inline fun <T> Path.write(f: Sink.() -> T) = PlatformSystemFileSystem.rawSink(this).buffered().use(f)
 
-actual inline fun <T> Path.append(f: Sink.() -> T) = PlatformSystemFileSystem.rawAppendSink(this).buffered().use(f)
+actual inline fun <T> Path.append(f: Sink.() -> T) = PlatformSystemFileSystem.rawSink(this, append = true).buffered().use(f)
 
 val Path.isSmb
     get() = toString().startsWith("smb:/", ignoreCase = true)
