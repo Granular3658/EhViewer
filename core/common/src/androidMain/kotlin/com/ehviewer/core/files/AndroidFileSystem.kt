@@ -13,7 +13,6 @@ import android.system.Int64Ref
 import android.system.Os
 import android.webkit.MimeTypeMap
 import androidx.core.database.getLongOrNull
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import kotlinx.io.RawSink
 import kotlinx.io.RawSource
@@ -280,12 +279,18 @@ class AndroidFileSystem(context: Context) : FileSystem() {
 
     override fun sink(file: Path, mustCreate: Boolean): Sink = when {
         file.isSmb || file.isPhysicalFile() -> file.outputStream().sink()
-        else -> FileOutputStream(openFileDescriptor(file, "rwt").fileDescriptor).sink()
+        else -> (
+            contentResolver.openOutputStream(file.toUri(), "wt")
+                ?: throw FileNotFoundException("Failed to open $file for writing")
+            ).sink()
     }
 
     override fun source(file: Path): Source = when {
         file.isSmb || file.isPhysicalFile() -> file.inputStream().source()
-        else -> FileInputStream(openFileDescriptor(file, "r").fileDescriptor).source()
+        else -> (
+            contentResolver.openInputStream(file.toUri())
+                ?: throw FileNotFoundException("Failed to open $file for reading")
+            ).source()
     }
 
     /**
@@ -304,7 +309,13 @@ class AndroidFileSystem(context: Context) : FileSystem() {
         if (file.isPhysicalFile()) {
             return FileOutputStream(file.toFile()).asSink()
         }
-        return FileOutputStream(openFileDescriptor(file, "rwt").fileDescriptor).asSink()
+        // Ask the provider for the stream rather than for a descriptor: a
+        // ParcelFileDescriptor handed to FileOutputStream is not owned by it, and
+        // when the descriptor is collected its finalizer closes the fd under the
+        // stream -- which is an EBADF part way through a long transfer.
+        val stream = contentResolver.openOutputStream(file.toUri(), "wt")
+            ?: throw FileNotFoundException("Failed to open $file for writing")
+        return stream.asSink()
     }
 
     /**
@@ -317,7 +328,9 @@ class AndroidFileSystem(context: Context) : FileSystem() {
         if (file.isSmb || file.isPhysicalFile()) {
             return file.inputStream().asSource()
         }
-        return FileInputStream(openFileDescriptor(file, "r").fileDescriptor).asSource()
+        val stream = contentResolver.openInputStream(file.toUri())
+            ?: throw FileNotFoundException("Failed to open $file for reading")
+        return stream.asSource()
     }
     fun openFileDescriptor(path: Path, mode: String): ParcelFileDescriptor {
         if (path.isSmb) {
