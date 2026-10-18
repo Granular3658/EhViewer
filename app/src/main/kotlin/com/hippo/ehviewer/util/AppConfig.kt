@@ -57,8 +57,16 @@ object AppConfig {
 
     private fun getDirInExternalAppDir(filename: String, create: Boolean = true) = externalAppDir?.run { File(this, filename).takeIf { if (create) it.ensureDirectory() else it.isDirectory } }
 
+    /**
+     * The directory downloads go to when nothing else is configured.
+     *
+     * Created on demand: a null here used to leave `downloadLocation` as the
+     * empty path, which resolves to `.` and makes every `mkdirs()` fail relative
+     * to the process working directory. A fresh install has no such directory
+     * yet, so the first download of every install failed.
+     */
     val defaultDownloadDir: File?
-        get() = getDirInExternalAppDir(DOWNLOAD, false)
+        get() = getDirInExternalAppDir(DOWNLOAD)
     val externalTempPersistDir
         get() = getDirInExternalAppDir(TEMP)?.toOkioPath()
     val externalParseErrorDir: File?

@@ -72,6 +72,7 @@ import logcat.LogPriority
 import okio.Path
 import okio.Path.Companion.toOkioPath
 import okio.Path.Companion.toPath
+import splitties.init.appCtx
 
 object DownloadManager : OnSpiderListener, CoroutineScope {
     override val coroutineContext = Dispatchers.IO + Job()
@@ -869,6 +870,9 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
     private const val TAG = "DownloadManager"
 }
 
+/** Where downloads go when even the external directory is unavailable. */
+private const val DOWNLOAD_FALLBACK = "download"
+
 var downloadLocation: Path
     get() = with(Settings) {
         if (downloadScheme != null) {
@@ -880,7 +884,9 @@ var downloadLocation: Path
                 encodedFragment(downloadFragment)
             }.build().toOkioPath()
         } else {
-            AppConfig.defaultDownloadDir?.toOkioPath() ?: "".toPath()
+            // Never the empty path: it resolves to `.`, and a directory created
+            // relative to the process working directory is not writable.
+            AppConfig.defaultDownloadDir?.toOkioPath() ?: (appCtx.filesDir.toOkioPath() / DOWNLOAD_FALLBACK)
         }
     }
     set(value) = with(value.toUri()) {
