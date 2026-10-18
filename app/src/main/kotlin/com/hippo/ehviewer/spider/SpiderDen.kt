@@ -361,15 +361,26 @@ class SpiderDen(val info: GalleryInfo) {
         val dir = downloadDir
         val archived = saveAsCbz && archiveWritten && dir?.find(archiveName) != null
         if (archived) {
-            dir.list().parMap(concurrency = 10) {
-                if (it.name.matches(FileNameRegex)) {
-                    it.delete()
-                }
-            }
-            (dir / SpiderQueen.SPIDER_INFO_FILENAME).delete()
-            tempDownloadDir?.delete()
+            removeLooseImages()
         }
         return archived
+    }
+
+    /**
+     * Removes the loose images, the spider info and the staging directory.
+     *
+     * Called once an archive holds the whole gallery: the reader prefers the
+     * archive, so the loose images are never opened again and only take space.
+     */
+    suspend fun removeLooseImages() {
+        val dir = downloadDir ?: return
+        dir.list().parMap(concurrency = 10) {
+            if (it.name.matches(FileNameRegex)) {
+                it.delete()
+            }
+        }
+        (dir / SpiderQueen.SPIDER_INFO_FILENAME).delete()
+        tempDownloadDir?.delete()
     }
 
     /**

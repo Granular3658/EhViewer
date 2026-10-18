@@ -342,6 +342,24 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
     }
 
     /**
+     * Marks a gallery as downloaded because its archive is complete.
+     *
+     * The archive holds every page, so there is nothing left to fetch: leaving the
+     * state alone would keep the gallery in the list looking unfinished and let the
+     * downloader start fetching pages the archive already has.
+     */
+    suspend fun markArchiveDownloaded(gid: Long, pages: Int) {
+        val info = mAllInfoMap[gid] ?: return
+        info.finished = pages
+        info.downloaded = pages
+        info.total = pages
+        info.legacy = 0
+        info.state = DownloadInfo.STATE_FINISH
+        EhDB.putDownloadInfo(info)
+        mutableNotifyFlow.emit(info)
+    }
+
+    /**
      * Records a download's directory: its name, and the location holding it.
      *
      * Written in the database and in the list already in memory, because the two

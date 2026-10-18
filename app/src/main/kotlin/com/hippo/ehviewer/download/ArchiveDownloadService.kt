@@ -30,6 +30,7 @@ import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhEngine
 import com.hippo.ehviewer.client.EhUrl
+import com.hippo.ehviewer.client.EhUtils
 import com.hippo.ehviewer.client.applyEhConfig
 import com.hippo.ehviewer.client.parser.Archive
 import com.hippo.ehviewer.spider.SpiderDen
@@ -72,6 +73,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
     private val notifyManager by lazy { NotificationManagerCompat.from(this) }
     private val channelId by lazy { "$packageName.archive" }
     private var job: Job? = null
+    private var title: String = ""
 
     override fun onCreate() {
         notifyManager.createNotificationChannel(
@@ -88,6 +90,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
                 val gid = bundle.getLong(KEY_GID)
                 val res = intent.getStringExtra(KEY_RES) ?: return stop()
                 val isHath = intent.getBooleanExtra(KEY_HATH, false)
+                title = intent.getStringExtra(KEY_TITLE).orEmpty()
                 // The notification has to exist before the work starts: a service
                 // that takes minutes to reach startForeground is killed.
                 startForegroundSafely(gid, getString(R.string.archive_download_preparing), 0, 0)
@@ -123,7 +126,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         val indeterminate = total <= 0
         return NotificationCompat.Builder(this, channelId)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle(getString(R.string.archive_download_title, gid))
+            .setContentTitle(title.ifEmpty { getString(R.string.archive_download_title, gid) })
             .setContentText(text)
             .setOngoing(true)
             .setShowWhen(false)
@@ -153,11 +156,16 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         // The gallery is readable from this directory now; without the record the
         // file sits on disk while the app still goes to the network.
         DownloadManager.restoreDownload(galleryDetail.galleryInfo, galleryDetail.downloadDirname(), EhDB.getDownloadLocation(gid))
-        if (Settings.archiveMetadata.value) {
-            SpiderDen(galleryDetail).apply {
-                initDownloadDir()
-                writeComicInfo()
-            }
+        // The archive is the whole gallery, so the download is finished. Any loose
+        // images left by an earlier attempt are now redundant as well: the reader
+        // prefers the archive and would never look at them again.
+        DownloadManager.markArchiveDownloaded(gid, galleryDetail.pages)
+        SpiderDen(galleryDetail).apply {
+            initDownloadDir()
+            if (Settings.archiveMetadata.value) writeComicInfo()
+            // Whatever loose images an earlier attempt left are now redundant: the
+            // reader prefers the archive and would never open them again.
+            removeLooseImages()
         }
         finish(gid)
     }
@@ -251,7 +259,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         }
         val notification = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(if (error == null) android.R.drawable.stat_sys_download_done else com.hippo.ehviewer.R.drawable.ic_baseline_warning_24)
-            .setContentTitle(getString(R.string.archive_download_title, gid))
+            .setContentTitle(title.ifEmpty { getString(R.string.archive_download_title, gid) })
             .setContentText(text)
             .setOngoing(false)
             .setAutoCancel(true)
@@ -274,6 +282,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         private const val KEY_GID = "gid"
         private const val KEY_RES = "res"
         private const val KEY_HATH = "hath"
+        private const val KEY_TITLE = "title"
         private const val NOTIFICATION_ID = 10
         private const val URL_TTL_SECONDS = 6 * 24 * 3600L
 
@@ -287,6 +296,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
                 .putExtra(KEY_GALLERY, bundle)
                 .putExtra(KEY_RES, archive.res)
                 .putExtra(KEY_HATH, archive.isHath)
+                .putExtra(KEY_TITLE, EhUtils.getSuitableTitle(galleryDetail))
             ContextCompat.startForegroundService(context, intent)
         }
     }
