@@ -17,7 +17,6 @@ import androidx.core.content.ContextCompat
 import androidx.savedstate.serialization.decodeFromSavedState
 import androidx.savedstate.serialization.encodeToSavedState
 import com.ehviewer.core.files.SystemFileSystem
-import com.ehviewer.core.files.append
 import com.ehviewer.core.files.delete
 import com.ehviewer.core.files.moveTo
 import com.ehviewer.core.files.read
@@ -36,14 +35,12 @@ import com.hippo.ehviewer.client.applyEhConfig
 import com.hippo.ehviewer.client.parser.Archive
 import com.hippo.ehviewer.spider.SpiderDen
 import com.hippo.ehviewer.spider.downloadDirname
+import com.hippo.ehviewer.util.ensureSuccess
 import io.ktor.client.plugins.HttpTimeoutConfig
 import io.ktor.client.plugins.timeout
-import io.ktor.client.request.header
 import io.ktor.client.request.prepareRequest
 import io.ktor.client.statement.bodyAsChannel
-import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentLength
-import io.ktor.http.isSuccess
 import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.InternalAPI
 import io.ktor.utils.io.rethrowCloseCauseIfNeeded
@@ -155,7 +152,6 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         }
         val target = part.parent!!.resolve("$gid.zip")
         part moveTo target
-        forgetUrl(part.parent!!, gid)
         // The gallery is readable from this directory now; without the record the
         // file sits on disk while the app still goes to the network.
         DownloadManager.restoreDownload(galleryDetail.galleryInfo, galleryDetail.downloadDirname(), EhDB.getDownloadLocation(gid))
@@ -174,74 +170,28 @@ class ArchiveDownloadService : Service(), CoroutineScope {
     }
 
     /** Downloads into the part file and returns it, or null when there is nothing to do. */
-    private suspend fun prepare(
-        galleryDetail: GalleryDetail,
-        gid: Long,
-        res: String,
-        isHath: Boolean,
-        useCachedLink: Boolean = true,
-        useRange: Boolean = true,
-    ): Path? {
+    private suspend fun prepare(galleryDetail: GalleryDetail, gid: Long, res: String, isHath: Boolean): Path? {
         val spiderDen = SpiderDen(galleryDetail).apply { initDownloadDir() }
         val dir = spiderDen.downloadDir ?: return null
         val part = dir.resolve("$gid.zip.part")
-        // Whatever is already there is the start of the same file: ask for the
-        // rest instead of downloading it again.
-        val existing = if (useRange) SystemFileSystem.metadataOrNull(part)?.size ?: 0L else 0L
-        // Re-downloading within a week costs nothing, so a resume reuses the link
-        // it already has instead of asking for another one: every request counts
-        // against the weekly limit on how often an archive may be fetched again.
-        val cached = if (existing > 0 && useCachedLink) cachedUrl(dir, gid) else null
-        val url = cached ?: EhEngine.downloadArchive(gid, galleryDetail.token, res, isHath)?.also { saveUrl(dir, gid, it) }
-            ?: return null
-        try {
-            download(galleryDetail, gid, url, part, existing, fromCache = cached != null)
-        } catch (_: StaleLinkException) {
-            // The server would not serve this link, or would not serve it for a
-            // range. Either way the resume cannot continue: forget the link, ask
-            // for a fresh one and take the file from the start rather than failing
-            // a download the user has already paid for.
-            forgetUrl(dir, gid)
-            return prepare(galleryDetail, gid, res, isHath, useCachedLink = false, useRange = false)
-        }
-        return part
-    }
-
-    /** The server would not serve the link it gave us, so it has to be renewed. */
-    private class StaleLinkException(status: HttpStatusCode) : Exception(status.toString())
-
-    private suspend fun download(
-        galleryDetail: GalleryDetail,
-        gid: Long,
-        url: String,
-        part: Path,
-        existing: Long,
-        fromCache: Boolean,
-    ) {
+        // No resume. The H@H archive handler answers 404 to a range request and
+        // 416 to one it reads as out of bounds, so a part file left by an earlier
+        // attempt is only in the way: start over rather than pick it up.
+        part.delete()
+        val url = EhEngine.downloadArchive(gid, galleryDetail.token, res, isHath) ?: return null
         ktorClient.prepareRequest(url) {
             applyEhConfig(EhUrl.getGalleryDetailUrl(gid, galleryDetail.token), EhUrl.origin)
             timeout {
                 requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
                 socketTimeoutMillis = 60_000
             }
-            if (existing > 0) header("Range", "bytes=$existing-")
         }.execute { response ->
-            Log.d(tag, "archive $gid: ${response.status}, range=${existing > 0}, cached=$fromCache, url=$url")
-            if (fromCache && response.status.value in 400..499) throw StaleLinkException(response.status)
-            // A range this server will not serve is not a reason to lose the whole
-            // download: retry from the start with a fresh link.
-            if (existing > 0 && response.status.value in 400..499) throw StaleLinkException(response.status)
-            val resuming = existing > 0 && response.status == HttpStatusCode.PartialContent
-            if (existing > 0 && !resuming) part.delete()
-            val length = response.contentLength() ?: 0L
-            val total = if (resuming) existing + length else length
-            response.status.ensureSuccessFor(resuming)
-            val start = if (resuming) existing else 0L
-            var done = start
-            notify(gid, progressText(done, total), done, total)
-            response.bodyAsChannel().copyTo(part, resuming) { written ->
-                done = start + written
-                notify(gid, progressText(done, total), done, total)
+            Log.d(tag, "archive $gid: ${response.status}, length=${response.contentLength()}")
+            response.status.ensureSuccess()
+            val total = response.contentLength() ?: 0L
+            notify(gid, progressText(0, total), 0, total)
+            response.bodyAsChannel().copyTo(part) { written ->
+                notify(gid, progressText(written, total), written, total)
             }
             // A 200 is not enough: while the archive is still being prepared the
             // archiver answers with a page saying so, and that page must not become
@@ -252,32 +202,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
                 throw IllegalStateException("The archiver returned a page instead of an archive")
             }
         }
-    }
-
-    private fun urlFile(dir: Path, gid: Long) = dir.resolve("$gid.zip.part.url")
-
-    /**
-     * The link this part file was being fetched from, if it is still worth using.
-     *
-     * Shorter than the week the server honours on purpose: a link used just past
-     * its expiry wastes a whole download, and the cost of being early is one
-     * request that would have been free anyway.
-     */
-    private fun cachedUrl(dir: Path, gid: Long): String? = runCatching {
-        val lines = urlFile(dir, gid).read { readString() }.lineSequence().filter { it.isNotBlank() }.toList()
-        val issued = lines[0].toLong()
-        if (System.currentTimeMillis() / 1000 - issued > URL_TTL_SECONDS) null else lines[1]
-    }.getOrNull()
-
-    private fun saveUrl(dir: Path, gid: Long, url: String) = runCatching {
-        urlFile(dir, gid).write { writeString("${System.currentTimeMillis() / 1000}\n$url\n") }
-    }
-
-    private fun forgetUrl(dir: Path, gid: Long) = runCatching { urlFile(dir, gid).delete() }
-
-    private fun HttpStatusCode.ensureSuccessFor(resuming: Boolean) {
-        if (resuming && this == HttpStatusCode.PartialContent) return
-        if (!isSuccess()) throw IllegalStateException(toString())
+        return part
     }
 
     private fun progressText(done: Long, total: Long): String = if (total <= 0) {
@@ -319,7 +244,6 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         private const val KEY_HATH = "hath"
         private const val KEY_TITLE = "title"
         private const val NOTIFICATION_ID = 10
-        private const val URL_TTL_SECONDS = 6 * 24 * 3600L
 
         fun start(context: Context, galleryDetail: GalleryDetail, archive: Archive) {
             val bundle = Bundle().apply {
@@ -339,13 +263,10 @@ class ArchiveDownloadService : Service(), CoroutineScope {
 
 /**
  * Copy the body into [file], reporting how many bytes have arrived.
- *
- * Resuming appends, so a transfer that was stopped picks up where the server
- * left off instead of rewriting what is already on disk.
  */
 @OptIn(InternalAPI::class)
-private suspend fun ByteReadChannel.copyTo(file: Path, append: Boolean, onProgress: (Long) -> Unit) {
-    suspend fun Sink.drain() {
+private suspend fun ByteReadChannel.copyTo(file: Path, onProgress: (Long) -> Unit) {
+    file.write {
         var written = 0L
         while (!isClosedForRead) {
             written += transferFrom(readBuffer)
@@ -354,5 +275,4 @@ private suspend fun ByteReadChannel.copyTo(file: Path, append: Boolean, onProgre
         }
         rethrowCloseCauseIfNeeded()
     }
-    if (append) file.append { drain() } else file.write { drain() }
 }

@@ -13,8 +13,10 @@ import android.system.Int64Ref
 import android.system.Os
 import android.webkit.MimeTypeMap
 import androidx.core.database.getLongOrNull
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import kotlinx.io.RawSink
+import kotlinx.io.RawSource
 import kotlinx.io.asSink
 import kotlinx.io.asSource
 import okio.Buffer
@@ -62,10 +64,7 @@ class AndroidFileSystem(context: Context) : FileSystem() {
         }
     }
 
-    override fun canonicalize(path: Path): Path {
-        if (path.isSmb) return path
-        TODO("Not yet implemented")
-    }
+    override fun canonicalize(path: Path): Path = path
 
     override fun copy(source: Path, target: Path) {
         if (target.isSmb) {
@@ -279,18 +278,14 @@ class AndroidFileSystem(context: Context) : FileSystem() {
         TODO("Not yet implemented")
     }
 
-    override fun sink(file: Path, mustCreate: Boolean): Sink {
-        if (file.isSmb) {
-            val stream = contentResolver.openOutputStream(file.toUri())
-                ?: throw FileNotFoundException("Failed to open SMB file for writing: $file")
-            return stream.sink()
-        }
-        TODO("Not yet implemented")
+    override fun sink(file: Path, mustCreate: Boolean): Sink = when {
+        file.isSmb || file.isPhysicalFile() -> file.outputStream().sink()
+        else -> FileOutputStream(openFileDescriptor(file, "rwt").fileDescriptor).sink()
     }
 
-    override fun source(file: Path): Source {
-        if (file.isSmb) return file.inputStream().source()
-        TODO("Not yet implemented")
+    override fun source(file: Path): Source = when {
+        file.isSmb || file.isPhysicalFile() -> file.inputStream().source()
+        else -> FileInputStream(openFileDescriptor(file, "r").fileDescriptor).source()
     }
 
     /**
@@ -298,32 +293,32 @@ class AndroidFileSystem(context: Context) : FileSystem() {
      *
      * `Path.outputStream()` only understands files. A download location chosen
      * through the document picker is a content URI, so the provider has to be
-     * asked for the stream instead.
-     *
-     * Append is not asked of the provider: several of them ignore `"wa"` and
-     * truncate, which would throw away the bytes an interrupted transfer had
-     * already received. The descriptor is opened read/write and seeked past what
-     * is there instead, which the platform does honour.
+     * asked for the descriptor instead.
      */
-    fun rawSink(file: Path, append: Boolean = false): RawSink {
+    fun rawSink(file: Path): RawSink {
         if (file.isSmb) {
-            val stream = contentResolver.openOutputStream(file.toUri(), if (append) "wa" else "w")
+            val stream = contentResolver.openOutputStream(file.toUri(), "w")
                 ?: throw FileNotFoundException("Failed to open SMB file for writing: $file")
             return stream.asSink()
         }
         if (file.isPhysicalFile()) {
-            return FileOutputStream(file.toFile(), append).asSink()
+            return FileOutputStream(file.toFile()).asSink()
         }
-        val fd = openFileDescriptor(file, if (append) "rw" else "rwt")
-        val out = FileOutputStream(fd.fileDescriptor)
-        if (append) {
-            out.channel.position(metadataOrNull(file)?.size ?: 0L)
-        }
-        return out.asSink()
+        return FileOutputStream(openFileDescriptor(file, "rwt").fileDescriptor).asSink()
     }
 
-    fun rawSource(file: Path) = file.inputStream().asSource()
-
+    /**
+     * A source for a path that may not be a file on this device.
+     *
+     * The same reason as [rawSink]: a content URI has no file behind it, so the
+     * provider has to be asked for the descriptor.
+     */
+    fun rawSource(file: Path): RawSource {
+        if (file.isSmb || file.isPhysicalFile()) {
+            return file.inputStream().asSource()
+        }
+        return FileInputStream(openFileDescriptor(file, "r").fileDescriptor).asSource()
+    }
     fun openFileDescriptor(path: Path, mode: String): ParcelFileDescriptor {
         if (path.isSmb) {
             // The provider serves writes through a pipe, so any write-capable mode
