@@ -19,6 +19,7 @@ import com.ehviewer.core.files.SystemFileSystem
 import com.ehviewer.core.files.append
 import com.ehviewer.core.files.delete
 import com.ehviewer.core.files.moveTo
+import com.ehviewer.core.files.read
 import com.ehviewer.core.files.write
 import com.ehviewer.core.i18n.R
 import com.ehviewer.core.model.GalleryDetail
@@ -52,6 +53,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.io.Sink
+import kotlinx.io.readString
+import kotlinx.io.writeString
 import okio.Path
 
 /**
@@ -146,6 +149,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         }
         val target = part.parent!!.resolve("$gid.zip")
         part moveTo target
+        forgetUrl(part.parent!!, gid)
         // The gallery is readable from this directory now; without the record the
         // file sits on disk while the app still goes to the network.
         DownloadManager.restoreDownload(galleryDetail.galleryInfo, galleryDetail.downloadDirname(), EhDB.getDownloadLocation(gid))
@@ -160,13 +164,21 @@ class ArchiveDownloadService : Service(), CoroutineScope {
 
     /** Downloads into the part file and returns it, or null when there is nothing to do. */
     private suspend fun prepare(galleryDetail: GalleryDetail, gid: Long, res: String, isHath: Boolean): Path? {
-        val url = EhEngine.downloadArchive(gid, galleryDetail.token, res, isHath) ?: return null
         val spiderDen = SpiderDen(galleryDetail).apply { initDownloadDir() }
         val dir = spiderDen.downloadDir ?: return null
         val part = dir.resolve("$gid.zip.part")
         // Whatever is already there is the start of the same file: ask for the
         // rest instead of downloading it again.
         val existing = SystemFileSystem.metadataOrNull(part)?.size ?: 0L
+        // A link stays good for a week and re-downloading within that week costs
+        // nothing, so a resume should reuse the link it already has instead of
+        // asking for another one: each request counts against the weekly limit on
+        // how often an archive may be fetched again.
+        var url = if (existing > 0) cachedUrl(dir, gid) else null
+        if (url == null) {
+            url = EhEngine.downloadArchive(gid, galleryDetail.token, res, isHath) ?: return null
+            saveUrl(dir, gid, url)
+        }
         ktorClient.prepareRequest(url) {
             applyEhConfig(EhUrl.getGalleryDetailUrl(gid, galleryDetail.token), EhUrl.origin)
             timeout {
@@ -198,6 +210,27 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         }
         return part
     }
+
+    private fun urlFile(dir: Path, gid: Long) = dir.resolve("$gid.zip.part.url")
+
+    /**
+     * The link this part file was being fetched from, if it is still worth using.
+     *
+     * Shorter than the week the server honours on purpose: a link used just past
+     * its expiry wastes a whole download, and the cost of being early is one
+     * request that would have been free anyway.
+     */
+    private fun cachedUrl(dir: Path, gid: Long): String? = runCatching {
+        val lines = urlFile(dir, gid).read { readString() }.lineSequence().filter { it.isNotBlank() }.toList()
+        val issued = lines[0].toLong()
+        if (System.currentTimeMillis() / 1000 - issued > URL_TTL_SECONDS) null else lines[1]
+    }.getOrNull()
+
+    private fun saveUrl(dir: Path, gid: Long, url: String) = runCatching {
+        urlFile(dir, gid).write { writeString("${System.currentTimeMillis() / 1000}\n$url\n") }
+    }
+
+    private fun forgetUrl(dir: Path, gid: Long) = runCatching { urlFile(dir, gid).delete() }
 
     private fun HttpStatusCode.ensureSuccessFor(resuming: Boolean) {
         if (resuming && this == HttpStatusCode.PartialContent) return
@@ -242,6 +275,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         private const val KEY_RES = "res"
         private const val KEY_HATH = "hath"
         private const val NOTIFICATION_ID = 10
+        private const val URL_TTL_SECONDS = 6 * 24 * 3600L
 
         fun start(context: Context, galleryDetail: GalleryDetail, archive: Archive) {
             val bundle = Bundle().apply {
