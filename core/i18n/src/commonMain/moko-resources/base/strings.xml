@@ -490,6 +490,10 @@
     <string name="download_archive_started">Archive download started</string>
     <string name="download_archive_failure">Failed to download archive</string>
     <string name="download_archive_failure_no_hath">Need H@H client for archive download</string>
+    <string name="archive_download_title">Archive %1$d</string>
+    <string name="archive_download_preparing">Preparing…</string>
+    <string name="archive_download_cancel">Cancel</string>
+    <string name="archive_download_done">Saved</string>
     <string name="current_funds">Current Funds:</string>
     <string name="insufficient_funds">Insufficient Funds</string>
     <string name="insufficient_gp">Insufficient GP to download original images</string>

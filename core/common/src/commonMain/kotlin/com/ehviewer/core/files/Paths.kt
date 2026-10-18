@@ -29,3 +29,6 @@ infix fun Path.sendTo(target: Path) = SystemFileSystem.copy(this, target)
 expect inline fun <T> Path.read(f: Source.() -> T): T
 
 expect inline fun <T> Path.write(f: Sink.() -> T): T
+
+/** Like [write], but keeps what is already there and adds to the end. */
+expect inline fun <T> Path.append(f: Sink.() -> T): T

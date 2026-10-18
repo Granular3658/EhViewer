@@ -469,6 +469,10 @@
     <string name="download_archive_started">开始下载压缩包</string>
     <string name="download_archive_failure">无法下载压缩包</string>
     <string name="download_archive_failure_no_hath">下载压缩包需要 H@H 客户端</string>
+    <string name="archive_download_title">归档 %1$d</string>
+    <string name="archive_download_preparing">正在准备…</string>
+    <string name="archive_download_cancel">取消</string>
+    <string name="archive_download_done">已保存</string>
     <string name="current_funds">当前资金：</string>
     <string name="insufficient_funds">余额不足</string>
     <string name="insufficient_gp">没有足够的 GP 来下载原图</string>

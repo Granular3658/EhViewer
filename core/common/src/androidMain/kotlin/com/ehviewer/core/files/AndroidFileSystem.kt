@@ -13,6 +13,8 @@ import android.system.Int64Ref
 import android.system.Os
 import android.webkit.MimeTypeMap
 import androidx.core.database.getLongOrNull
+import java.io.FileOutputStream
+import kotlinx.io.RawSink
 import kotlinx.io.asSink
 import kotlinx.io.asSource
 import okio.Buffer
@@ -292,6 +294,22 @@ class AndroidFileSystem(context: Context) : FileSystem() {
     }
 
     fun rawSink(file: Path) = file.outputStream().asSink()
+
+    /**
+     * Opens for writing without discarding what is already there.
+     *
+     * A share has to be asked for append mode explicitly: `openOutputStream`
+     * alone truncates, and an interrupted transfer would then lose the bytes it
+     * had already received instead of continuing from them.
+     */
+    fun rawAppendSink(file: Path): RawSink {
+        if (file.isSmb) {
+            val stream = contentResolver.openOutputStream(file.toUri(), "wa")
+                ?: throw FileNotFoundException("Failed to open SMB file for appending: $file")
+            return stream.asSink()
+        }
+        return FileOutputStream(file.toFile(), true).asSink()
+    }
 
     fun rawSource(file: Path) = file.inputStream().asSource()
 

@@ -16,7 +16,6 @@
 package com.hippo.ehviewer.client
 
 import android.content.Context
-import android.util.Log
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -26,32 +25,17 @@ import androidx.compose.runtime.Stable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import arrow.core.memoize
-import com.ehviewer.core.files.SystemFileSystem
-import com.ehviewer.core.files.delete
-import com.ehviewer.core.files.moveTo
 import com.ehviewer.core.model.GalleryDetail
 import com.ehviewer.core.model.GalleryInfo
 import com.ehviewer.core.network.EhCookieStore
-import com.hippo.ehviewer.EhApplication.Companion.ktorClient
-import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.parser.Archive
-import com.hippo.ehviewer.download.DownloadManager
+import com.hippo.ehviewer.download.ArchiveDownloadService
 import com.hippo.ehviewer.spider.SpiderDen
-import com.hippo.ehviewer.spider.downloadDirname
-import com.hippo.ehviewer.util.copyTo
-import com.hippo.ehviewer.util.ensureSuccess
 import com.materialkolor.hct.Hct
 import com.materialkolor.ktx.from
 import com.materialkolor.ktx.toColor
 import com.materialkolor.utils.ColorUtils.lstarFromArgb
-import io.ktor.client.plugins.HttpTimeoutConfig
-import io.ktor.client.plugins.timeout
-import io.ktor.client.request.prepareRequest
-import io.ktor.client.statement.bodyAsChannel
-import io.ktor.http.contentLength
-
-private const val TAG = "EhUtils"
 
 object EhUtils {
     const val NONE = -1 // Use it for homepage
@@ -198,58 +182,13 @@ object EhUtils {
     }
 
     /**
-     * Fetch the archive the server just prepared into the gallery's download
-     * directory as `<gid>.zip`, and record the gallery as downloaded so the
-     * reader finds it there.
+     * Queue the gallery's archive for download.
      *
-     * The link the archiver answers with redirects once to the file itself; the
-     * client follows it, and the session cookies go along because the host the
-     * redirect lands on checks them too.
-     *
-     * Returns false when the server would not give a link or the transfer failed.
+     * The transfer runs in [ArchiveDownloadService]: an archive takes minutes and
+     * has to keep going after the detail page is left, with a notification that
+     * shows progress and can stop it.
      */
-    suspend fun downloadArchive(galleryDetail: GalleryDetail, archive: Archive): Boolean {
-        val gid = galleryDetail.gid
-        val url = EhEngine.downloadArchive(gid, galleryDetail.token, archive.res, archive.isHath) ?: return false
-        val spiderDen = SpiderDen(galleryDetail).apply { initDownloadDir() }
-        val target = spiderDen.downloadDir?.resolve("$gid.zip") ?: return false
-        // Written beside the target and moved into place, so a transfer that dies
-        // halfway never looks like a finished archive.
-        val part = target.parent!!.resolve("$gid.zip.part")
-        try {
-            ktorClient.prepareRequest(url) {
-                applyEhConfig(EhUrl.getGalleryDetailUrl(gid, galleryDetail.token), EhUrl.origin)
-                // An archive is tens of megabytes; the client's ten second request
-                // timeout is right for a page and wrong for a file. Bound the gap
-                // between bytes instead of the whole transfer.
-                timeout {
-                    requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
-                    socketTimeoutMillis = 60_000
-                }
-            }.execute { response ->
-                Log.d(TAG, "archive $gid: ${response.status}, length=${response.contentLength()}, url=$url")
-                response.status.ensureSuccess()
-                response.bodyAsChannel().copyTo(part)
-                // A 200 is not enough: while the archive is still being prepared
-                // the archiver answers with a page saying so, and that page must
-                // not become the gallery's archive.
-                val head = SystemFileSystem.read(part) { readByteArray(2) }
-                check(head.size == 2 && head[0] == 'P'.code.toByte() && head[1] == 'K'.code.toByte()) {
-                    "The archiver returned a page instead of an archive"
-                }
-                Log.d(TAG, "archive $gid: copied ${SystemFileSystem.metadataOrNull(part)?.size} to $part")
-            }
-            part moveTo target
-            Log.d(TAG, "archive $gid: moved to $target")
-        } finally {
-            part.delete()
-        }
-        // The gallery is now readable from this directory; without the record the
-        // file would sit on disk and the app would still go to the network.
-        DownloadManager.restoreDownload(galleryDetail.galleryInfo, galleryDetail.downloadDirname(), EhDB.getDownloadLocation(gid))
-        if (Settings.archiveMetadata.value) {
-            spiderDen.writeComicInfo()
-        }
-        return true
+    fun downloadArchive(context: Context, galleryDetail: GalleryDetail, archive: Archive) {
+        ArchiveDownloadService.start(context, galleryDetail, archive)
     }
 }
