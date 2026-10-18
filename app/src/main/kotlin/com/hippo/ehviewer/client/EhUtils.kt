@@ -15,11 +15,7 @@
  */
 package com.hippo.ehviewer.client
 
-import android.app.DownloadManager
-import android.content.ActivityNotFoundException
 import android.content.Context
-import android.content.Intent
-import android.os.Environment
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -28,23 +24,26 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.Stable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.core.net.toUri
 import arrow.core.memoize
 import com.ehviewer.core.model.GalleryDetail
 import com.ehviewer.core.model.GalleryInfo
 import com.ehviewer.core.network.EhCookieStore
-import com.ehviewer.core.util.withUIContext
+import com.hippo.ehviewer.EhApplication.Companion.ktorClient
+import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.parser.Archive
+import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.spider.SpiderDen
-import com.hippo.ehviewer.util.AppConfig
-import com.hippo.ehviewer.util.FileUtils
-import com.hippo.ehviewer.util.addTextToClipboard
+import com.hippo.ehviewer.spider.downloadDirname
+import com.hippo.ehviewer.util.copyTo
+import com.hippo.ehviewer.util.ensureSuccess
 import com.materialkolor.hct.Hct
 import com.materialkolor.ktx.from
 import com.materialkolor.ktx.toColor
 import com.materialkolor.utils.ColorUtils.lstarFromArgb
-import splitties.systemservices.downloadManager
+import io.ktor.client.request.prepareRequest
+import io.ktor.client.statement.bodyAsChannel
+import okio.FileSystem
 
 object EhUtils {
     const val NONE = -1 // Use it for homepage
@@ -190,34 +189,42 @@ object EhUtils {
         return title.substringBeforeLast('|').trim().ifEmpty { null }
     }
 
-    context(ctx: Context)
-    suspend fun downloadArchive(galleryDetail: GalleryDetail, archive: Archive) {
+    /**
+     * Fetch the archive the server just prepared into the gallery's download
+     * directory as `<gid>.zip`, and record the gallery as downloaded so the
+     * reader finds it there.
+     *
+     * The link the archiver answers with redirects once to the file itself; the
+     * client follows it, and the session cookies go along because the host the
+     * redirect lands on checks them too.
+     *
+     * Returns false when the server would not give a link or the transfer failed.
+     */
+    suspend fun downloadArchive(galleryDetail: GalleryDetail, archive: Archive): Boolean {
         val gid = galleryDetail.gid
-        EhEngine.downloadArchive(gid, galleryDetail.token, archive.res, archive.isHath)?.let {
-            val uri = it.toUri()
-            val intent = Intent().apply {
-                action = Intent.ACTION_VIEW
-                setDataAndType(uri, "application/zip")
+        val url = EhEngine.downloadArchive(gid, galleryDetail.token, archive.res, archive.isHath) ?: return false
+        val spiderDen = SpiderDen(galleryDetail).apply { initDownloadDir() }
+        val target = spiderDen.downloadDir?.resolve("$gid.zip") ?: return false
+        // Written beside the target and moved into place, so a transfer that dies
+        // halfway never looks like a finished archive.
+        val part = target.parent!!.resolve("$gid.zip.part")
+        try {
+            ktorClient.prepareRequest(url) {
+                applyEhConfig(EhUrl.getGalleryDetailUrl(gid, galleryDetail.token), EhUrl.origin)
+            }.execute { response ->
+                response.status.ensureSuccess()
+                response.bodyAsChannel().copyTo(part)
             }
-            val name = "$gid-${getSuitableTitle(galleryDetail)}.zip"
-            try {
-                ctx.startActivity(intent)
-                withUIContext { addTextToClipboard(name, true) }
-            } catch (_: ActivityNotFoundException) {
-                val r = DownloadManager.Request(uri)
-                r.setDestinationInExternalPublicDir(
-                    Environment.DIRECTORY_DOWNLOADS,
-                    AppConfig.APP_DIRNAME + "/" + FileUtils.sanitizeFilename(name),
-                )
-                r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                downloadManager.enqueue(r)
-            }
-            if (Settings.archiveMetadata.value) {
-                SpiderDen(galleryDetail).apply {
-                    initDownloadDir()
-                    writeComicInfo()
-                }
-            }
+            FileSystem.SYSTEM.atomicMove(part, target)
+        } finally {
+            FileSystem.SYSTEM.delete(part, mustExist = false)
         }
+        // The gallery is now readable from this directory; without the record the
+        // file would sit on disk and the app would still go to the network.
+        DownloadManager.restoreDownload(galleryDetail.galleryInfo, galleryDetail.downloadDirname(), EhDB.getDownloadLocation(gid))
+        if (Settings.archiveMetadata.value) {
+            spiderDen.writeComicInfo()
+        }
+        return true
     }
 }

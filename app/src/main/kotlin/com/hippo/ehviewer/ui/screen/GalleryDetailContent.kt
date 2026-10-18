@@ -577,8 +577,8 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
                                     onItemClick = { resume(it) },
                                 )
                             }
-                            EhUtils.downloadArchive(galleryDetail, selected)
                             snackbar(downloadStarted)
+                            if (!EhUtils.downloadArchive(galleryDetail, selected)) snackbar(downloadFailed)
                         }
                     }.onFailure {
                         when (it) {
