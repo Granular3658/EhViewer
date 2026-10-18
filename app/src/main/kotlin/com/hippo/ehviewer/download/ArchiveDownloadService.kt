@@ -171,22 +171,48 @@ class ArchiveDownloadService : Service(), CoroutineScope {
     }
 
     /** Downloads into the part file and returns it, or null when there is nothing to do. */
-    private suspend fun prepare(galleryDetail: GalleryDetail, gid: Long, res: String, isHath: Boolean): Path? {
+    private suspend fun prepare(
+        galleryDetail: GalleryDetail,
+        gid: Long,
+        res: String,
+        isHath: Boolean,
+        useCachedLink: Boolean = true,
+    ): Path? {
         val spiderDen = SpiderDen(galleryDetail).apply { initDownloadDir() }
         val dir = spiderDen.downloadDir ?: return null
         val part = dir.resolve("$gid.zip.part")
         // Whatever is already there is the start of the same file: ask for the
         // rest instead of downloading it again.
         val existing = SystemFileSystem.metadataOrNull(part)?.size ?: 0L
-        // A link stays good for a week and re-downloading within that week costs
-        // nothing, so a resume should reuse the link it already has instead of
-        // asking for another one: each request counts against the weekly limit on
-        // how often an archive may be fetched again.
-        var url = if (existing > 0) cachedUrl(dir, gid) else null
-        if (url == null) {
-            url = EhEngine.downloadArchive(gid, galleryDetail.token, res, isHath) ?: return null
-            saveUrl(dir, gid, url)
+        // Re-downloading within a week costs nothing, so a resume reuses the link
+        // it already has instead of asking for another one: every request counts
+        // against the weekly limit on how often an archive may be fetched again.
+        val cached = if (existing > 0 && useCachedLink) cachedUrl(dir, gid) else null
+        val url = cached ?: EhEngine.downloadArchive(gid, galleryDetail.token, res, isHath)?.also { saveUrl(dir, gid, it) }
+            ?: return null
+        try {
+            download(galleryDetail, gid, url, part, existing, fromCache = cached != null)
+        } catch (_: StaleLinkException) {
+            // A link the server no longer honours is worthless. Ask for a fresh one
+            // and try once more, rather than failing a download the user already
+            // paid for.
+            forgetUrl(dir, gid)
+            return prepare(galleryDetail, gid, res, isHath, useCachedLink = false)
         }
+        return part
+    }
+
+    /** The server would not serve the link it gave us, so it has to be renewed. */
+    private class StaleLinkException(status: HttpStatusCode) : Exception(status.toString())
+
+    private suspend fun download(
+        galleryDetail: GalleryDetail,
+        gid: Long,
+        url: String,
+        part: Path,
+        existing: Long,
+        fromCache: Boolean,
+    ) {
         ktorClient.prepareRequest(url) {
             applyEhConfig(EhUrl.getGalleryDetailUrl(gid, galleryDetail.token), EhUrl.origin)
             timeout {
@@ -195,6 +221,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
             }
             if (existing > 0) header("Range", "bytes=$existing-")
         }.execute { response ->
+            if (fromCache && response.status.value in 400..499) throw StaleLinkException(response.status)
             val resuming = existing > 0 && response.status == HttpStatusCode.PartialContent
             if (existing > 0 && !resuming) part.delete()
             val length = response.contentLength() ?: 0L
@@ -216,7 +243,6 @@ class ArchiveDownloadService : Service(), CoroutineScope {
                 throw IllegalStateException("The archiver returned a page instead of an archive")
             }
         }
-        return part
     }
 
     private fun urlFile(dir: Path, gid: Long) = dir.resolve("$gid.zip.part.url")
