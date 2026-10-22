@@ -19,7 +19,7 @@ class PrefDelegate<T> internal constructor(
     fun valueFlow(): Flow<T> = preferences.data.map { it[this] }.distinctUntilChanged()
 
     var value: T
-        get() = runBlocking { preferences.snapshot() }[this]
+        get() = (preferences.current ?: runBlocking { preferences.snapshot() })[this]
         set(value) = preferences.edit { it[this@PrefDelegate] = value }
 
     inline operator fun getValue(thisRef: Any?, prop: KProperty<*>?): T = value
