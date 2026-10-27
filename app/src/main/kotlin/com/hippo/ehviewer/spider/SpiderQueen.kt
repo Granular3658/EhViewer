@@ -231,13 +231,17 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
     private val prepareJob = prepareScope.async { doPrepare() }
 
     /**
-     * Whether this session tried to write the archive and did not finish, either
-     * because it failed or because it was cancelled. Read by [stop] before
-     * [SpiderDen.postArchive] so a rewrite that did not complete never trades the
-     * loose images this session wrote for the archive left by a previous one.
+     * Whether this session wrote an archive: `null` when it never tried, which
+     * is not the same as trying and failing.
+     *
+     * The difference decides whether the loose images may be deleted. Read by
+     * [stop] before [SpiderDen.postArchive], so a rewrite that did not complete
+     * never trades the loose images this session wrote for the archive left by a
+     * previous one -- and reading a gallery, which never starts the archive job,
+     * cannot delete them at all.
      */
     @Volatile
-    private var archiveFailed = false
+    private var archiveOutcome: Boolean? = null
     private val archiveJob = launch(start = CoroutineStart.LAZY) {
         val failed = try {
             spiderDen.archive { done, total -> notifyArchiveProgress(done, total) }
@@ -246,10 +250,10 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
             // onto the final name, so what is there -- if anything -- is an
             // earlier archive, and the loose images are the copy this session
             // produced.
-            archiveFailed = true
+            archiveOutcome = false
             throw e
         }
-        archiveFailed = failed
+        archiveOutcome = !failed
         notifyAllPageDownloaded(failed)
     }
 
@@ -280,19 +284,22 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
                 // had reached the share.
                 archiveJob.cancelAndJoin()
             }
-            if (!spiderDen.postArchive(!archiveFailed)) {
-                if (mWorkerScope.isDownloadMode) {
-                    runCatching {
-                        spiderDen.writeComicInfo()
-                    }.onFailure {
-                        logcat(it)
-                    }
-                }
+            val archived = spiderDen.postArchive(archiveOutcome == true)
+            if (!archived && mWorkerScope.isDownloadMode) {
                 runCatching {
-                    writeSpiderInfoToLocal()
+                    spiderDen.writeComicInfo()
                 }.onFailure {
                     logcat(it)
                 }
+            }
+            // Written whether or not the gallery became an archive. The marker is
+            // what the restore scan identifies a directory by, and an archive
+            // leaves nothing else to identify it with -- the archive name carries
+            // the gid, but the scan looks at directories, not at their files.
+            runCatching {
+                writeSpiderInfoToLocal()
+            }.onFailure {
+                logcat(it)
             }
             queenScope.cancel()
         }
@@ -444,7 +451,16 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
         }
         if (mDownloadedPages.load() == size) {
             if (mFinishedPages.load() == size) {
-                archiveJob.start()
+                // Only a download builds the archive. Reading a gallery whose
+                // pages are already on disk marks them finished one by one, and
+                // reaching the last page would otherwise rewrite how the gallery
+                // is stored -- converting loose images to an archive and deleting
+                // them -- as a side effect of reading it.
+                if (mWorkerScope.isDownloadMode) {
+                    archiveJob.start()
+                } else {
+                    notifyAllPageDownloaded(failed = false)
+                }
             } else {
                 notifyAllPageDownloaded(failed = true)
             }

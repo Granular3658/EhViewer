@@ -161,6 +161,11 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         DownloadManager.markArchiveDownloaded(gid, galleryDetail.pages)
         SpiderDen(galleryDetail).apply {
             initDownloadDir()
+            // The archive is the whole gallery, but the archive alone does not
+            // identify the directory: the restore scan looks for a marker, and
+            // without one this download would be invisible to it once the
+            // database no longer knows about it.
+            runCatching { writeSpiderInfo(galleryDetail.pages) }.onFailure { logcat(it) }
             if (Settings.archiveMetadata.value) writeComicInfo()
             // Whatever loose images an earlier attempt left are now redundant: the
             // reader prefers the archive and would never open them again.

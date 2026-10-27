@@ -367,10 +367,16 @@ class SpiderDen(val info: GalleryInfo) {
     }
 
     /**
-     * Removes the loose images, the spider info and the staging directory.
+     * Removes the loose images and the staging directory.
      *
      * Called once an archive holds the whole gallery: the reader prefers the
      * archive, so the loose images are never opened again and only take space.
+     *
+     * The spider info stays. It is the only thing in the directory that says
+     * which gallery this is -- the restore scan and the reader both look for it
+     * -- and the archive does not replace it: `comicinfo.xml` is only written
+     * when the user asked for metadata, so deleting the marker would leave a
+     * directory nothing can identify.
      */
     suspend fun removeLooseImages() {
         val dir = downloadDir ?: return
@@ -379,7 +385,6 @@ class SpiderDen(val info: GalleryInfo) {
                 it.delete()
             }
         }
-        (dir / SpiderQueen.SPIDER_INFO_FILENAME).delete()
         tempDownloadDir?.delete()
     }
 
@@ -618,6 +623,21 @@ class SpiderDen(val info: GalleryInfo) {
 
     suspend fun initDownloadDir() {
         downloadDir = getGalleryWritableDownloadDir(info).apply { mkdirs() }
+    }
+
+    /**
+     * Writes the marker that says which gallery this directory holds.
+     *
+     * The restore scan and the reader both identify a directory by it, and
+     * nothing else does: the archive is named after the gid, but the scan looks
+     * at directories, not at the files in them. A download that only leaves an
+     * archive behind is therefore invisible to restore, and `comicinfo.xml` is
+     * not a substitute -- it is only written when the user asked for metadata.
+     */
+    suspend fun writeSpiderInfo(pages: Int) {
+        downloadDir?.run {
+            SpiderInfo(gid, info.token, pages).write(resolve(SpiderQueen.SPIDER_INFO_FILENAME))
+        }
     }
 
     suspend fun writeComicInfo(fetchMetadata: Boolean = true) {
