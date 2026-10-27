@@ -27,8 +27,15 @@ import tachiyomi.data.release.Repository
 import tachiyomi.data.release.WorkflowRuns
 import tachiyomi.data.release.downloadLink
 
-const val API_URL = "https://codeberg.org/api/v1/repos/${BuildConfig.REPO_NAME}"
-const val LATEST_RELEASE_URL = "$API_URL/releases/latest"
+// The endpoints below are GitHub's: a push workflow run, its artifacts and a
+// commit comparison. The host follows the remote so a build from a fork asks its
+// own repository, and only a GitHub remote is asked in GitHub's shape.
+val API_URL = if (BuildConfig.REPO_HOST == "github.com") {
+    "https://api.github.com/repos/${BuildConfig.REPO_NAME}"
+} else {
+    "https://${BuildConfig.REPO_HOST}/api/v1/repos/${BuildConfig.REPO_NAME}"
+}
+val LATEST_RELEASE_URL = "$API_URL/releases/latest"
 
 object AppUpdater {
     suspend fun checkForUpdate(forceCheck: Boolean = false): EhRelease? {

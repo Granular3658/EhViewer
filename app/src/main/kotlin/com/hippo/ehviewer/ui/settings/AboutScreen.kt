@@ -49,7 +49,7 @@ import moe.tarsin.navigate
 import moe.tarsin.snackbar
 import moe.tarsin.string
 
-const val REPO_URL = "https://codeberg.org/${BuildConfig.REPO_NAME}"
+const val REPO_URL = "https://${BuildConfig.REPO_HOST}/${BuildConfig.REPO_NAME}"
 const val RELEASE_URL = "$REPO_URL/releases"
 
 @Composable

@@ -47,9 +47,19 @@ android {
         commandLine = "git log -1 --format=%ct".split(' ')
     }.standardOutput.asText.get().trim()
 
-    val repoName = providers.exec {
+    // The repository this build came from, which is what the about page links to
+    // and what the updater asks. It is not always on codeberg, so the host comes
+    // from the remote rather than being assumed, and the slug is everything after
+    // it. A remote that carries credentials -- the one CI checks out with does --
+    // is stripped first, so a token can never end up in the app.
+    val repoRemote = providers.exec {
         commandLine = "git remote get-url origin".split(' ')
-    }.standardOutput.asText.get().trim().removeSuffix(".git").removePrefix("https://codeberg.org/")
+    }.standardOutput.asText.get().trim()
+        .removeSuffix(".git")
+        .substringAfter("://")
+        .substringAfter('@')
+    val repoHost = repoRemote.substringBefore('/')
+    val repoName = repoRemote.substringAfter('/')
 
     val snapshot = !hasProperty("release")
 
@@ -65,6 +75,7 @@ android {
         buildConfigField("String", "RAW_VERSION_NAME", "\"$versionName\"")
         buildConfigField("String", "COMMIT_SHA", "\"$commitSha\"")
         buildConfigField("long", "COMMIT_TIME", commitTime)
+        buildConfigField("String", "REPO_HOST", "\"$repoHost\"")
         buildConfigField("String", "REPO_NAME", "\"$repoName\"")
         ndk {
             if (isRelease) {
