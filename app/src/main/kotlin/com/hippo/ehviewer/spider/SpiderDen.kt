@@ -70,7 +70,9 @@ import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
 import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import okio.Path
 import okio.Path.Companion.toOkioPath
 import splitties.init.appCtx
@@ -359,7 +361,12 @@ class SpiderDen(val info: GalleryInfo) {
         // (openArchiveSmb), and it prefers the archive whenever one is present, so
         // the loose images stopped being read the moment the archive appeared.
         val dir = downloadDir
-        val archived = saveAsCbz && archiveWritten && dir?.find(archiveName) != null
+        val found = dir?.find(archiveName) != null
+        val archived = saveAsCbz && archiveWritten && found
+        // Three things decide this, and when the cleanup does not happen there
+        // was nothing to say which one failed. One line, at the point of the
+        // decision.
+        logcat(ARCHIVE_TAG) { "postArchive: enabled=$saveAsCbz written=$archiveWritten found=$found -> $archived" }
         if (archived) {
             removeLooseImages()
         }
@@ -380,9 +387,22 @@ class SpiderDen(val info: GalleryInfo) {
      */
     suspend fun removeLooseImages() {
         val dir = downloadDir ?: return
-        dir.list().parMap(concurrency = 10) {
-            if (it.name.matches(FileNameRegex)) {
-                it.delete()
+        // One file that will not go must not stop the rest. `parMap` is
+        // structured concurrency: a single failure cancels its siblings, and a
+        // provider is entitled to fail one delete on its own -- which used to
+        // leave the gallery half cleaned, with no record of where it stopped.
+        // Deleting is IPC on a provider, not CPU work, so it goes on IO.
+        dir.list().let { entries ->
+            withContext(Dispatchers.IO) {
+                entries.parMap(concurrency = 10) {
+                    if (it.name.matches(FileNameRegex)) {
+                        runCatching {
+                            it.delete()
+                        }.onFailure {
+                            logcat(ARCHIVE_TAG) { "loose image not deleted: $it" }
+                        }
+                    }
+                }
             }
         }
         tempDownloadDir?.delete()
@@ -665,6 +685,9 @@ private val sCache by lazy {
     }
 }
 private const val TEMP_SUFFIX = ".tmp"
+
+/** Where the archive lifecycle says what it decided, so a cleanup that did not happen can be traced. */
+private const val ARCHIVE_TAG = "Archive"
 
 /** The extension a format writes. The two differ only in that. */
 private fun archiveSuffix(format: Int) = if (format == Settings.ARCHIVE_DWARFS) "dwarfs" else "cbz"
