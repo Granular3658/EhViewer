@@ -43,6 +43,7 @@ import com.hippo.ehviewer.client.ehRequest
 import com.hippo.ehviewer.client.getImageKey
 import com.hippo.ehviewer.coil.read
 import com.hippo.ehviewer.coil.suspendEdit
+import com.hippo.ehviewer.download.ARCHIVE_SUFFIXES
 import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.download.resolveDownloadDir
 import com.hippo.ehviewer.download.tempDownloadDir
@@ -431,10 +432,16 @@ class SpiderDen(val info: GalleryInfo) {
      * kept as instead, which is the only way that request can be answered.
      */
     suspend fun exportAsArchive(file: Path, format: Int) {
-        downloadDir!!.find("$gid." + archiveSuffix(format))?.sendTo(file)
-            ?: downloadDir!!.find("$gid." + archiveSuffix(otherArchiveFormat(format)))
-                ?.let { repack(it, file, format) }
-            ?: archiveTo(file, format)
+        // Any archive this app can read is a source. What the archiver hands over is
+        // a plain `.zip`, so a gallery can be nothing but that -- looking only for
+        // the two formats this app writes sent it to `archiveTo`, which packs from
+        // loose images that an archiver download never had.
+        val source = ARCHIVE_SUFFIXES.firstNotNullOfOrNull { downloadDir!!.find("$gid.$it") }
+        when {
+            source == null -> archiveTo(file, format)
+            source.name == "$gid." + archiveSuffix(format) -> source.sendTo(file)
+            else -> repack(source, file, format)
+        }
     }
 
     /**
@@ -691,9 +698,6 @@ private const val ARCHIVE_TAG = "Archive"
 
 /** The extension a format writes. The two differ only in that. */
 private fun archiveSuffix(format: Int) = if (format == Settings.ARCHIVE_DWARFS) "dwarfs" else "cbz"
-
-/** The format a gallery kept as [format] is not. */
-private fun otherArchiveFormat(format: Int) = if (format == Settings.ARCHIVE_DWARFS) Settings.ARCHIVE_CBZ else Settings.ARCHIVE_DWARFS
 
 /**
  * Suffix for an archive that is still being written. Distinct from [TEMP_SUFFIX]
