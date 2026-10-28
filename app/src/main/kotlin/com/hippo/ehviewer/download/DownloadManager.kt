@@ -16,6 +16,7 @@
 package com.hippo.ehviewer.download
 
 import android.net.Uri
+import android.os.SystemClock
 import android.util.SparseLongArray
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisallowComposableCalls
@@ -1149,30 +1150,44 @@ fun resolveDownloadDir(location: String?, dirname: String): Path = recordedLocat
  * hold a directory of the same name, and racing makes the winner the fastest one
  * rather than the preferred one. A directory with no marker is accepted anyway,
  * because a bare archive the user put there deliberately has none.
+ *
+ * Null means nobody has it. Returning a guessed path instead would have the caller
+ * re-check it with `isDirectory` -- a second round trip to the same share, and a
+ * second chance to fail, which is how a directory that had just been found turned
+ * into "read this one online".
  */
-suspend fun resolveDownloadDirSuspending(location: String?, dirname: String): Path {
-    recordedLocationPath(location)?.let { it / dirname }?.takeIf { it.isDirectory }?.let { return it }
+suspend fun resolveDownloadDirSuspending(location: String?, dirname: String): Path? {
+    val started = SystemClock.elapsedRealtime()
+    recordedLocationPath(location)?.let { it / dirname }?.takeIf { it.isDirectory }?.let { dir ->
+        logcat("SpiderDen") { "resolve $dirname: recorded $dir in ${SystemClock.elapsedRealtime() - started}ms" }
+        return dir
+    }
     val candidates = writableDownloadLocations.filter { it.toString() != location }
-    if (candidates.isEmpty()) return defaultDownloadLocation / dirname
+    if (candidates.isEmpty()) return null
     val gid = dirname.substringBefore('-').toLongOrNull()
     // The racers live outside this coroutine on purpose: a loser is blocked in a
     // provider call that cancellation cannot interrupt, and waiting for it is the
     // ten seconds this function exists to avoid.
     val racers = CoroutineScope(currentCoroutineContext() + SupervisorJob())
     try {
-        val winner = CompletableDeferred<Path>()
+        val winner = CompletableDeferred<Path?>()
         val jobs = candidates.map { path ->
             racers.launch(Dispatchers.IO) {
-                (path / dirname).takeIf { it.isDirectory && it.holdsGallery(gid) }?.let { winner.complete(it) }
+                runCatching { (path / dirname).takeIf { it.isDirectory && it.holdsGallery(gid) } }
+                    .onFailure { logcat("SpiderDen") { "resolve $dirname: $path threw ${it.message}" } }
+                    .getOrNull()?.let { winner.complete(it) }
             }
         }
-        // Nobody found it: the answer is the same fallback a plain miss has always
-        // produced, and it arrives when the slowest location has given up.
+        // Nobody found it: the answer arrives when the slowest location has given up.
         racers.launch {
             jobs.joinAll()
-            winner.complete(defaultDownloadLocation / dirname)
+            winner.complete(null)
         }
-        return winner.await()
+        val found = winner.await()
+        logcat("SpiderDen") {
+            "resolve $dirname: ${candidates.size} locations searched, got $found in ${SystemClock.elapsedRealtime() - started}ms"
+        }
+        return found
     } finally {
         racers.cancel()
     }

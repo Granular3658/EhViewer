@@ -15,6 +15,7 @@
  */
 package com.hippo.ehviewer.spider
 
+import android.os.SystemClock
 import android.webkit.MimeTypeMap
 import arrow.fx.coroutines.autoCloseable
 import arrow.fx.coroutines.closeable
@@ -45,6 +46,7 @@ import com.hippo.ehviewer.coil.read
 import com.hippo.ehviewer.coil.suspendEdit
 import com.hippo.ehviewer.download.ARCHIVE_SUFFIXES
 import com.hippo.ehviewer.download.DownloadManager
+import com.hippo.ehviewer.download.defaultDownloadLocation
 import com.hippo.ehviewer.download.resolveDownloadDir
 import com.hippo.ehviewer.download.resolveDownloadDirSuspending
 import com.hippo.ehviewer.download.tempDownloadDir
@@ -113,12 +115,18 @@ class SpiderDen(val info: GalleryInfo) {
     private var fileCache: MutableMap<String, Path>? = null
 
     @Synchronized
-    private fun fileCache(): MutableMap<String, Path> = fileCache ?: listOfNotNull(tempDownloadDir, downloadDir)
-        .map(Path::list)
-        .flatten()
-        .associateBy { it.name }
-        .toMutableMap()
-        .also { fileCache = it }
+    private fun fileCache(): MutableMap<String, Path> = fileCache ?: run {
+        val started = SystemClock.elapsedRealtime()
+        val map = listOfNotNull(tempDownloadDir, downloadDir)
+            .map(Path::list)
+            .flatten()
+            .associateBy { it.name }
+            .toMutableMap()
+        // A listing that comes back empty is what a page lookup misses on, and it is
+        // indistinguishable from a gallery that really has nothing in it.
+        logcat("SpiderDen") { "listing $downloadDir: ${map.size} entries in ${SystemClock.elapsedRealtime() - started}ms" }
+        map.also { fileCache = it }
+    }
 
     private val imageDir
         get() = if (downloadDir?.isSmb == true) {
@@ -640,7 +648,12 @@ class SpiderDen(val info: GalleryInfo) {
     }
 
     suspend fun initDownloadDirIfExist() {
-        downloadDir = getGalleryDownloadDir(info).takeIf { it.isDirectory }
+        downloadDir = getGalleryDownloadDir(info)
+        if (downloadDir == null) {
+            // Nothing has the directory: every page will be fetched again.
+            val dirname = info.downloadDirname()
+            logcat("SpiderDen") { "resolve ${info.gid}: no location has $dirname, reading online" }
+        }
         tempDownloadDir = info.tempDownloadDir?.takeIf { it.isDirectory }
         // An archive that was being written when the app went away is debris: it
         // is never read, and leaving it would mean it is rewritten from the start
@@ -748,9 +761,9 @@ suspend fun openSpiderDen(info: GalleryInfo, dirname: String, location: String?)
  * The location the app recorded is asked first, and the search is only the
  * fallback for a directory that moved -- see [resolveDownloadDirSuspending].
  */
-suspend fun getGalleryDownloadDir(info: GalleryInfo): Path {
+suspend fun getGalleryDownloadDir(info: GalleryInfo): Path? {
     val dirname = info.downloadDirname()
-    val dir = resolveDownloadDirSuspending(EhDB.getDownloadLocation(info.gid), dirname)
+    val dir = resolveDownloadDirSuspending(EhDB.getDownloadLocation(info.gid), dirname) ?: return null
     dir.recordDownloadLocation(info.gid, dirname)
     return dir
 }
@@ -762,6 +775,7 @@ suspend fun getGalleryDownloadDir(info: GalleryInfo): Path {
 suspend fun getGalleryWritableDownloadDir(info: GalleryInfo): Path {
     val dirname = info.downloadDirname()
     val dir = resolveDownloadDirSuspending(EhDB.getDownloadLocation(info.gid), dirname)
+        ?: defaultDownloadLocation / dirname
     dir.recordDownloadLocation(info.gid, dirname)
     return dir
 }
