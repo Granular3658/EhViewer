@@ -556,7 +556,12 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
         val downloadStarted = stringResource(R.string.download_archive_started)
         val noHathClient = stringResource(R.string.download_archive_failure_no_hath)
         val downloadFailed = stringResource(R.string.download_archive_failure)
-        val archiveResult = remember(galleryDetail) {
+        // The fetch is remembered so that reopening the dialog does not ask again.
+        // A failure is remembered too -- a completed `Deferred` rethrows its
+        // exception on every `await` -- which made a second tap fail instantly
+        // with the first tap's error and no way to retry short of leaving the page.
+        var archiveAttempt by remember(galleryDetail) { mutableIntStateOf(0) }
+        val archiveResult = remember(galleryDetail, archiveAttempt) {
             async(Dispatchers.IO + Job(), CoroutineStart.LAZY) {
                 with(galleryDetail) {
                     EhEngine.getArchiveList(gid, token)
@@ -586,11 +591,19 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
                                 // back for it, so there is nothing to fetch here.
                                 snackbar(noHathClient)
                             } else {
-                                snackbar(downloadStarted)
+                                // Start the transfer before showing the snackbar.
+                                // `snackbar` suspends until it is dismissed, and this
+                                // coroutine dies with the screen: leaving the page
+                                // during those seconds meant the service was never
+                                // started, so nothing happened at all.
                                 EhUtils.downloadArchive(context, galleryDetail, selected)
+                                snackbar(downloadStarted)
                             }
                         }
                     }.onFailure {
+                        // Drop the failed fetch so the next tap asks the server
+                        // again instead of replaying this error.
+                        archiveAttempt++
                         when (it) {
                             is NoHathClientException -> snackbar(it.message!!)
                             is EhException -> snackbar(it.displayString())

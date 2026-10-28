@@ -66,6 +66,9 @@ import com.hippo.ehviewer.util.AppConfig
 import com.hippo.ehviewer.util.ReadableTime
 import com.hippo.ehviewer.util.bodyAsUtf8Text
 import com.hippo.ehviewer.util.ensureSuccess
+import io.ktor.client.plugins.HttpTimeoutConfig
+import io.ktor.client.plugins.timeout
+import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.HttpStatement
 import io.ktor.client.statement.bodyAsChannel
@@ -216,11 +219,27 @@ object EhEngine {
         "${id}x$key"
     }
 
+    /**
+     * The archiver builds an archive inside the request that asks for it.
+     *
+     * That regularly takes longer than the client's 10 s default -- a timeout
+     * sized for a page -- and the failure reads as "the archive is unavailable"
+     * rather than as a slow server. Bound the gap between bytes instead of the
+     * whole call, the same way the transfer itself is bounded.
+     */
+    private fun HttpRequestBuilder.archiveTimeout() {
+        timeout {
+            requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
+            socketTimeoutMillis = 60_000
+        }
+    }
+
     suspend fun getArchiveList(gid: Long, token: String): ArchiveParser.Result {
         val url = EhUrl.getArchiveUrl(gid, token)
         val funds = if (EhUtils.isExHentai) getFunds() else null
-        return ehRequest(url, EhUrl.getGalleryDetailUrl(gid, token))
-            .fetchUsingAsByteBuffer(ArchiveParser::parse.partially2(funds))
+        return ehRequest(url, EhUrl.getGalleryDetailUrl(gid, token)) {
+            archiveTimeout()
+        }.fetchUsingAsByteBuffer(ArchiveParser::parse.partially2(funds))
     }
 
     suspend fun getImageLimits() = parZip(
@@ -349,6 +368,7 @@ object EhEngine {
                     }
                 }
             }
+            archiveTimeout()
         }
         var result = request.fetchUsingAsByteBuffer(ArchiveParser::parseArchiveUrl)
         if (!isHath) {
