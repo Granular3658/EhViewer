@@ -391,8 +391,14 @@ class ArchiveDownloadService : Service(), CoroutineScope {
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(title.ifEmpty { getString(R.string.archive_download_title, gid) })
             .setContentText(text)
+            // The text is a size, a total and a rate, which is more than one line on
+            // a narrow screen holds.
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setOngoing(true)
             .setShowWhen(false)
+            // Repainting a progress notification is not news: without this every
+            // update re-runs the alert, and the icon animates along with it.
+            .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setProgress(if (indeterminate) 0 else 100, if (indeterminate) 0 else (done * 100 / total).toInt(), indeterminate)
             .addAction(com.hippo.ehviewer.R.drawable.v_pause_x24, getString(R.string.archive_download_cancel), cancel)
@@ -404,6 +410,11 @@ class ArchiveDownloadService : Service(), CoroutineScope {
      *
      * The copy reports every buffer it moves, which is a few kilobytes: building
      * a notification per buffer is thousands of binder calls for one archive.
+     *
+     * Through startForeground, the way the page downloader updates its own: this
+     * service's notification is the foreground one, and re-posting it with notify()
+     * leaves the system redrawing the icon on some devices -- and, on at least one,
+     * with the content text still saying what it said when the service started.
      */
     private fun notify(gid: Long, text: String, done: Long, total: Long) {
         val now = SystemClock.elapsedRealtime()
@@ -411,7 +422,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         if (!finished && now - lastNotifiedAt < NOTIFY_INTERVAL_MILLIS) return
         lastNotifiedAt = now
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
-        runCatching { notifyManager.notify(NOTIFICATION_ID, buildNotification(gid, text, done, total)) }
+        runCatching { startForeground(NOTIFICATION_ID, buildNotification(gid, text, done, total)) }
     }
 
     private fun progressText(done: Long, total: Long, speed: Long): String {
@@ -456,7 +467,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         private const val KEY_HATH = "hath"
         private const val KEY_TITLE = "title"
         private const val NOTIFICATION_ID = 10
-        private const val NOTIFY_INTERVAL_MILLIS = 250L
+        private const val NOTIFY_INTERVAL_MILLIS = 500L
         private const val SPEED_SAMPLE_MILLIS = 1000L
 
         fun start(context: Context, galleryDetail: GalleryDetail, archive: Archive) {
