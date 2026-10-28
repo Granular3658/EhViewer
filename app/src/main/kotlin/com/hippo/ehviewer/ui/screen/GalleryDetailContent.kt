@@ -555,7 +555,7 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
         val noArchive = stringResource(R.string.no_archives)
         val downloadStarted = stringResource(R.string.download_archive_started)
         val noHathClient = stringResource(R.string.download_archive_failure_no_hath)
-        val downloadFailed = stringResource(R.string.download_archive_failure)
+        val archiveBusy = stringResource(R.string.download_archive_busy)
         // The fetch is remembered so that reopening the dialog does not ask again.
         // A failure is remembered too -- a completed `Deferred` rethrows its
         // exception on every `await` -- which made a second tap fail instantly
@@ -609,7 +609,11 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
                             is EhException -> snackbar(it.displayString())
                             else -> {
                                 logcat(it)
-                                snackbar(downloadFailed)
+                                // Everything this block wraps is the list fetch, and
+                                // it fails because the archiver is unreachable or
+                                // refusing -- a 503 from the cache in front of it, or
+                                // a stall -- which clears up on its own.
+                                snackbar(archiveBusy)
                             }
                         }
                     }

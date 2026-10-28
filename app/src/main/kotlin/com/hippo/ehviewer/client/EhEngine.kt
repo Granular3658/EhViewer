@@ -101,6 +101,9 @@ private const val MAX_REQUEST_SIZE = 25
 private const val MAX_SEQUENTIAL_REQUESTS = 5
 private const val REQUEST_INTERVAL = 5000L
 
+/** How long the archive list may stall before the dialog gives up and asks the user to retry. */
+private const val ARCHIVE_LIST_SOCKET_TIMEOUT_MILLIS = 5_000L
+
 private val Url.isLogin get() = segments.firstOrNull() == "bounce_login.php"
 
 private fun Either<String, ByteBuffer>.saveParseError(e: Throwable) {
@@ -222,12 +225,18 @@ object EhEngine {
     /**
      * The archiver builds an archive inside the request that asks for it.
      *
-     * That regularly takes longer than the client's 10 s default -- a timeout
-     * sized for a page -- and the failure reads as "the archive is unavailable"
-     * rather than as a slow server. Bound the gap between bytes instead of the
-     * whole call, the same way the transfer itself is bounded.
+     * Two timeouts, because the two calls cost the user differently. The list
+     * opens a modal dialog, so it fails fast: when the archiver is down -- the
+     * 503 from Varnish/Cloudflare that clears up after a minute or two -- waiting
+     * out the client's 10 s default buys nothing and looks like a hang. The link
+     * resolution runs behind a notification, so it may take as long as the
+     * server does, bounded by the gap between bytes.
      */
-    private fun HttpRequestBuilder.archiveTimeout() {
+    private fun HttpRequestBuilder.archiveListTimeout() {
+        timeout { socketTimeoutMillis = ARCHIVE_LIST_SOCKET_TIMEOUT_MILLIS }
+    }
+
+    private fun HttpRequestBuilder.archiveLinkTimeout() {
         timeout {
             requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
             socketTimeoutMillis = 60_000
@@ -238,7 +247,7 @@ object EhEngine {
         val url = EhUrl.getArchiveUrl(gid, token)
         val funds = if (EhUtils.isExHentai) getFunds() else null
         return ehRequest(url, EhUrl.getGalleryDetailUrl(gid, token)) {
-            archiveTimeout()
+            archiveListTimeout()
         }.fetchUsingAsByteBuffer(ArchiveParser::parse.partially2(funds))
     }
 
@@ -368,7 +377,7 @@ object EhEngine {
                     }
                 }
             }
-            archiveTimeout()
+            archiveLinkTimeout()
         }
         var result = request.fetchUsingAsByteBuffer(ArchiveParser::parseArchiveUrl)
         if (!isHath) {
