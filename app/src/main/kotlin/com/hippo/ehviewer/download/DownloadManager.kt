@@ -1128,14 +1128,22 @@ fun resolveDownloadDir(location: String?, dirname: String): Path = recordedLocat
 private fun recordedLocationPath(location: String?): Path? = location?.let { saved -> allDownloadLocations.firstOrNull { it.toString() == saved } }
 
 /**
+ * The archive names this app looks for, in the order it prefers them.
+ *
+ * `.dwarfs` and `.cbz` are the ones this app writes, `.zip` is what the archiver
+ * hands over, and `.rar`/`.7z` come last because they are the ones this app never
+ * writes -- if one of those is there, the user put it there deliberately.
+ */
+internal val ARCHIVE_SUFFIXES = listOf("dwarfs", "cbz", "zip", "rar", "7z")
+
+/**
  * The gallery's single-file archive, if it has one.
  *
  * An image comes first: it is the one a user built themselves, and if both are
- * somehow present the one they made deliberately is the one to read. `.zip`,
- * `.rar` and `.7z` are last because they are the ones this app never writes.
+ * somehow present the one they made deliberately is the one to read.
  */
 val DownloadInfo.archiveFile get() = downloadDir?.run {
-    find("$gid.dwarfs") ?: find("$gid.cbz") ?: find("$gid.zip") ?: find("$gid.rar") ?: find("$gid.7z")
+    ARCHIVE_SUFFIXES.firstNotNullOfOrNull { find("$gid.$it") }
 }
 
 /**

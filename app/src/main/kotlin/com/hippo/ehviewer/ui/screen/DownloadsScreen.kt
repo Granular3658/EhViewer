@@ -115,6 +115,7 @@ import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.asMutableState
 import com.hippo.ehviewer.client.EhTagDatabase
 import com.hippo.ehviewer.collectAsState
+import com.hippo.ehviewer.download.ArchiveDownloadService
 import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.download.DownloadService
 import com.hippo.ehviewer.download.DownloadsFilterMode
@@ -699,7 +700,17 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
                                 onStart = {
                                     DownloadService.startDownload(info.galleryInfo)
                                 },
-                                onStop = { launchIO { DownloadManager.stopDownload(info.gid) } },
+                                onStop = {
+                                    // An archive transfer is not the page downloader's
+                                    // task: stopping it means telling its own service,
+                                    // or the row would go quiet while the transfer kept
+                                    // running and kept spending GP.
+                                    if (DownloadManager.isArchiveDownloading(info.gid)) {
+                                        ArchiveDownloadService.cancel(contextOf<Context>(), info.gid)
+                                    } else {
+                                        launchIO { DownloadManager.stopDownload(info.gid) }
+                                    }
+                                },
                                 info = info,
                                 selectMode = selectMode,
                                 showProgress = showProgress,

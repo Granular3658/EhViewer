@@ -19,6 +19,7 @@ import androidx.savedstate.serialization.decodeFromSavedState
 import androidx.savedstate.serialization.encodeToSavedState
 import com.ehviewer.core.files.SystemFileSystem
 import com.ehviewer.core.files.delete
+import com.ehviewer.core.files.find
 import com.ehviewer.core.files.moveTo
 import com.ehviewer.core.files.read
 import com.ehviewer.core.files.write
@@ -91,6 +92,10 @@ class ArchiveDownloadService : Service(), CoroutineScope {
 
     /** Serializes "create the row, then queue it", so the queue keeps arrival order. */
     private val enqueueMutex = Mutex()
+
+    /** The gallery the worker is on right now, or -1; read from the main thread. */
+    @Volatile
+    private var currentGid = -1L
     private var title: String = ""
     private var lastNotifiedAt = 0L
 
@@ -147,6 +152,23 @@ class ArchiveDownloadService : Service(), CoroutineScope {
                     DownloadManager.releaseArchiveDownload(it.gid)
                 }
                 worker?.cancel()
+            }
+            ACTION_CANCEL_ONE -> {
+                // The stop button on one row: that gallery's request goes, and the
+                // running transfer stops if it is the one being asked about. The
+                // worker's own unwinding releases the claim, so cancelling it is
+                // enough -- the rest of the queue carries on.
+                val gid = intent.getLongExtra(KEY_GID, -1L)
+                val dropped = synchronized(queue) {
+                    val copy = queue.filter { it.gid == gid }
+                    queue.removeAll { it.gid == gid }
+                    copy
+                }
+                dropped.forEach {
+                    DownloadManager.abandonArchiveDownload(it.gid)
+                    DownloadManager.releaseArchiveDownload(it.gid)
+                }
+                if (currentGid == gid) worker?.cancel()
             }
         }
         return START_NOT_STICKY
@@ -222,7 +244,21 @@ class ArchiveDownloadService : Service(), CoroutineScope {
     private suspend fun run(request: Request) {
         val gid = request.gid
         var part: Path? = null
+        currentGid = gid
         try {
+            // The archiver charges GP for the request that builds an archive, so a
+            // gallery that already has one -- written by this app or put there by
+            // the user -- is already downloaded and must not be asked for again.
+            // The check has to sit here, before the request: after it, the GP is
+            // already spent and skipping saves nothing.
+            val existing = SpiderDen(request.galleryDetail).apply { initDownloadDir() }
+                .downloadDir?.let { dir -> ARCHIVE_SUFFIXES.firstNotNullOfOrNull { dir.find("$gid.$it") } }
+            if (existing != null) {
+                Log.d(tag, "archive $gid: already have ${existing.name}, not asking the archiver")
+                DownloadManager.markArchiveDownloaded(gid, request.galleryDetail.pages)
+                finish(gid, message = getString(R.string.archive_download_exists))
+                return
+            }
             DownloadManager.beginArchiveDownload(gid)
             val downloaded = prepare(request)
             part = downloaded
@@ -254,6 +290,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
             DownloadManager.abandonArchiveDownload(gid)
             finish(gid, e)
         } finally {
+            if (currentGid == gid) currentGid = -1L
             DownloadManager.finishArchiveDownload(gid)
         }
     }
@@ -350,8 +387,8 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         "${Formatter.formatFileSize(this, done)} / ${Formatter.formatFileSize(this, total)}"
     }
 
-    private fun finish(gid: Long, error: Throwable? = null) {
-        val text = if (error == null) {
+    private fun finish(gid: Long, error: Throwable? = null, message: String? = null) {
+        val text = message ?: if (error == null) {
             getString(R.string.archive_download_done)
         } else {
             error.message ?: getString(R.string.download_archive_failure)
@@ -376,6 +413,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
     companion object {
         private const val ACTION_START = "archive_start"
         private const val ACTION_CANCEL = "archive_cancel"
+        private const val ACTION_CANCEL_ONE = "archive_cancel_one"
         private const val KEY_GALLERY = "gallery"
         private const val KEY_GID = "gid"
         private const val KEY_RES = "res"
@@ -396,6 +434,19 @@ class ArchiveDownloadService : Service(), CoroutineScope {
                 .putExtra(KEY_HATH, archive.isHath)
                 .putExtra(KEY_TITLE, EhUtils.getSuitableTitle(galleryDetail))
             ContextCompat.startForegroundService(context, intent)
+        }
+
+        /**
+         * Stops one gallery's archive transfer, from the stop button on its row.
+         *
+         * The service is running whenever this is called -- a claim in
+         * [DownloadManager] means a request exists -- so a plain start is enough.
+         */
+        fun cancel(context: Context, gid: Long) {
+            val intent = Intent(context, ArchiveDownloadService::class.java)
+                .setAction(ACTION_CANCEL_ONE)
+                .putExtra(KEY_GID, gid)
+            context.startService(intent)
         }
     }
 }

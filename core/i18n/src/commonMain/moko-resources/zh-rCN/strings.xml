@@ -469,6 +469,7 @@
     <string name="download_archive_started">开始下载压缩包</string>
     <string name="download_archive_failure">无法下载压缩包</string>
     <string name="download_archive_busy">服务器可能正在打包画廊，请稍候再试</string>
+    <string name="archive_download_exists">已有压缩包，无需下载</string>
     <string name="download_archive_failure_no_hath">下载压缩包需要 H@H 客户端</string>
     <string name="archive_download_title">归档 %1$d</string>
     <string name="archive_download_preparing">正在准备…</string>
