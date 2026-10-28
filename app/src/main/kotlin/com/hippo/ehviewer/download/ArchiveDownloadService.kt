@@ -97,6 +97,10 @@ class ArchiveDownloadService : Service(), CoroutineScope {
     /** The gallery the worker is on right now, or -1; read from the main thread. */
     @Volatile
     private var currentGid = -1L
+
+    /** Whether this instance has been put in the foreground; only the first request needs it. */
+    @Volatile
+    private var inForeground = false
     private var title: String = ""
     private var lastNotifiedAt = 0L
 
@@ -129,8 +133,11 @@ class ArchiveDownloadService : Service(), CoroutineScope {
                     title = intent.getStringExtra(KEY_TITLE).orEmpty(),
                 )
                 // The notification has to exist before the work starts: a service
-                // that takes minutes to reach startForeground is killed.
-                startForegroundSafely(request.gid, getString(R.string.archive_download_preparing), 0, 0)
+                // that takes minutes to reach startForeground is killed. Only the
+                // first request does this, though -- a queued one would repaint the
+                // notification the running transfer is using, and its progress and
+                // speed would vanish until the next buffer arrives.
+                if (!inForeground) startForegroundSafely(request.gid, getString(R.string.archive_download_preparing), 0, 0)
                 // The same gallery asked for twice is one download. Without this
                 // the queue holds it twice, and the second transfer renames onto
                 // a name that already exists -- which a document provider answers
@@ -261,6 +268,11 @@ class ArchiveDownloadService : Service(), CoroutineScope {
                 return
             }
             DownloadManager.beginArchiveDownload(gid)
+            // The previous transfer left its own "done" notification in this slot;
+            // take it over before the first byte, or a finished download is what the
+            // user sees while the next one is starting.
+            lastNotifiedAt = 0
+            notify(gid, getString(R.string.archive_download_preparing), 0, 0)
             val downloaded = prepare(request)
             part = downloaded
             downloaded moveTo downloaded.parent!!.resolve("$gid.zip")
@@ -344,7 +356,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
                     // while -- so a sample is worth an update on its own.
                     if (percent != lastPercent || sampled) {
                         lastPercent = percent
-                        DownloadManager.updateArchiveProgress(gid, percent, speed)
+                        DownloadManager.updateArchiveProgress(gid, percent, speed, written, total)
                     }
                 }
             }
@@ -362,7 +374,9 @@ class ArchiveDownloadService : Service(), CoroutineScope {
 
     private fun startForegroundSafely(gid: Long, text: String, done: Long, total: Long) {
         val notification = buildNotification(gid, text, done, total)
-        runCatching { startForeground(NOTIFICATION_ID, notification) }.onFailure {
+        runCatching { startForeground(NOTIFICATION_ID, notification) }.onSuccess {
+            inForeground = true
+        }.onFailure {
             // Android 12 refuses a foreground start from the background; the
             // download still runs, it just has no notification to show.
             if (isAtLeastS && it is ForegroundServiceStartNotAllowedException) logcat(it) else throw it

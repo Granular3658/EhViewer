@@ -32,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -129,17 +130,28 @@ fun DownloadCard(
                 var total by remember { mutableIntStateOf(info.total) }
                 var finished by remember { mutableIntStateOf(info.finished) }
                 var speed by remember { mutableLongStateOf(info.speed) }
+                var sizeText by remember { mutableStateOf<String?>(null) }
                 DownloadManager.updatedDownloadInfo(info) {
                     total = this.total
                     finished = this.finished
                     speed = this.speed
+                    // An archive transfer counts in bytes, not pages: the percentage
+                    // it reports is a stand-in for a size that does not fit the
+                    // counters, and the size is what the notification shows anyway.
+                    sizeText = DownloadManager.archiveByteProgress(gid)?.let { (done, all) ->
+                        if (all > 0) {
+                            "${FileUtils.humanReadableByteCount(done)} / ${FileUtils.humanReadableByteCount(all)}"
+                        } else {
+                            FileUtils.humanReadableByteCount(done)
+                        }
+                    }
                 }
                 ProvideTextStyle(MaterialTheme.typography.labelMedium) {
                     if (total <= 0 || finished < 0) {
                         LinearWavyProgressIndicator(modifier = Modifier.fillMaxWidth())
                     } else {
                         Row {
-                            Text(text = "$finished/$total")
+                            Text(text = sizeText ?: "$finished/$total")
                             Spacer(modifier = Modifier.weight(1f))
                             Text(text = FileUtils.humanReadableByteCount(speed.coerceAtLeast(0)) + "/S")
                         }

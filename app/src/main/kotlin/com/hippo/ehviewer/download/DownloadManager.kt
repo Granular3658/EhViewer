@@ -365,6 +365,9 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
      */
     private val archiveDownloads = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
 
+    /** Byte progress per archive transfer, session only; see [archiveByteProgress]. */
+    private val archiveBytes = java.util.concurrent.ConcurrentHashMap<Long, LongArray>()
+
     fun isArchiveDownloading(gid: Long) = gid in archiveDownloads
 
     /**
@@ -416,8 +419,11 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
         mutableNotifyFlow.tryEmit(info)
     }
 
-    fun updateArchiveProgress(gid: Long, percent: Int, speed: Long) {
+    fun updateArchiveProgress(gid: Long, percent: Int, speed: Long, done: Long, total: Long) {
         val info = mAllInfoMap[gid] ?: return
+        // Kept before the "nothing changed" check: the percentage can sit still
+        // while bytes keep arriving, and the size next to it should not.
+        archiveBytes[gid] = longArrayOf(done, total)
         val value = percent.coerceIn(0, ARCHIVE_PROGRESS_STEPS)
         if (info.finished == value && info.speed == speed) return
         info.finished = value
@@ -425,6 +431,16 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
         info.speed = speed
         mutableNotifyFlow.tryEmit(info)
     }
+
+    /**
+     * How far an archive transfer has got in bytes, or null if none is running.
+     *
+     * Session state, like the percentage it accompanies: the counters on
+     * [DownloadInfo] are pages, and they are `Int`, which a multi-gigabyte archive
+     * overflows. The notification has always had the real numbers; this is how the
+     * download list gets at them.
+     */
+    fun archiveByteProgress(gid: Long): Pair<Long, Long>? = archiveBytes[gid]?.let { it[0] to it[1] }
 
     /** The transfer ended without an archive: the row goes back to how a restore leaves it. */
     fun abandonArchiveDownload(gid: Long) {
@@ -440,6 +456,7 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
     /** The transfer is over, either way: the gallery may be downloaded as pages again. */
     fun finishArchiveDownload(gid: Long) {
         archiveDownloads -= gid
+        archiveBytes -= gid
         launch { ensureDownload() }
     }
 
