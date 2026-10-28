@@ -28,11 +28,11 @@ object ArchiveParser {
      *
      * The archiver charges GP the first time an archive is built and serves it for
      * free afterwards, and the only sign of that on the page is this line: "You
-     * unlocked a <strong>resample</strong> download of this archive on ...". It is
+     * unlocked an <strong>original</strong> download of this archive on ...". It is
      * worth reading, because the cost next to the button keeps saying what it
-     * always said.
+     * always said. The article is "an" before original and "a" before resample.
      */
-    private val UNLOCKED_REGEX = Regex("""You unlocked a <strong>(\w+)</strong> download of this archive""")
+    private val UNLOCKED_REGEX = Regex("""You unlocked an? <strong>(\w+)</strong> download of this archive""")
 
     fun parse(body: ByteBuffer, maybeFunds: Funds?): Result {
         val unlocked = unlockedFrom(body)
