@@ -11,6 +11,7 @@ import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.util.Log
+import java.io.FileNotFoundException
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -307,6 +308,26 @@ class SmbProvider : ContentProvider() {
     override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?): Int = throw IOException("SMB locations are read-only")
 
     /**
+     * Runs a native call, reporting a server refusal as a missing path.
+     *
+     * Every failure from the SMB client arrives as a plain `RuntimeException`
+     * (`jni_throwing` formats the error and throws `java/lang/RuntimeException`),
+     * and crossing `ContentResolver.call` it stays unchecked -- so a caller that
+     * does not guard a delete takes the whole process down with it, which is
+     * exactly what `Protocol error: STATUS_NOT_A_DIRECTORY during delete` did on
+     * a `DefaultDispatcher` worker. A path the server will not act on is the
+     * document API's `FileNotFoundException`, which callers already expect.
+     *
+     * `SmbAuthRequired` is not a `RuntimeException`, so a credentials problem
+     * still reaches the caller as itself.
+     */
+    private inline fun <T> smbCall(what: String, block: () -> T): T = try {
+        block()
+    } catch (e: RuntimeException) {
+        throw FileNotFoundException("$what failed: ${e.message}").apply { initCause(e) }
+    }
+
+    /**
      * Filesystem-level SMB operations routed here from [AndroidFileSystem] so the
      * core module can stay free of the app's Rust bindings. `mkdir`/`delete`
      * take the location as `arg`; `rename` takes `from`/`to` in [extras] (the
@@ -316,13 +337,13 @@ class SmbProvider : ContentProvider() {
         "mkdir" -> {
             val location = SmbLocation.parse(arg!!)
             checkNotNull(location) { "Invalid SMB location: $arg" }
-            runBlocking { SmbRepository.mkdir(location) }
+            smbCall("mkdir $location") { runBlocking { SmbRepository.mkdir(location) } }
             Bundle.EMPTY
         }
         "delete" -> {
             val location = SmbLocation.parse(arg!!)
             checkNotNull(location) { "Invalid SMB location: $arg" }
-            runBlocking { SmbRepository.delete(location) }
+            smbCall("delete $location") { runBlocking { SmbRepository.delete(location) } }
             Bundle.EMPTY
         }
         "rename" -> {
@@ -331,7 +352,7 @@ class SmbProvider : ContentProvider() {
             val to = SmbLocation.parse(e.getString("to")!!)
             checkNotNull(from) { "Invalid SMB location: ${e.getString("from")}" }
             checkNotNull(to) { "Invalid SMB location: ${e.getString("to")}" }
-            runBlocking { SmbRepository.rename(from, to) }
+            smbCall("rename $from -> $to") { runBlocking { SmbRepository.rename(from, to) } }
             Bundle.EMPTY
         }
         else -> super.call(method, arg, extras)
