@@ -1235,6 +1235,29 @@ val DownloadInfo.archiveFile get() = downloadDir?.run {
 }
 
 /**
+ * The archive this gallery was downloaded as, wherever it is now.
+ *
+ * [archiveFile] answers from the recorded location, which is what a list needs --
+ * it draws a row per gallery and cannot search for each one. Opening a gallery is
+ * the opposite: it happens once, it may wait, and getting the answer wrong is not
+ * cosmetic. A directory that was moved is recorded in its old location until
+ * something looks for it, and the reader took "no archive there" to mean "this was
+ * never downloaded": it read the gallery online, then wrote the pages it fetched
+ * into a directory it had no permission to write to.
+ *
+ * Finding the directory is also what heals the record, so the rest of the session
+ * -- and the download list -- stop asking the old location.
+ */
+suspend fun resolveArchiveFile(info: GalleryInfo): Path? {
+    val download = DownloadManager.getDownloadInfo(info.gid) ?: return null
+    download.archiveFile?.let { return it }
+    val dirname = info.downloadDirname()
+    val dir = resolveDownloadDirSuspending(download.location, dirname) ?: return null
+    dir.parent?.let { DownloadManager.recordDownloadDir(info.gid, dirname, it.toString()) }
+    return dir.run { ARCHIVE_SUFFIXES.firstNotNullOfOrNull { find("${info.gid}.$it") } }
+}
+
+/**
  * The scale an archive transfer's progress is reported on.
  *
  * `DownloadInfo` counts pages, and its counters are `Int`: a byte total overflows

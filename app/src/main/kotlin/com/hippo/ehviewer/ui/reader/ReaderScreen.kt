@@ -68,6 +68,7 @@ import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.download.archiveFile
+import com.hippo.ehviewer.download.resolveArchiveFile
 import com.hippo.ehviewer.gallery.Page
 import com.hippo.ehviewer.gallery.PageLoader
 import com.hippo.ehviewer.gallery.PageStatus
@@ -406,7 +407,7 @@ suspend inline fun <T> usePageLoader(args: ReaderScreenArgs, crossinline block: 
     is ReaderScreenArgs.Gallery -> {
         val info = args.info
         val page = args.page.takeUnless { it == -1 } ?: EhDB.getReadProgress(info.gid)
-        val archive = DownloadManager.getDownloadInfo(info.gid)?.archiveFile
+        val archive = resolveArchiveFile(info)
         if (archive != null) {
             // An image is not an archive: it is a filesystem, and it is read
             // through its own reader rather than through libarchive. This is the
