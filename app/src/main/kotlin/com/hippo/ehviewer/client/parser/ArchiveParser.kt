@@ -23,16 +23,39 @@ import java.nio.ByteBuffer
 import kotlinx.serialization.Serializable
 
 object ArchiveParser {
-    fun parse(body: ByteBuffer, maybeFunds: Funds?) = catch {
-        if (maybeFunds != null) {
-            val archives = unmarshalParsingAs<List<Archive>>(body, ::parseArchives)
-            Result(archives, maybeFunds)
-        } else {
-            unmarshalParsingAs<Result>(body, ::parseArchives.partially3(true))
+    /**
+     * The archive the page says was already paid for.
+     *
+     * The archiver charges GP the first time an archive is built and serves it for
+     * free afterwards, and the only sign of that on the page is this line: "You
+     * unlocked a <strong>resample</strong> download of this archive on ...". It is
+     * worth reading, because the cost next to the button keeps saying what it
+     * always said.
+     */
+    private val UNLOCKED_REGEX = Regex("""You unlocked a <strong>(\w+)</strong> download of this archive""")
+
+    fun parse(body: ByteBuffer, maybeFunds: Funds?): Result {
+        val unlocked = unlockedFrom(body)
+        return catch {
+            if (maybeFunds != null) {
+                val archives = unmarshalParsingAs<List<Archive>>(body, ::parseArchives)
+                Result(archives, maybeFunds, unlocked)
+            } else {
+                unmarshalParsingAs<Result>(body, ::parseArchives.partially3(true)).copy(unlocked = unlocked)
+            }
+        }.getOrElse {
+            throw ParseException("Can't parse archive list", it)
         }
-    }.getOrElse {
-        throw ParseException("Can't parse archive list", it)
     }
+
+    /** Read on a duplicate: the buffer is still needed for the parse that follows. */
+    private fun unlockedFrom(body: ByteBuffer): String? = runCatching {
+        val buffer = body.duplicate()
+        buffer.position(0)
+        val bytes = ByteArray(buffer.remaining())
+        buffer.get(bytes)
+        UNLOCKED_REGEX.find(String(bytes, Charsets.UTF_8))?.groupValues?.get(1)
+    }.getOrNull()
 
     fun parseArchiveUrl(body: ByteBuffer) = catch {
         unmarshalParsingAs<String?>(body, ::parseArchiveUrl)
@@ -41,7 +64,7 @@ object ArchiveParser {
     }
 
     @Serializable
-    data class Result(val archiveList: List<Archive>, val funds: Funds)
+    data class Result(val archiveList: List<Archive>, val funds: Funds, val unlocked: String? = null)
 }
 
 @Serializable

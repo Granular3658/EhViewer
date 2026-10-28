@@ -574,14 +574,15 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
                     snackbar(signInFirst)
                 } else {
                     runSuspendCatching {
-                        val (archiveList, funds) = bgWork { archiveResult.await() }
-                        if (archiveList.isEmpty()) {
+                        val result = bgWork { archiveResult.await() }
+                        if (result.archiveList.isEmpty()) {
                             snackbar(noArchive)
                         } else {
                             val selected = showNoButton {
                                 ArchiveList(
-                                    funds = funds,
-                                    items = archiveList,
+                                    funds = result.funds,
+                                    items = result.archiveList,
+                                    unlocked = result.unlocked,
                                     onItemClick = { resume(it) },
                                 )
                             }
