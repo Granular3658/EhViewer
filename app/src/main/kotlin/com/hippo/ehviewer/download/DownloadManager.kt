@@ -59,12 +59,17 @@ import com.hippo.ehviewer.util.AppConfig
 import com.hippo.ehviewer.util.insertWith
 import com.hippo.ehviewer.util.runAssertingNotMainThread
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.transform
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -1116,27 +1121,77 @@ val DownloadInfo.downloadDir: Path?
     }
 
 /**
- * The directory a gallery's files are in, for the code that has to *find* them.
+ * The recorded location, if it still holds the directory.
  *
- * The recorded location is asked first: one stat, and in the common case it is
- * right. Searching every configured location stays as the fallback, because a
- * directory that has moved between locations cannot be found any other way -- but
- * it costs a round trip per location on a share, and asking a local provider about
- * a directory that in fact lives on one makes it answer with a missing-file error,
- * which it writes to the parcel and logs as `FileSystemProvider.isChildDocument`,
- * once per call. The search therefore only asks locations of the recorded
- * location's kind: a directory does not move between a share and local storage
- * without the user copying it, and asking the wrong kind is what produced that log.
- *
- * `DownloadInfo.downloadDir` deliberately does not search: it resolves the path
- * the download list labels each row with, where a wrong answer is cosmetic and a
- * search per row is not.
+ * No search: this is the path the download list labels each row with, where a wrong
+ * answer is cosmetic, and it is what the non-suspending callers can afford.
+ * [resolveDownloadDirSuspending] is the one that looks elsewhere.
  */
 fun resolveDownloadDir(location: String?, dirname: String): Path = recordedLocationPath(location)?.let { it / dirname }?.takeIf { it.isDirectory }
-    ?: writableDownloadLocations
-        .filter { location == null || location.substringBefore(':') == it.toString().substringBefore(':') }
-        .firstNotNullOfOrNull { (it / dirname).takeIf { it.isDirectory } }
     ?: (defaultDownloadLocation / dirname)
+
+/**
+ * The directory a gallery's files are in, for the code that has to *find* them.
+ *
+ * The recorded location is asked first: one stat, and unless the directory has been
+ * moved it is the answer. Only when it misses are the rest looked at, and they are
+ * looked at at once rather than in turn. They are not equally expensive -- a local
+ * directory answers in milliseconds and a share that went to sleep answers in ten
+ * seconds -- and adding those up is what made a gallery moved onto a share read as
+ * not downloaded at all: the local locations were asked, missed, and the search had
+ * already given up on the one place the files actually were.
+ *
+ * The first hit wins, and the losers are abandoned rather than awaited. Cancelling
+ * them does not interrupt the provider call they are blocked in -- that call runs to
+ * its own timeout on an IO thread -- but nobody waits for it, which is the point.
+ *
+ * A candidate is only accepted if it is really this gallery's: two locations can
+ * hold a directory of the same name, and racing makes the winner the fastest one
+ * rather than the preferred one. A directory with no marker is accepted anyway,
+ * because a bare archive the user put there deliberately has none.
+ */
+suspend fun resolveDownloadDirSuspending(location: String?, dirname: String): Path {
+    recordedLocationPath(location)?.let { it / dirname }?.takeIf { it.isDirectory }?.let { return it }
+    val candidates = writableDownloadLocations.filter { it.toString() != location }
+    if (candidates.isEmpty()) return defaultDownloadLocation / dirname
+    val gid = dirname.substringBefore('-').toLongOrNull()
+    // The racers live outside this coroutine on purpose: a loser is blocked in a
+    // provider call that cancellation cannot interrupt, and waiting for it is the
+    // ten seconds this function exists to avoid.
+    val racers = CoroutineScope(currentCoroutineContext() + SupervisorJob())
+    try {
+        val winner = CompletableDeferred<Path>()
+        val jobs = candidates.map { path ->
+            racers.launch(Dispatchers.IO) {
+                (path / dirname).takeIf { it.isDirectory && it.holdsGallery(gid) }?.let { winner.complete(it) }
+            }
+        }
+        // Nobody found it: the answer is the same fallback a plain miss has always
+        // produced, and it arrives when the slowest location has given up.
+        racers.launch {
+            jobs.joinAll()
+            winner.complete(defaultDownloadLocation / dirname)
+        }
+        return winner.await()
+    } finally {
+        racers.cancel()
+    }
+}
+
+/**
+ * Whether a candidate directory is really this gallery's.
+ *
+ * The marker names the gallery, and one naming a different gallery means this is
+ * another download that happens to share a title. No marker, or one that cannot be
+ * read, is accepted: neither disproves anything, and a bare archive the user put
+ * there deliberately has no marker at all.
+ */
+private suspend fun Path.holdsGallery(gid: Long?): Boolean {
+    if (gid == null) return true
+    val marker = find(SPIDER_INFO_FILENAME) ?: return true
+    val info = runCatching { readCompatFromPath(marker) }.getOrNull() ?: return true
+    return info.gid == gid
+}
 
 /**
  * The configured location a recorded location string names, or null if it is not

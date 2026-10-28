@@ -60,6 +60,7 @@ import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.ktbuilder.executeIn
 import com.hippo.ehviewer.ktbuilder.imageRequest
 import com.hippo.ehviewer.spider.SpiderDen
+import com.hippo.ehviewer.spider.openSpiderDen
 import com.hippo.ehviewer.ui.MainActivity
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.main.GalleryDetailErrorTip
@@ -288,7 +289,7 @@ fun AnimatedVisibilityScope.GalleryDetailScreen(args: GalleryDetailScreenArgs, n
                                         val msg = runCatching {
                                             bgWork {
                                                 withIOContext {
-                                                    SpiderDen(info, dirname, downloadInfo.location).exportAsArchive(file, format)
+                                                    openSpiderDen(info, dirname, downloadInfo.location).exportAsArchive(file, format)
                                                 }
                                             }
                                             exportSuccess

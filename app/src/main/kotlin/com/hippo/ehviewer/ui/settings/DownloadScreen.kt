@@ -74,6 +74,7 @@ import com.hippo.ehviewer.spider.COMIC_INFO_FILE
 import com.hippo.ehviewer.spider.MIN_SPEED_LEVEL
 import com.hippo.ehviewer.spider.SpiderDen
 import com.hippo.ehviewer.spider.SpiderQueen.Companion.SPIDER_INFO_FILENAME
+import com.hippo.ehviewer.spider.openSpiderDen
 import com.hippo.ehviewer.spider.readComicInfo
 import com.hippo.ehviewer.spider.readComicInfoFromBytes
 import com.hippo.ehviewer.spider.readCompatFromBytes
@@ -429,7 +430,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     }.apply {
                         fillGalleryListByApi(this, EhUrl.referer)
                         val toUpdate = parMap(concurrency = 4) { di ->
-                            di.galleryInfo.also { SpiderDen(it, di.dirname!!, di.location).writeComicInfo(false) }
+                            di.galleryInfo.also { openSpiderDen(it, di.dirname!!, di.location).writeComicInfo(false) }
                         }
                         EhDB.updateGalleryInfo(toUpdate)
                         launchSnackbar(string(R.string.settings_download_reload_metadata_successfully, toUpdate.size))

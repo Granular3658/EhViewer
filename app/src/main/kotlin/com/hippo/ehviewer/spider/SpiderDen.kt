@@ -46,6 +46,7 @@ import com.hippo.ehviewer.coil.suspendEdit
 import com.hippo.ehviewer.download.ARCHIVE_SUFFIXES
 import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.download.resolveDownloadDir
+import com.hippo.ehviewer.download.resolveDownloadDirSuspending
 import com.hippo.ehviewer.download.tempDownloadDir
 import com.hippo.ehviewer.gallery.PageLoader
 import com.hippo.ehviewer.gallery.isDwarfs
@@ -81,7 +82,7 @@ import splitties.init.appCtx
 class SpiderDen(val info: GalleryInfo) {
     private val gid = info.gid
     var downloadDir: Path? = null
-        private set(value) {
+        internal set(value) {
             // The listing is derived from the directory, so it has to be rebuilt
             // when the directory is (re)assigned, e.g. when a read-only SMB
             // gallery is switched to a writable location for downloading.
@@ -729,17 +730,27 @@ suspend fun GalleryInfo.downloadDirname(): String {
 }
 
 /**
+ * A den for a gallery whose directory is recorded somewhere.
+ *
+ * Resolved the slow way, unlike the constructor: the callers here are already off
+ * the main thread, and the directory may have been moved since it was recorded.
+ */
+suspend fun openSpiderDen(info: GalleryInfo, dirname: String, location: String?): SpiderDen = SpiderDen(info, dirname).apply {
+    downloadDir = resolveDownloadDirSuspending(location, dirname)
+}
+
+/**
  * Where an existing gallery lives. Read-only SMB locations are included on
  * purpose: reading has to find the files wherever they are, and skipping them
  * here made the reader fall through to the (empty) local default directory and
  * re-download everything from the network.
  *
  * The location the app recorded is asked first, and the search is only the
- * fallback for a directory that moved -- see [resolveDownloadDir].
+ * fallback for a directory that moved -- see [resolveDownloadDirSuspending].
  */
 suspend fun getGalleryDownloadDir(info: GalleryInfo): Path {
     val dirname = info.downloadDirname()
-    val dir = resolveDownloadDir(EhDB.getDownloadLocation(info.gid), dirname)
+    val dir = resolveDownloadDirSuspending(EhDB.getDownloadLocation(info.gid), dirname)
     dir.recordDownloadLocation(info.gid, dirname)
     return dir
 }
@@ -750,7 +761,7 @@ suspend fun getGalleryDownloadDir(info: GalleryInfo): Path {
  */
 suspend fun getGalleryWritableDownloadDir(info: GalleryInfo): Path {
     val dirname = info.downloadDirname()
-    val dir = resolveDownloadDir(EhDB.getDownloadLocation(info.gid), dirname)
+    val dir = resolveDownloadDirSuspending(EhDB.getDownloadLocation(info.gid), dirname)
     dir.recordDownloadLocation(info.gid, dirname)
     return dir
 }
