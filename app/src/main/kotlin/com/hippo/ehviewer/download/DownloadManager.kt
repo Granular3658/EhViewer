@@ -355,15 +355,47 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
     }
 
     /**
-     * The galleries being fetched as an archive right now.
+     * The galleries with an archive request queued or running.
      *
      * Session state on purpose: a transfer cannot be continued, so nothing about
      * it is worth persisting. It exists to keep the page downloader off a gallery
-     * whose directory the archive transfer is writing into.
+     * whose directory the archive transfer is writing into, and to refuse a second
+     * archive request for the same gallery -- the queue would otherwise hold it
+     * twice and download it twice.
      */
     private val archiveDownloads = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
 
     fun isArchiveDownloading(gid: Long) = gid in archiveDownloads
+
+    /**
+     * Claims the gallery for an archive transfer, or reports that one already has it.
+     *
+     * Called synchronously from the service's `onStartCommand`, before anything is
+     * launched: the check and the claim have to be one step, or two taps that
+     * arrive close together both pass the check and the gallery is queued twice.
+     */
+    fun claimArchiveDownload(gid: Long) = archiveDownloads.add(gid)
+
+    /** Gives the claim back when a request never reaches the queue. */
+    fun releaseArchiveDownload(gid: Long) {
+        archiveDownloads -= gid
+    }
+
+    /**
+     * Puts the gallery in the download list when its request is queued.
+     *
+     * At enqueue time, not at start time: a queued archive is waiting for the one
+     * in front of it, and a list that only shows the running one is a list the
+     * user cannot see their own work in.
+     */
+    fun enqueueArchiveDownload(gid: Long) {
+        val info = mAllInfoMap[gid] ?: return
+        info.state = DownloadInfo.STATE_WAIT
+        info.finished = 0
+        info.downloaded = 0
+        info.total = 0
+        mutableNotifyFlow.tryEmit(info)
+    }
 
     /**
      * Shows the gallery as downloading while its archive is fetched.
@@ -376,7 +408,6 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
      * row that claims to be downloading with nothing behind it.
      */
     fun beginArchiveDownload(gid: Long) {
-        archiveDownloads += gid
         val info = mAllInfoMap[gid] ?: return
         info.state = DownloadInfo.STATE_DOWNLOAD
         info.finished = 0

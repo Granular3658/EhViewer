@@ -41,6 +41,10 @@ class AndroidFileSystem(context: Context) : FileSystem() {
 
     override fun atomicMove(source: Path, target: Path) {
         if (source.isSmb || target.isSmb) {
+            // A provider renames by name, and this one is no different: it will not
+            // replace. The caller is moving a finished transfer into place, so the
+            // old copy has to go first.
+            if (target.exists()) target.delete()
             val extras = android.os.Bundle().apply {
                 putString("from", source.toString())
                 putString("to", target.toString())
@@ -52,6 +56,12 @@ class AndroidFileSystem(context: Context) : FileSystem() {
             return physicalFileSystem.atomicMove(source, target)
         }
 
+        // A document provider answers a rename onto a name that already exists by
+        // inventing another one -- "gid.zip" becomes "gid (1).zip" -- where a file
+        // system would replace. The caller is moving a completed temporary file
+        // into place, and a stray second copy is worse than the moment where the
+        // old file is gone and the new one is not yet named.
+        if (target.exists()) target.delete()
         source.runCatching {
             DocumentsContract.renameDocument(contentResolver, toUri(), target.name)
         }.onFailure {

@@ -52,6 +52,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.io.Sink
 import kotlinx.io.readString
 import kotlinx.io.writeString
@@ -86,6 +88,9 @@ class ArchiveDownloadService : Service(), CoroutineScope {
     /** Queued requests, drained one at a time; touched from the main thread and the worker. */
     private val queue = ArrayDeque<Request>()
     private var worker: Job? = null
+
+    /** Serializes "create the row, then queue it", so the queue keeps arrival order. */
+    private val enqueueMutex = Mutex()
     private var title: String = ""
     private var lastNotifiedAt = 0L
 
@@ -120,15 +125,27 @@ class ArchiveDownloadService : Service(), CoroutineScope {
                 // The notification has to exist before the work starts: a service
                 // that takes minutes to reach startForeground is killed.
                 startForegroundSafely(request.gid, getString(R.string.archive_download_preparing), 0, 0)
-                synchronized(queue) {
-                    queue.addLast(request)
-                    if (worker?.isActive != true) worker = launch { drain() }
-                }
+                // The same gallery asked for twice is one download. Without this
+                // the queue holds it twice, and the second transfer renames onto
+                // a name that already exists -- which a document provider answers
+                // by inventing "$gid (1).zip" rather than replacing it. The claim
+                // is synchronous on purpose: two taps can arrive before either
+                // has had a chance to run anything.
+                if (!DownloadManager.claimArchiveDownload(request.gid)) return START_NOT_STICKY
+                launch { enqueue(request) }
             }
             ACTION_CANCEL -> {
                 // Stopping means stopping: the queued requests go too, or the user
                 // would see another download start right after cancelling one.
-                synchronized(queue) { queue.clear() }
+                val dropped = synchronized(queue) {
+                    val copy = queue.toList()
+                    queue.clear()
+                    copy
+                }
+                dropped.forEach {
+                    DownloadManager.abandonArchiveDownload(it.gid)
+                    DownloadManager.releaseArchiveDownload(it.gid)
+                }
                 worker?.cancel()
             }
         }
@@ -140,6 +157,48 @@ class ArchiveDownloadService : Service(), CoroutineScope {
     private fun stop(): Int {
         stopSelf()
         return START_NOT_STICKY
+    }
+
+    /**
+     * Creates the row, then queues the request.
+     *
+     * Both under one lock so the queue keeps the order the requests arrived in,
+     * and so a queued gallery is in the download list from the moment it is
+     * queued rather than from the moment the one ahead of it finishes.
+     */
+    private suspend fun enqueue(request: Request) {
+        try {
+            enqueueMutex.withLock {
+                showQueued(request)
+                synchronized(queue) {
+                    queue.addLast(request)
+                    if (worker == null) worker = launch { drain() }
+                }
+            }
+        } catch (e: Throwable) {
+            // Nothing will run this request now, so nothing else will release the
+            // claim it holds on the gallery.
+            logcat(e)
+            DownloadManager.abandonArchiveDownload(request.gid)
+            DownloadManager.releaseArchiveDownload(request.gid)
+        }
+    }
+
+    /**
+     * Puts the gallery in the download list while its request waits its turn.
+     *
+     * The directory and its marker are written here for the same reason as before
+     * the transfer: an attempt that dies leaves something the restore scan can
+     * identify.
+     */
+    private suspend fun showQueued(request: Request) {
+        val detail = request.galleryDetail
+        SpiderDen(detail).apply {
+            initDownloadDir()
+            runCatching { writeSpiderInfo(detail.pages) }.onFailure { logcat(it) }
+        }
+        DownloadManager.restoreDownload(detail.galleryInfo, detail.downloadDirname(), EhDB.getDownloadLocation(request.gid))
+        DownloadManager.enqueueArchiveDownload(request.gid)
     }
 
     private suspend fun drain() {
@@ -154,6 +213,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
             // only stops once nothing is left to do -- and a request that arrived
             // while this was finishing still gets a worker.
             synchronized(queue) {
+                worker = null
                 if (queue.isEmpty()) stopSelf() else worker = launch { drain() }
             }
         }
@@ -163,7 +223,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         val gid = request.gid
         var part: Path? = null
         try {
-            showInList(request)
+            DownloadManager.beginArchiveDownload(gid)
             val downloaded = prepare(request)
             part = downloaded
             downloaded moveTo downloaded.parent!!.resolve("$gid.zip")
@@ -196,29 +256,6 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         } finally {
             DownloadManager.finishArchiveDownload(gid)
         }
-    }
-
-    /**
-     * Puts the gallery in the download list before the transfer starts.
-     *
-     * The row is what makes the download visible and stoppable, and it is also
-     * what the page downloader checks before starting: without it, the same
-     * gallery could be fetched as pages while this transfer writes into the same
-     * directory. The marker is written here for the same reason -- an attempt
-     * that dies leaves a directory the restore scan can identify.
-     *
-     * The state is only changed in memory; the database keeps saying "not
-     * started" until [DownloadManager.markArchiveDownloaded], so a killed process
-     * cannot leave a row that claims to be downloading with nothing behind it.
-     */
-    private suspend fun showInList(request: Request) {
-        val detail = request.galleryDetail
-        SpiderDen(detail).apply {
-            initDownloadDir()
-            runCatching { writeSpiderInfo(detail.pages) }.onFailure { logcat(it) }
-        }
-        DownloadManager.restoreDownload(detail.galleryInfo, detail.downloadDirname(), EhDB.getDownloadLocation(request.gid))
-        DownloadManager.beginArchiveDownload(request.gid)
     }
 
     /** Downloads into the part file and returns it. */
