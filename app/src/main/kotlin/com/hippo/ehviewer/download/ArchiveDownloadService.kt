@@ -37,6 +37,7 @@ import com.hippo.ehviewer.client.applyEhConfig
 import com.hippo.ehviewer.client.parser.Archive
 import com.hippo.ehviewer.spider.SpiderDen
 import com.hippo.ehviewer.spider.downloadDirname
+import com.hippo.ehviewer.util.FileUtils
 import com.hippo.ehviewer.util.ensureSuccess
 import io.ktor.client.plugins.HttpTimeoutConfig
 import io.ktor.client.plugins.timeout
@@ -317,15 +318,33 @@ class ArchiveDownloadService : Service(), CoroutineScope {
             Log.d(tag, "archive $gid: ${response.status}, length=${response.contentLength()}")
             response.status.ensureSuccess()
             val total = response.contentLength() ?: 0L
-            notify(gid, progressText(0, total), 0, total)
+            notify(gid, progressText(0, total, 0), 0, total)
             var lastPercent = -1
+            var lastSampleAt = SystemClock.elapsedRealtime()
+            var lastSampleBytes = 0L
+            var speed = 0L
             response.bodyAsChannel().copyTo(part) { written ->
-                notify(gid, progressText(written, total), written, total)
+                // Sampled on a wall clock rather than per chunk: the chunks are as
+                // irregular as the network, and a speed read off one of them says
+                // nothing. Once a second is also as often as a number on screen can
+                // be read.
+                val now = SystemClock.elapsedRealtime()
+                val elapsed = now - lastSampleAt
+                val sampled = elapsed >= SPEED_SAMPLE_MILLIS
+                if (sampled) {
+                    speed = ((written - lastSampleBytes) * 1000 / elapsed).coerceAtLeast(0)
+                    lastSampleBytes = written
+                    lastSampleAt = now
+                }
+                notify(gid, progressText(written, total, speed), written, total)
                 if (total > 0) {
                     val percent = (written * 100 / total).toInt()
-                    if (percent != lastPercent) {
+                    // The percentage is what moves the bar, the speed is what moves
+                    // the text, and on a big archive the bar can sit still for a
+                    // while -- so a sample is worth an update on its own.
+                    if (percent != lastPercent || sampled) {
                         lastPercent = percent
-                        DownloadManager.updateArchiveProgress(gid, percent)
+                        DownloadManager.updateArchiveProgress(gid, percent, speed)
                     }
                 }
             }
@@ -381,10 +400,13 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         runCatching { notifyManager.notify(NOTIFICATION_ID, buildNotification(gid, text, done, total)) }
     }
 
-    private fun progressText(done: Long, total: Long): String = if (total <= 0) {
-        Formatter.formatFileSize(this, done)
-    } else {
-        "${Formatter.formatFileSize(this, done)} / ${Formatter.formatFileSize(this, total)}"
+    private fun progressText(done: Long, total: Long, speed: Long): String {
+        val size = if (total <= 0) {
+            Formatter.formatFileSize(this, done)
+        } else {
+            "${Formatter.formatFileSize(this, done)} / ${Formatter.formatFileSize(this, total)}"
+        }
+        return if (speed > 0) "$size · ${FileUtils.humanReadableByteCount(speed)}/s" else size
     }
 
     private fun finish(gid: Long, error: Throwable? = null, message: String? = null) {
@@ -421,6 +443,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         private const val KEY_TITLE = "title"
         private const val NOTIFICATION_ID = 10
         private const val NOTIFY_INTERVAL_MILLIS = 250L
+        private const val SPEED_SAMPLE_MILLIS = 1000L
 
         fun start(context: Context, galleryDetail: GalleryDetail, archive: Archive) {
             val bundle = Bundle().apply {

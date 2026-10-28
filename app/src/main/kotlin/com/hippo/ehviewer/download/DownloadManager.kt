@@ -416,12 +416,13 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
         mutableNotifyFlow.tryEmit(info)
     }
 
-    fun updateArchiveProgress(gid: Long, percent: Int) {
+    fun updateArchiveProgress(gid: Long, percent: Int, speed: Long) {
         val info = mAllInfoMap[gid] ?: return
         val value = percent.coerceIn(0, ARCHIVE_PROGRESS_STEPS)
-        if (info.finished == value) return
+        if (info.finished == value && info.speed == speed) return
         info.finished = value
         info.downloaded = value
+        info.speed = speed
         mutableNotifyFlow.tryEmit(info)
     }
 
