@@ -554,6 +554,7 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
         val signInFirst = stringResource(R.string.sign_in_first)
         val noArchive = stringResource(R.string.no_archives)
         val downloadStarted = stringResource(R.string.download_archive_started)
+        val noHathClient = stringResource(R.string.download_archive_failure_no_hath)
         val downloadFailed = stringResource(R.string.download_archive_failure)
         val archiveResult = remember(galleryDetail) {
             async(Dispatchers.IO + Job(), CoroutineStart.LAZY) {
@@ -579,8 +580,15 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
                                     onItemClick = { resume(it) },
                                 )
                             }
-                            snackbar(downloadStarted)
-                            EhUtils.downloadArchive(context, galleryDetail, selected)
+                            if (selected.isHath) {
+                                // The H@H row asks the server to hand the archive
+                                // to a distributed client; no archive link comes
+                                // back for it, so there is nothing to fetch here.
+                                snackbar(noHathClient)
+                            } else {
+                                snackbar(downloadStarted)
+                                EhUtils.downloadArchive(context, galleryDetail, selected)
+                            }
                         }
                     }.onFailure {
                         when (it) {

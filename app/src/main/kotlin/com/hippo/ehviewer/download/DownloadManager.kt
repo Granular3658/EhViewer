@@ -148,6 +148,13 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
             // Get download from wait list
             if (!mWaitList.isEmpty()) {
                 val info = mWaitList.removeFirst()
+                // An archive transfer is already writing into this gallery's
+                // directory; a page download now would put pages beside a file
+                // that the transfer's cleanup deletes them from.
+                if (isArchiveDownloading(info.gid)) {
+                    mWaitList.addLast(info)
+                    return
+                }
                 mCurrentTask = info
                 with(info) {
                     archiveFile?.let {
@@ -179,6 +186,12 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
     suspend fun startDownload(galleryInfo: BaseGalleryInfo, label: String?) {
         if (mCurrentTask?.gid == galleryInfo.gid) {
             // It is current task
+            return
+        }
+        // Already being downloaded, as an archive. It is in the list and shows its
+        // own progress; a page download of the same gallery would write into the
+        // same directory.
+        if (isArchiveDownloading(galleryInfo.gid)) {
             return
         }
 
@@ -339,6 +352,63 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
         // Notify
         mutableNotifyFlow.emit(info)
         return true
+    }
+
+    /**
+     * The galleries being fetched as an archive right now.
+     *
+     * Session state on purpose: a transfer cannot be continued, so nothing about
+     * it is worth persisting. It exists to keep the page downloader off a gallery
+     * whose directory the archive transfer is writing into.
+     */
+    private val archiveDownloads = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
+
+    fun isArchiveDownloading(gid: Long) = gid in archiveDownloads
+
+    /**
+     * Shows the gallery as downloading while its archive is fetched.
+     *
+     * The percentage goes in [DownloadInfo.finished] with [DownloadInfo.total]
+     * pinned to 100: those counters are pages everywhere else, and a byte count
+     * would not fit an `Int` for the multi-gigabyte archives this app produces.
+     * Nothing here is written to the database -- the row keeps saying "not
+     * started" until [markArchiveDownloaded], so a killed process cannot leave a
+     * row that claims to be downloading with nothing behind it.
+     */
+    fun beginArchiveDownload(gid: Long) {
+        archiveDownloads += gid
+        val info = mAllInfoMap[gid] ?: return
+        info.state = DownloadInfo.STATE_DOWNLOAD
+        info.finished = 0
+        info.downloaded = 0
+        info.total = ARCHIVE_PROGRESS_STEPS
+        mutableNotifyFlow.tryEmit(info)
+    }
+
+    fun updateArchiveProgress(gid: Long, percent: Int) {
+        val info = mAllInfoMap[gid] ?: return
+        val value = percent.coerceIn(0, ARCHIVE_PROGRESS_STEPS)
+        if (info.finished == value) return
+        info.finished = value
+        info.downloaded = value
+        mutableNotifyFlow.tryEmit(info)
+    }
+
+    /** The transfer ended without an archive: the row goes back to how a restore leaves it. */
+    fun abandonArchiveDownload(gid: Long) {
+        val info = mAllInfoMap[gid] ?: return
+        if (info.state == DownloadInfo.STATE_FINISH) return
+        info.state = DownloadInfo.STATE_NONE
+        info.finished = 0
+        info.downloaded = 0
+        info.total = 0
+        mutableNotifyFlow.tryEmit(info)
+    }
+
+    /** The transfer is over, either way: the gallery may be downloaded as pages again. */
+    fun finishArchiveDownload(gid: Long) {
+        archiveDownloads -= gid
+        launch { ensureDownload() }
     }
 
     /**
@@ -1036,4 +1106,13 @@ private fun recordedLocationPath(location: String?): Path? = location?.let { sav
 val DownloadInfo.archiveFile get() = downloadDir?.run {
     find("$gid.dwarfs") ?: find("$gid.cbz") ?: find("$gid.zip") ?: find("$gid.rar") ?: find("$gid.7z")
 }
+
+/**
+ * The scale an archive transfer's progress is reported on.
+ *
+ * `DownloadInfo` counts pages, and its counters are `Int`: a byte total overflows
+ * on the multi-gigabyte archives this app produces. A percentage fits, and the
+ * progress bar only ever wanted a fraction.
+ */
+private const val ARCHIVE_PROGRESS_STEPS = 100
 val GalleryInfo.tempDownloadDir get() = AppConfig.externalTempPersistDir?.let { it / "$gid" }

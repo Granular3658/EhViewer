@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.SystemClock
 import android.text.format.Formatter
 import android.util.Log
 import androidx.core.app.NotificationChannelCompat
@@ -54,6 +55,7 @@ import kotlinx.coroutines.launch
 import kotlinx.io.Sink
 import kotlinx.io.readString
 import kotlinx.io.writeString
+import okio.IOException
 import okio.Path
 
 /**
@@ -62,8 +64,16 @@ import okio.Path
  *
  * A service rather than a coroutine on the screen, because an archive is tens of
  * megabytes and leaving the gallery detail page must not abandon the transfer.
- * The partial file is kept when the user stops it or the transfer fails, and the
- * next attempt asks the server for the rest of it, so stopping is cheap.
+ *
+ * There is no resume: the archive host answers 404 to a range request and 416 to
+ * one it reads as out of bounds, so every attempt starts over. What a stopped
+ * attempt leaves is the row and the directory marker -- not a part file worth
+ * keeping, and not a transfer worth continuing.
+ *
+ * One request at a time. Two transfers would share one notification and one
+ * `title`, and the first to finish would `stopSelf` the service out from under
+ * the other; they are queued instead, which also keeps them out of the page
+ * downloader's way.
  */
 class ArchiveDownloadService : Service(), CoroutineScope {
     private val tag = "ArchiveDownloadService"
@@ -72,8 +82,20 @@ class ArchiveDownloadService : Service(), CoroutineScope {
 
     private val notifyManager by lazy { NotificationManagerCompat.from(this) }
     private val channelId by lazy { "$packageName.archive" }
-    private var job: Job? = null
+
+    /** Queued requests, drained one at a time; touched from the main thread and the worker. */
+    private val queue = ArrayDeque<Request>()
+    private var worker: Job? = null
     private var title: String = ""
+    private var lastNotifiedAt = 0L
+
+    private class Request(
+        val galleryDetail: GalleryDetail,
+        val gid: Long,
+        val res: String,
+        val isHath: Boolean,
+        val title: String,
+    )
 
     override fun onCreate() {
         notifyManager.createNotificationChannel(
@@ -87,18 +109,27 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         when (intent?.action) {
             ACTION_START -> {
                 val bundle = intent.getBundleExtra(KEY_GALLERY) ?: return stop()
-                val gid = bundle.getLong(KEY_GID)
                 val res = intent.getStringExtra(KEY_RES) ?: return stop()
-                val isHath = intent.getBooleanExtra(KEY_HATH, false)
-                title = intent.getStringExtra(KEY_TITLE).orEmpty()
+                val request = Request(
+                    galleryDetail = decodeFromSavedState(bundle),
+                    gid = bundle.getLong(KEY_GID),
+                    res = res,
+                    isHath = intent.getBooleanExtra(KEY_HATH, false),
+                    title = intent.getStringExtra(KEY_TITLE).orEmpty(),
+                )
                 // The notification has to exist before the work starts: a service
                 // that takes minutes to reach startForeground is killed.
-                startForegroundSafely(gid, getString(R.string.archive_download_preparing), 0, 0)
-                job = launch { run(decodeFromSavedState<GalleryDetail>(bundle), gid, res, isHath) }
+                startForegroundSafely(request.gid, getString(R.string.archive_download_preparing), 0, 0)
+                synchronized(queue) {
+                    queue.addLast(request)
+                    if (worker?.isActive != true) worker = launch { drain() }
+                }
             }
             ACTION_CANCEL -> {
-                job?.cancel()
-                stopSelf()
+                // Stopping means stopping: the queued requests go too, or the user
+                // would see another download start right after cancelling one.
+                synchronized(queue) { queue.clear() }
+                worker?.cancel()
             }
         }
         return START_NOT_STICKY
@@ -109,6 +140,131 @@ class ArchiveDownloadService : Service(), CoroutineScope {
     private fun stop(): Int {
         stopSelf()
         return START_NOT_STICKY
+    }
+
+    private suspend fun drain() {
+        try {
+            while (true) {
+                val request = synchronized(queue) { queue.removeFirstOrNull() } ?: break
+                title = request.title
+                run(request)
+            }
+        } finally {
+            // Whether the queue emptied or the worker was cancelled, the service
+            // only stops once nothing is left to do -- and a request that arrived
+            // while this was finishing still gets a worker.
+            synchronized(queue) {
+                if (queue.isEmpty()) stopSelf() else worker = launch { drain() }
+            }
+        }
+    }
+
+    private suspend fun run(request: Request) {
+        val gid = request.gid
+        var part: Path? = null
+        try {
+            showInList(request)
+            val downloaded = prepare(request)
+            part = downloaded
+            downloaded moveTo downloaded.parent!!.resolve("$gid.zip")
+            part = null
+            // The archive is the whole gallery, so the download is finished.
+            DownloadManager.markArchiveDownloaded(gid, request.galleryDetail.pages)
+            SpiderDen(request.galleryDetail).apply {
+                initDownloadDir()
+                // The archive is the whole gallery, but the archive alone does not
+                // identify the directory: the restore scan looks for a marker.
+                runCatching { writeSpiderInfo(request.galleryDetail.pages) }.onFailure { logcat(it) }
+                if (Settings.archiveMetadata.value) writeComicInfo()
+                // Whatever loose images an earlier attempt left are now redundant:
+                // the reader prefers the archive and would never open them again.
+                removeLooseImages()
+            }
+            finish(gid)
+        } catch (e: CancellationException) {
+            // The user stopped it. A part file is not worth keeping: nothing can
+            // continue it, and it is only the size of a transfer that will be
+            // redone from zero.
+            part?.let { runCatching { it.delete() } }
+            DownloadManager.abandonArchiveDownload(gid)
+            throw e
+        } catch (e: Throwable) {
+            logcat(e)
+            // Kept on failure: its size is the only record of how far it got.
+            DownloadManager.abandonArchiveDownload(gid)
+            finish(gid, e)
+        } finally {
+            DownloadManager.finishArchiveDownload(gid)
+        }
+    }
+
+    /**
+     * Puts the gallery in the download list before the transfer starts.
+     *
+     * The row is what makes the download visible and stoppable, and it is also
+     * what the page downloader checks before starting: without it, the same
+     * gallery could be fetched as pages while this transfer writes into the same
+     * directory. The marker is written here for the same reason -- an attempt
+     * that dies leaves a directory the restore scan can identify.
+     *
+     * The state is only changed in memory; the database keeps saying "not
+     * started" until [DownloadManager.markArchiveDownloaded], so a killed process
+     * cannot leave a row that claims to be downloading with nothing behind it.
+     */
+    private suspend fun showInList(request: Request) {
+        val detail = request.galleryDetail
+        SpiderDen(detail).apply {
+            initDownloadDir()
+            runCatching { writeSpiderInfo(detail.pages) }.onFailure { logcat(it) }
+        }
+        DownloadManager.restoreDownload(detail.galleryInfo, detail.downloadDirname(), EhDB.getDownloadLocation(request.gid))
+        DownloadManager.beginArchiveDownload(request.gid)
+    }
+
+    /** Downloads into the part file and returns it. */
+    private suspend fun prepare(request: Request): Path {
+        val gid = request.gid
+        val spiderDen = SpiderDen(request.galleryDetail).apply { initDownloadDir() }
+        val dir = spiderDen.downloadDir ?: throw IOException("No download directory for $gid")
+        val part = dir.resolve("$gid.zip.part")
+        // No resume. The H@H archive handler answers 404 to a range request and
+        // 416 to one it reads as out of bounds, so a part file left by an earlier
+        // attempt is only in the way: start over rather than pick it up.
+        part.delete()
+        val url = EhEngine.downloadArchive(gid, request.galleryDetail.token, request.res, request.isHath)
+            ?: throw IOException("No archive link for $gid")
+        ktorClient.prepareRequest(url) {
+            applyEhConfig(EhUrl.getGalleryDetailUrl(gid, request.galleryDetail.token), EhUrl.origin)
+            timeout {
+                requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
+                socketTimeoutMillis = 60_000
+            }
+        }.execute { response ->
+            Log.d(tag, "archive $gid: ${response.status}, length=${response.contentLength()}")
+            response.status.ensureSuccess()
+            val total = response.contentLength() ?: 0L
+            notify(gid, progressText(0, total), 0, total)
+            var lastPercent = -1
+            response.bodyAsChannel().copyTo(part) { written ->
+                notify(gid, progressText(written, total), written, total)
+                if (total > 0) {
+                    val percent = (written * 100 / total).toInt()
+                    if (percent != lastPercent) {
+                        lastPercent = percent
+                        DownloadManager.updateArchiveProgress(gid, percent)
+                    }
+                }
+            }
+            // A 200 is not enough: while the archive is still being prepared the
+            // archiver answers with a page saying so, and that page must not become
+            // the gallery's archive.
+            val head = SystemFileSystem.read(part) { readByteArray(2) }
+            if (head.size != 2 || head[0] != 'P'.code.toByte() || head[1] != 'K'.code.toByte()) {
+                part.delete()
+                throw IllegalStateException("The archiver returned a page instead of an archive")
+            }
+        }
+        return part
     }
 
     private fun startForegroundSafely(gid: Long, text: String, done: Long, total: Long) {
@@ -136,78 +292,19 @@ class ArchiveDownloadService : Service(), CoroutineScope {
             .build()
     }
 
+    /**
+     * Repaint the progress notification, at most a few times a second.
+     *
+     * The copy reports every buffer it moves, which is a few kilobytes: building
+     * a notification per buffer is thousands of binder calls for one archive.
+     */
     private fun notify(gid: Long, text: String, done: Long, total: Long) {
+        val now = SystemClock.elapsedRealtime()
+        val finished = total > 0 && done >= total
+        if (!finished && now - lastNotifiedAt < NOTIFY_INTERVAL_MILLIS) return
+        lastNotifiedAt = now
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         runCatching { notifyManager.notify(NOTIFICATION_ID, buildNotification(gid, text, done, total)) }
-    }
-
-    private suspend fun run(galleryDetail: GalleryDetail, gid: Long, res: String, isHath: Boolean) {
-        val part = try {
-            prepare(galleryDetail, gid, res, isHath) ?: return finish(gid)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            logcat(e)
-            return finish(gid, e)
-        }
-        val target = part.parent!!.resolve("$gid.zip")
-        part moveTo target
-        // The gallery is readable from this directory now; without the record the
-        // file sits on disk while the app still goes to the network.
-        DownloadManager.restoreDownload(galleryDetail.galleryInfo, galleryDetail.downloadDirname(), EhDB.getDownloadLocation(gid))
-        // The archive is the whole gallery, so the download is finished. Any loose
-        // images left by an earlier attempt are now redundant as well: the reader
-        // prefers the archive and would never look at them again.
-        DownloadManager.markArchiveDownloaded(gid, galleryDetail.pages)
-        SpiderDen(galleryDetail).apply {
-            initDownloadDir()
-            // The archive is the whole gallery, but the archive alone does not
-            // identify the directory: the restore scan looks for a marker, and
-            // without one this download would be invisible to it once the
-            // database no longer knows about it.
-            runCatching { writeSpiderInfo(galleryDetail.pages) }.onFailure { logcat(it) }
-            if (Settings.archiveMetadata.value) writeComicInfo()
-            // Whatever loose images an earlier attempt left are now redundant: the
-            // reader prefers the archive and would never open them again.
-            removeLooseImages()
-        }
-        finish(gid)
-    }
-
-    /** Downloads into the part file and returns it, or null when there is nothing to do. */
-    private suspend fun prepare(galleryDetail: GalleryDetail, gid: Long, res: String, isHath: Boolean): Path? {
-        val spiderDen = SpiderDen(galleryDetail).apply { initDownloadDir() }
-        val dir = spiderDen.downloadDir ?: return null
-        val part = dir.resolve("$gid.zip.part")
-        // No resume. The H@H archive handler answers 404 to a range request and
-        // 416 to one it reads as out of bounds, so a part file left by an earlier
-        // attempt is only in the way: start over rather than pick it up.
-        part.delete()
-        val url = EhEngine.downloadArchive(gid, galleryDetail.token, res, isHath) ?: return null
-        ktorClient.prepareRequest(url) {
-            applyEhConfig(EhUrl.getGalleryDetailUrl(gid, galleryDetail.token), EhUrl.origin)
-            timeout {
-                requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
-                socketTimeoutMillis = 60_000
-            }
-        }.execute { response ->
-            Log.d(tag, "archive $gid: ${response.status}, length=${response.contentLength()}")
-            response.status.ensureSuccess()
-            val total = response.contentLength() ?: 0L
-            notify(gid, progressText(0, total), 0, total)
-            response.bodyAsChannel().copyTo(part) { written ->
-                notify(gid, progressText(written, total), written, total)
-            }
-            // A 200 is not enough: while the archive is still being prepared the
-            // archiver answers with a page saying so, and that page must not become
-            // the gallery's archive.
-            val head = SystemFileSystem.read(part) { readByteArray(2) }
-            if (head.size != 2 || head[0] != 'P'.code.toByte() || head[1] != 'K'.code.toByte()) {
-                part.delete()
-                throw IllegalStateException("The archiver returned a page instead of an archive")
-            }
-        }
-        return part
     }
 
     private fun progressText(done: Long, total: Long): String = if (total <= 0) {
@@ -232,7 +329,6 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) {
             runCatching { notifyManager.notify(NOTIFICATION_ID, notification) }
         }
-        stopSelf()
     }
 
     override fun onDestroy() {
@@ -249,6 +345,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         private const val KEY_HATH = "hath"
         private const val KEY_TITLE = "title"
         private const val NOTIFICATION_ID = 10
+        private const val NOTIFY_INTERVAL_MILLIS = 250L
 
         fun start(context: Context, galleryDetail: GalleryDetail, archive: Archive) {
             val bundle = Bundle().apply {
