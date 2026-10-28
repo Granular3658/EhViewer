@@ -1,6 +1,7 @@
 package com.hippo.ehviewer.ui.settings
 
 import android.content.Context
+import android.content.Intent
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -21,6 +22,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.fromHtml
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import com.ehviewer.core.files.delete
 import com.ehviewer.core.i18n.R
 import com.ehviewer.core.util.launch
@@ -123,10 +125,10 @@ fun AnimatedVisibilityScope.AboutScreen(navigator: DestinationsNavigator) = Scre
     }
 }
 
-context(_: Context, _: DialogState)
+context(ctx: Context, _: DialogState)
 suspend fun showNewVersion(release: EhRelease) {
     awaitConfirmationOrCancel(
-        confirmText = R.string.download,
+        confirmText = if (release.webOnly) R.string.open_in_browser else R.string.download,
         title = R.string.new_version_available,
     ) {
         Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -137,6 +139,12 @@ suspend fun showNewVersion(release: EhRelease) {
             Spacer(modifier = Modifier.height(16.dp))
             Text(text = release.changelog)
         }
+    }
+    if (release.webOnly) {
+        // A CI build lives in a workflow run, and its artifacts answer 403 without
+        // a token. There is nothing to install from here, so hand the page over.
+        withUIContext { ctx.startActivity(Intent(Intent.ACTION_VIEW, release.downloadLink.toUri())) }
+        return
     }
     if (Settings.backupBeforeUpdate.value) {
         val time = ReadableTime.getFilenamableTime()

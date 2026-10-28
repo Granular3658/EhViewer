@@ -20,12 +20,10 @@ import kotlin.time.Instant
 import kotlinx.io.asSource
 import moe.tarsin.coroutines.runSuspendCatching
 import okio.Path
-import tachiyomi.data.release.Artifacts
 import tachiyomi.data.release.CommitComparison
 import tachiyomi.data.release.Release
 import tachiyomi.data.release.Repository
 import tachiyomi.data.release.WorkflowRuns
-import tachiyomi.data.release.downloadLink
 
 // The endpoints below are GitHub's: a push workflow run, its artifacts and a
 // commit comparison. The host follows the remote so a build from a fork asks its
@@ -46,21 +44,34 @@ object AppUpdater {
             Settings.lastUpdateTime = now.epochSeconds
             if (Settings.useCIUpdateChannel.value) {
                 val curSha = BuildConfig.COMMIT_SHA
-                val branch = statement(API_URL).executeAndParseAs<Repository>().defaultBranch
-                val run = statement("$API_URL/actions/runs?event=push&status=success&ref=refs/heads/$branch").executeAndParseAs<WorkflowRuns>().workflowRuns[0]
+                // The branch this build came from, not the repository's default: a
+                // build from a feature branch compared against main always looks out
+                // of date, and names a commit that is older than the one running.
+                // A detached checkout -- what CI builds -- has no branch to ask
+                // about, so the default is the only thing left.
+                val branch = BuildConfig.GIT_BRANCH.takeIf { it.isNotEmpty() && it != "HEAD" }
+                    ?: statement(API_URL).executeAndParseAs<Repository>().defaultBranch
+                // Every trigger counts, not just pushes: this repository's CI is
+                // started by hand as often as by a push.
+                val run = statement("$API_URL/actions/runs?status=success&ref=refs/heads/$branch")
+                    .executeAndParseAs<WorkflowRuns>().workflowRuns.firstOrNull() ?: return null
                 val shortSha = run.headSha.take(7)
                 if (shortSha != curSha) {
-                    val artifacts = statement("$API_URL/actions/runs/${run.id}/artifacts").executeAndParseAs<Artifacts>()
-                    val archiveUrl = artifacts.downloadLink
-                    val changelog = runSuspendCatching {
-                        val commitComparisonUrl = "$API_URL/compare/$curSha...$shortSha"
-                        val result = statement(commitComparisonUrl).executeAndParseAs<CommitComparison>()
-                        // TODO: Prettier format, Markdown?
-                        result.commits.joinToString("\n") { commit ->
-                            "${commit.commit.message.takeWhile { it != '\n' }} (@${commit.commit.author.name})"
-                        }
-                    }.getOrDefault(run.title)
-                    return EhRelease(shortSha, changelog, archiveUrl)
+                    val comparison = runSuspendCatching {
+                        statement("$API_URL/compare/$curSha...$shortSha").executeAndParseAs<CommitComparison>()
+                    }.getOrNull()
+                    // "behind" is the one answer that means the run is older than
+                    // this build -- a comparison against a commit that is not an
+                    // ancestor still lists commits, so its emptiness says nothing.
+                    if (comparison?.status == "behind") return null
+                    // TODO: Prettier format, Markdown?
+                    val changelog = comparison?.commits?.joinToString("\n") { commit ->
+                        "${commit.commit.message.takeWhile { it != '\n' }} (@${commit.commit.author.name})"
+                    } ?: run.title
+                    // The run's own page, opened in a browser: its artifacts need a
+                    // token to download, and the app has none.
+                    val runUrl = "https://${BuildConfig.REPO_HOST}/${BuildConfig.REPO_NAME}/actions/runs/${run.id}"
+                    return EhRelease(shortSha, changelog, runUrl, webOnly = true)
                 }
             } else {
                 val curVersion = BuildConfig.RAW_VERSION_NAME
@@ -115,4 +126,6 @@ data class EhRelease(
     val version: String,
     val changelog: String,
     val downloadLink: String,
+    /** Nothing to install in place: the link is a page to open, not a file. */
+    val webOnly: Boolean = false,
 )

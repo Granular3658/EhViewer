@@ -3,7 +3,7 @@ package tachiyomi.data.release
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class CommitComparison(val commits: List<Commit>)
+data class CommitComparison(val commits: List<Commit>, val status: String = "")
 
 @Serializable
 data class Commit(val commit: CommitDetail)

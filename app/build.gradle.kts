@@ -47,6 +47,13 @@ android {
         commandLine = "git log -1 --format=%ct".split(' ')
     }.standardOutput.asText.get().trim()
 
+    // The branch this build came from, so the updater compares against the branch
+    // that is actually running rather than the repository's default. A CI checkout
+    // is detached and answers "HEAD"; the updater falls back to the default then.
+    val gitBranch = providers.exec {
+        commandLine = "git rev-parse --abbrev-ref HEAD".split(' ')
+    }.standardOutput.asText.get().trim()
+
     // The repository this build came from, which is what the about page links to
     // and what the updater asks. It is not always on codeberg, so the host comes
     // from the remote rather than being assumed, and the slug is everything after
@@ -74,6 +81,7 @@ android {
         buildConfigField("boolean", "SNAPSHOT", "$snapshot")
         buildConfigField("String", "RAW_VERSION_NAME", "\"$versionName\"")
         buildConfigField("String", "COMMIT_SHA", "\"$commitSha\"")
+        buildConfigField("String", "GIT_BRANCH", "\"$gitBranch\"")
         buildConfigField("long", "COMMIT_TIME", commitTime)
         buildConfigField("String", "REPO_HOST", "\"$repoHost\"")
         buildConfigField("String", "REPO_NAME", "\"$repoName\"")

@@ -132,6 +132,7 @@
     <string name="star_5">5 stars</string>
     <!-- Gallery detail -->
     <string name="download">Download</string>
+    <string name="open_in_browser">Open in browser</string>
     <string name="read">Read</string>
     <string name="favored_times">\u2665 %d</string>
     <string name="rating_text">%1$s (%2$.2f, %3$d)</string>

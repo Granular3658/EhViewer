@@ -116,6 +116,7 @@
     <string name="star_5">5 星</string>
     <!-- Gallery detail -->
     <string name="download">下载</string>
+    <string name="open_in_browser">在浏览器中打开</string>
     <string name="read">阅读</string>
     <string name="favored_times">\u2665 %d</string>
     <string name="rating_text">%1$s (%2$.2f, %3$d)</string>
