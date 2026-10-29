@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Reorder
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Transform
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularWavyProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -114,11 +115,13 @@ import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.asMutableState
 import com.hippo.ehviewer.client.EhTagDatabase
+import com.hippo.ehviewer.client.EhUtils
 import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.download.ArchiveDownloadService
 import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.download.DownloadService
 import com.hippo.ehviewer.download.DownloadsFilterMode
+import com.hippo.ehviewer.download.GalleryConvertService
 import com.hippo.ehviewer.download.SortMode
 import com.hippo.ehviewer.download.allDownloadLocations
 import com.hippo.ehviewer.download.downloadDir
@@ -163,6 +166,8 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
     var fabExpanded by remember { mutableStateOf(false) }
     var fabHidden by remember { mutableStateOf(false) }
     val checkedInfoMap = remember { mutableStateMapOf<Long, DownloadInfo>() }
+    // The galleries a conversion was asked for, while the format is being chosen.
+    var converting by remember { mutableStateOf<Collection<DownloadInfo>?>(null) }
     val selectMode by rememberUpdatedState(checkedInfoMap.isNotEmpty())
     DrawerHandle(!selectMode && !searchBarExpanded)
 
@@ -704,11 +709,14 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
                                     // An archive transfer is not the page downloader's
                                     // task: stopping it means telling its own service,
                                     // or the row would go quiet while the transfer kept
-                                    // running and kept spending GP.
-                                    if (DownloadManager.isArchiveDownloading(info.gid)) {
-                                        ArchiveDownloadService.cancel(contextOf<Context>(), info.gid)
-                                    } else {
-                                        launchIO { DownloadManager.stopDownload(info.gid) }
+                                    // running and kept spending GP. A conversion is the
+                                    // same, one service further along.
+                                    when {
+                                        DownloadManager.isArchiveDownloading(info.gid) ->
+                                            ArchiveDownloadService.cancel(contextOf<Context>(), info.gid)
+                                        DownloadManager.isConverting(info.gid) ->
+                                            GalleryConvertService.cancel(contextOf<Context>(), info.gid)
+                                        else -> launchIO { DownloadManager.stopDownload(info.gid) }
                                     }
                                 },
                                 info = info,
@@ -812,6 +820,10 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
                 val gidList = checkedInfoMap.takeAndClear().mapToLongArray(DownloadInfo::gid)
                 DownloadManager.stopRangeDownload(gidList)
             }
+            onClick(Icons.Default.Transform) {
+                val infoList = checkedInfoMap.takeAndClear()
+                if (infoList.isNotEmpty()) converting = infoList
+            }
             onClick(Icons.Default.Delete) {
                 val infoList = checkedInfoMap.takeAndClear()
                 confirmRemoveDownloadRange(infoList)
@@ -827,6 +839,24 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
                 }
             }
         }
+    }
+
+    // One dialog for the whole selection: the work is a queue, and where each
+    // gallery got to is the notification's business.
+    converting?.let { targets ->
+        GalleryConvertDialog(
+            count = targets.size,
+            onDismiss = { converting = null },
+            onStart = { format ->
+                GalleryConvertService.start(
+                    contextOf<Context>(),
+                    targets.mapToLongArray(DownloadInfo::gid),
+                    targets.map { EhUtils.getSuitableTitle(it.galleryInfo) }.toTypedArray(),
+                    format,
+                )
+                converting = null
+            },
+        )
     }
 }
 

@@ -327,12 +327,15 @@ fun ArchiveTaskDialog(
     )
 }
 
+/** The name the format selector shows, in the two places that offer one. */
 @Composable
-private fun formatName(format: Int) = stringResource(
-    id = if (format == Settings.ARCHIVE_DWARFS) {
-        R.string.settings_download_save_as_archive_dwarfs
-    } else {
-        R.string.settings_download_save_as_archive_cbz
+internal fun formatName(format: Int) = stringResource(
+    id = when (format) {
+        Settings.ARCHIVE_DWARFS -> R.string.settings_download_save_as_archive_dwarfs
+        // Only the gallery dialog offers this one, and "Off" does not say what it
+        // leaves behind: the pages, as files.
+        Settings.ARCHIVE_OFF -> R.string.gallery_convert_format_off
+        else -> R.string.settings_download_save_as_archive_cbz
     },
 )
 

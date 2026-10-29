@@ -95,7 +95,7 @@ class SpiderDen(val info: GalleryInfo) {
         }
 
     private var tempDownloadDir: Path? = null
-    private val archiveFormat = Settings.archiveFormat.value
+    internal val archiveFormat = Settings.archiveFormat.value
     private val saveAsCbz = archiveFormat != Settings.ARCHIVE_OFF
     private val archiveName = "$gid." + archiveSuffix(archiveFormat)
 
@@ -345,7 +345,7 @@ class SpiderDen(val info: GalleryInfo) {
      * -- which only [postArchive] removes, and only after this returns -- still
      * whole. That is what makes cancelling the write safe.
      */
-    suspend fun archive(progress: suspend (Int, Int) -> Unit = { _, _ -> }) = saveAsCbz && downloadDir?.run {
+    suspend fun archive(progress: suspend (Long, Long) -> Unit = { _, _ -> }) = saveAsCbz && downloadDir?.run {
         val target = resolve(archiveName)
         val part = resolve(archivePartName)
         runCatching {
@@ -587,7 +587,7 @@ class SpiderDen(val info: GalleryInfo) {
     private suspend fun archiveTo(
         file: Path,
         format: Int,
-        progress: suspend (Int, Int) -> Unit = { _, _ -> },
+        progress: suspend (Long, Long) -> Unit = { _, _ -> },
     ) = resourceScope {
         val comicInfoFile = downloadDir!! / COMIC_INFO_FILE
         val comicInfo = closeable {
@@ -607,6 +607,16 @@ class SpiderDen(val info: GalleryInfo) {
             ?.let { location -> runCatching { SmbRepository.list(location) }.getOrNull() }
             ?.associate { it.name to it.size }
             .orEmpty()
+        // The bar counts bytes, the way every other transfer in the app does: a
+        // page count says nothing about how long a write will take, and the pages
+        // of a gallery are not the same size. Every page's length is known before
+        // the first one is written -- a share answers one listing with all of them,
+        // and a directory costs a stat each.
+        val pageBytes = LongArray(pages) { idx ->
+            findImageFile(idx)?.let { image -> smbSizes[image.name] ?: image.metadataOrNull()?.size } ?: 0L
+        }
+        val totalBytes = pageBytes.sum()
+        var doneBytes = 0L
         // "rwt": a writer that starts at offset 0 has to truncate, or a shorter
         // rewrite keeps the previous archive's tail. See the note in repack().
         val arcFd = closeable { file.openFileDescriptor("rwt") }
@@ -627,8 +637,9 @@ class SpiderDen(val info: GalleryInfo) {
                 // work is already done, which is indistinguishable from no
                 // progress at all -- and that is the common case for a small
                 // gallery.
-                progress(start, pages)
+                progress(doneBytes, totalBytes)
                 val end = minOf(start + ARCHIVE_CHUNK, pages)
+                val chunkBytes = (start until end).sumOf { pageBytes[it] }
                 resourceScope {
                     // Bounded by the chunk: `end - start` is at most ARCHIVE_CHUNK,
                     // so this is the widest the fan-out can be.
@@ -643,7 +654,8 @@ class SpiderDen(val info: GalleryInfo) {
                     }
                     written += writer.append(sources)
                 }
-                progress(end, pages)
+                doneBytes += chunkBytes
+                progress(doneBytes, totalBytes)
             }
             written += writer.append(
                 listOf(
@@ -724,7 +736,7 @@ private val sCache by lazy {
         maxSizeBytes(Settings.readCacheSize.value.coerceIn(320, 5120).toLong() * 1024 * 1024)
     }
 }
-private const val TEMP_SUFFIX = ".tmp"
+internal const val TEMP_SUFFIX = ".tmp"
 
 /** Where the archive lifecycle says what it decided, so a cleanup that did not happen can be traced. */
 private const val ARCHIVE_TAG = "Archive"
@@ -746,7 +758,7 @@ private const val ARCHIVE_PART_SUFFIX = ".part"
  * and descriptors -- it is not a throughput knob.
  */
 private const val ARCHIVE_CHUNK = 32
-private val FileNameRegex = Regex("^\\d{8}\\.\\w{3,4}")
+internal val FileNameRegex = Regex("^\\d{8}\\.\\w{3,4}")
 private val FileHashRegex = Regex("/h/([0-9a-f]{40})")
 
 fun perFilename(index: Int, extension: String = ""): String = "%08d.%s".format(index + 1, extension)

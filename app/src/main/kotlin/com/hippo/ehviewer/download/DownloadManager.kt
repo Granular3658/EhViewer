@@ -71,8 +71,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.transform
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -450,6 +453,51 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
      * download list gets at them.
      */
     fun archiveByteProgress(gid: Long): Pair<Long, Long>? = archiveBytes[gid]?.let { it[0] to it[1] }
+
+    /**
+     * What a conversion is doing to one gallery, for the list to draw.
+     *
+     * Kept here rather than in the service because the row that asks is a row in
+     * the download list, and a row cannot ask a service: this is the one place
+     * both of them can see.
+     */
+    enum class ConvertState { QUEUED, RUNNING }
+
+    /** How far a conversion has got, in the units a transfer is reported in. */
+    data class ConvertProgress(val state: ConvertState, val format: Int, val done: Long, val total: Long, val speed: Long)
+
+    private val convertProgress = MutableStateFlow<Map<Long, ConvertProgress>>(emptyMap())
+
+    /** The galleries a batch is waiting to reach, so the list can say so now. */
+    fun markConvertQueued(gids: Collection<Long>, format: Int) {
+        convertProgress.update { current ->
+            current + gids.associateWith { ConvertProgress(ConvertState.QUEUED, format, 0, 0, 0) }
+        }
+    }
+
+    fun updateConvertProgress(gid: Long, format: Int, done: Long, total: Long, speed: Long) {
+        val value = ConvertProgress(ConvertState.RUNNING, format, done, total, speed)
+        convertProgress.update { if (it[gid] == value) it else it + (gid to value) }
+    }
+
+    /** Whether a conversion holds this gallery, queued or being written. */
+    fun isConverting(gid: Long) = convertProgress.value.containsKey(gid)
+
+    fun clearConvertProgress(gid: Long) {
+        convertProgress.update { it - gid }
+    }
+
+    fun clearAllConvertProgress() {
+        convertProgress.value = emptyMap()
+    }
+
+    // No initial value read out of the flow: a flow emits what it holds as soon as
+    // collection starts, so the only thing an initial would change is the frame
+    // before that -- and reading a StateFlow during composition is what the lint
+    // rule is about.
+    @Stable
+    @Composable
+    fun collectConvertProgress(gid: Long): State<ConvertProgress?> = remember(gid) { convertProgress.map { it[gid] } }.collectAsState(null)
 
     /** The transfer ended without an archive: the row goes back to how a restore leaves it. */
     fun abandonArchiveDownload(gid: Long) {
@@ -868,13 +916,45 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
         }
     }
 
-    override fun onArchiveProgress(done: Int, total: Int) {
+    /**
+     * The archive write that follows a download, for the row to draw.
+     *
+     * It runs inside the download session, so the row's own counters are already
+     * at "every page done" while the bytes are still being written -- which reads
+     * as finished. This is what the row shows instead for those seconds, in the
+     * units the write is actually reported in.
+     */
+    private val archiveWrite = MutableStateFlow<Map<Long, ConvertProgress>>(emptyMap())
+    private var writeSampleAt = 0L
+    private var writeSampleBytes = 0L
+    private var writeSpeed = 0L
+
+    override fun onArchiveProgress(done: Long, total: Long, format: Int) {
+        val gid = mCurrentTask?.gid
+        val now = SystemClock.elapsedRealtime()
+        if (writeSampleAt == 0L || done < writeSampleBytes) {
+            writeSampleAt = now
+            writeSampleBytes = done
+            writeSpeed = 0
+        } else if (now - writeSampleAt >= WRITE_SPEED_SAMPLE_MILLIS) {
+            writeSpeed = ((done - writeSampleBytes) * 1000 / (now - writeSampleAt)).coerceAtLeast(0)
+            writeSampleAt = now
+            writeSampleBytes = done
+        }
+        if (gid != null) {
+            val value = ConvertProgress(ConvertState.RUNNING, format, done, total, writeSpeed)
+            archiveWrite.update { if (it[gid] == value) it else it + (gid to value) }
+        }
         // Straight through, not via launch. The service posts this on a conflated
         // channel behind a one-second throttle, so an async hop can easily land
         // after onFinish has cancelled the notification -- and then the progress
         // is never seen at all.
-        mDownloadListener?.onArchiveProgress(done, total)
+        mDownloadListener?.onArchiveProgress(done, total, writeSpeed, format)
     }
+
+    @Stable
+    @Composable
+    fun collectArchiveWrite(gid: Long): State<ConvertProgress?> = remember(gid) { archiveWrite.map { it[gid] } }.collectAsState(null)
 
     override fun onFinish(finished: Int, downloaded: Int, total: Int, failed: Boolean) {
         launch {
@@ -886,6 +966,10 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
             }
             mCurrentTask?.let { info ->
                 mCurrentTask = null
+                // The write is over with the session: the row goes back to what the
+                // download state says.
+                archiveWrite.update { it - info.gid }
+                writeSampleAt = 0
                 mSpeedReminder.stop()
                 info.finished = finished
                 info.downloaded = downloaded
@@ -921,7 +1005,7 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
          * been downloaded, because the download is not finished until the archive
          * holding it is: on a share that tail is long enough to look like a hang.
          */
-        fun onArchiveProgress(done: Int, total: Int) {}
+        fun onArchiveProgress(done: Long, total: Long, speed: Long, format: Int) {}
 
         /**
          * Download done
@@ -1286,4 +1370,7 @@ private suspend fun Path.findArchive(gid: Long): Path? {
  * progress bar only ever wanted a fraction.
  */
 private const val ARCHIVE_PROGRESS_STEPS = 100
+
+/** How often the rate beside a write is resampled; a second is as often as it can be read. */
+private const val WRITE_SPEED_SAMPLE_MILLIS = 1000L
 val GalleryInfo.tempDownloadDir get() = AppConfig.externalTempPersistDir?.let { it / "$gid" }

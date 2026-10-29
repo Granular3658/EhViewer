@@ -144,6 +144,10 @@
             android:name=".download.ArchiveDownloadService"
             android:foregroundServiceType="dataSync"
             android:label="@string/download_service_label" />
+        <service
+            android:name=".download.GalleryConvertService"
+            android:foregroundServiceType="dataSync"
+            android:label="@string/download_service_label" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

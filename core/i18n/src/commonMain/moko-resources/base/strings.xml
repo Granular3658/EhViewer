@@ -56,6 +56,15 @@
     <string name="archive_task_directory">Folder name</string>
     <string name="archive_extract_empty_name">The folder name is empty</string>
     <string name="local_network_extract">Extract</string>
+    <string name="gallery_convert_title">Convert gallery format</string>
+    <string name="gallery_convert_title_position">%1$s (%2$d of %3$d)</string>
+    <string name="gallery_convert_count">%1$d galleries selected</string>
+    <string name="gallery_convert_note">Each gallery's old archive is deleted once the new one is written.</string>
+    <string name="gallery_convert_channel">Gallery conversion</string>
+    <string name="gallery_convert_preparing">Preparing…</string>
+    <string name="gallery_convert_summary">%1$d converted, %2$d skipped or failed</string>
+    <string name="gallery_convert_format_off">Loose images</string>
+    <string name="gallery_convert_queued">Queued</string>
     <string name="archive_convert_title">Convert format</string>
     <string name="archive_convert_progress">%1$s / %2$s</string>
     <string name="archive_task_sizes">%1$s → %2$s · %3$s</string>
@@ -283,7 +292,7 @@
     <string name="download_service_label">EhViewer Download Service</string>
     <string name="download_speed_text">%s</string>
     <string name="download_speed_text_2">%1$s, %2$s left</string>
-    <string name="download_archiving">Archiving %1$d/%2$d</string>
+    <string name="download_archiving">Archiving %1$s</string>
     <string name="remember_download_label">Remember download label</string>
     <string name="default_download_label">Default download label</string>
     <string name="added_to_download_list">Added to download list</string>

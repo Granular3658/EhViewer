@@ -154,10 +154,13 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
      * list as the page callbacks: writing an archive is the tail of a download
      * that used to be invisible, and on a share it is a long tail.
      */
-    private fun notifyArchiveProgress(done: Int, total: Int) {
+    private fun notifyArchiveProgress(done: Long, total: Long) {
+        // The format comes from the session's own den, not from the setting: the
+        // setting can change while a download is running, and the write does not.
+        val format = spiderDen.archiveFormat
         synchronized(mSpiderListeners) {
             mSpiderListeners.forEach {
-                it.onArchiveProgress(done, total)
+                it.onArchiveProgress(done, total, format)
             }
         }
     }
@@ -481,7 +484,7 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
         fun onPageSuccess(index: Int, finished: Int, downloaded: Int, total: Int) {}
         fun onPageFailure(index: Int, error: String?, finished: Int, downloaded: Int, total: Int) {}
         fun onFinish(finished: Int, downloaded: Int, total: Int, failed: Boolean) {}
-        fun onArchiveProgress(done: Int, total: Int) {}
+        fun onArchiveProgress(done: Long, total: Long, format: Int) {}
         fun onPageReady(index: Int) {}
     }
 

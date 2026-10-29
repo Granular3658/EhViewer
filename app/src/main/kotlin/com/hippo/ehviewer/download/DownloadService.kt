@@ -37,6 +37,7 @@ import com.ehviewer.core.model.BaseGalleryInfo
 import com.ehviewer.core.util.isAtLeastS
 import com.ehviewer.core.util.logcat
 import com.ehviewer.core.util.unsafeLazy
+import com.hippo.ehviewer.archive.writeFormatLabel
 import com.hippo.ehviewer.client.EhUtils
 import com.hippo.ehviewer.client.exception.FatalException
 import com.hippo.ehviewer.client.exception.InsufficientGpException
@@ -239,13 +240,30 @@ class DownloadService :
         }
     }
 
-    override fun onArchiveProgress(done: Int, total: Int) {
-        val text = getString(R.string.download_archiving, done, total)
+    // The archiving write is reported in bytes and a rate, the same as the pages
+    // that came before it and the same as a conversion: what is left is a size, and
+    // a page count does not say it. The rate is sampled by DownloadManager, which
+    // draws the same numbers in the list.
+    override fun onArchiveProgress(done: Long, total: Long, archiveSpeed: Long, format: Int) {
+        val size = if (total > 0) {
+            "${FileUtils.humanReadableByteCount(done)} / ${FileUtils.humanReadableByteCount(total)}"
+        } else {
+            FileUtils.humanReadableByteCount(done)
+        }
+        val text = getString(
+            R.string.download_archiving,
+            if (archiveSpeed > 0) "$size · ${FileUtils.humanReadableByteCount(archiveSpeed)}/s" else size,
+        )
+        // A percentage rather than the sizes themselves: a progress bar takes an
+        // Int, and a gallery's archive does not have to fit in one.
+        val percent = if (total > 0) (done * 100 / total).toInt().coerceIn(0, 100) else 0
         downloadingNotification.run {
             builder.setContentText(text)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-                .setSubText("$done/$total")
-                .setProgress(total, done, false)
+                // What it is being written as, in the slot the notification has for
+                // a second line.
+                .setSubText("[${writeFormatLabel(format)}]")
+                .setProgress(100, percent, total <= 0)
             startForeground()
         }
     }

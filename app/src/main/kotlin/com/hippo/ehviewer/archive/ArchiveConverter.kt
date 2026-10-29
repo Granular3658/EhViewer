@@ -1,6 +1,7 @@
 package com.hippo.ehviewer.archive
 
 import android.os.ParcelFileDescriptor
+import arrow.fx.coroutines.parMap
 import com.ehviewer.core.files.delete
 import com.ehviewer.core.files.exists
 import com.ehviewer.core.files.isSmb
@@ -17,7 +18,9 @@ import com.hippo.ehviewer.jni.archiveWriterClose
 import com.hippo.ehviewer.jni.archiveWriterOpen
 import com.hippo.ehviewer.jni.closeArchive
 import com.hippo.ehviewer.jni.dwarfsClose
+import com.hippo.ehviewer.jni.dwarfsOpen
 import com.hippo.ehviewer.jni.dwarfsOpenAll
+import com.hippo.ehviewer.jni.dwarfsOpenSmb
 import com.hippo.ehviewer.jni.dwarfsOpenSmbAll
 import com.hippo.ehviewer.jni.dwarfsPageCount
 import com.hippo.ehviewer.jni.dwarfsPageName
@@ -30,11 +33,15 @@ import com.hippo.ehviewer.jni.extractToFd
 import com.hippo.ehviewer.jni.getExtension
 import com.hippo.ehviewer.jni.lastArchiveError
 import com.hippo.ehviewer.jni.needPassword
+import com.hippo.ehviewer.jni.openArchive
 import com.hippo.ehviewer.jni.openArchiveAll
+import com.hippo.ehviewer.jni.openArchiveSmb
 import com.hippo.ehviewer.jni.openArchiveSmbAll
 import com.hippo.ehviewer.jni.providePassword
 import com.hippo.ehviewer.smb.SmbLocation
 import com.hippo.ehviewer.smb.SmbRepository
+import com.hippo.ehviewer.spider.FileNameRegex
+import com.hippo.ehviewer.spider.TEMP_SUFFIX as PAGE_TEMP_SUFFIX
 import com.hippo.ehviewer.util.LocalEntry
 import com.hippo.ehviewer.util.listLocalEntries
 import kotlinx.coroutines.Dispatchers
@@ -69,6 +76,18 @@ data class ConvertedArchive(
 
 /** The suffix [format] writes. */
 fun archiveSuffixOf(format: Int): String = if (format == Settings.ARCHIVE_DWARFS) ".dwarfs" else ".cbz"
+
+/**
+ * What a write is producing, as the row and the notification name it.
+ *
+ * Not a resource on purpose: these are the names of the formats, and they read the
+ * same in every language the app speaks.
+ */
+fun writeFormatLabel(format: Int): String = when (format) {
+    Settings.ARCHIVE_DWARFS -> "dwarfs"
+    Settings.ARCHIVE_OFF -> "loose"
+    else -> "cbz"
+}
 
 /**
  * The format a conversion starts on: the one the download settings would write.
@@ -180,6 +199,135 @@ suspend fun packDirectory(
     val packed = writeArchive(target, format, entries, CHUNK, onProgress)
     if (deleteSource) deleteRecursively(source)
     packed
+}
+
+/**
+ * Rewrites the archive at [source] into [format] as a gallery.
+ *
+ * The gallery is the pages: what is written is the images the reader would show,
+ * in the order it would show them, named by where they come in that order. What
+ * the source holds besides them -- a `ComicInfo.xml`, a thumbnail, a directory --
+ * is not part of the gallery and does not survive. That is the difference between
+ * this and [convertArchive]: a download list converts what it knows a gallery to
+ * be, and the browser converts a file.
+ *
+ * The reader holds one archive at a time, which this relies on in the same way the
+ * browser's conversion does.
+ */
+suspend fun convertGalleryArchive(
+    source: Path,
+    sourceSize: Long,
+    format: Int,
+    onProgress: (done: Long, total: Long) -> Unit,
+): ConvertedArchive = withContext(Dispatchers.IO) {
+    require(format == Settings.ARCHIVE_CBZ || format == Settings.ARCHIVE_DWARFS || format == Settings.ARCHIVE_OFF) {
+        "Unsupported format $format"
+    }
+    val reader = openReader(source, sourceSize, all = false)
+    try {
+        val count = reader.entryCount
+        check(count > 0) { lastArchiveError() ?: "The archive holds no entries" }
+        val entries = (0 until count).map { index ->
+            // Named by position, not by the name it came in with: the gallery's
+            // order is the reader's, and a name is what says which page is which.
+            // The extension is taken from that name rather than from
+            // `getExtension`, which reads the zip side's own table -- a DwarFS
+            // image has no such table, and asking it for one is a null dereference.
+            val name = reader.nameOf(index)
+            Entry(entryName(index, name.substringAfterLast('.')), reader.sizeOf(index).coerceAtLeast(0)) { pipe ->
+                reader.copyTo(index, pipe.fd)
+            }
+        }
+        if (format == Settings.ARCHIVE_OFF) {
+            // "Not archived" is a gallery of loose pages: they go where the page
+            // downloader would have put them, beside the archive they came out of,
+            // and the archive itself is left for the caller to remove.
+            return@withContext writeLoosePages(source.parent!!, entries, onProgress)
+        }
+        val target = source.parent!! / (source.name.substringBeforeLast('.', source.name) + archiveSuffixOf(format))
+        require(target != source) { "The archive is already in this format" }
+        val chunk = if (isDwarfsName(source.name)) 1 else CHUNK
+        writeArchive(target, format, entries, chunk, onProgress)
+    } finally {
+        runCatching { reader.close() }
+    }
+}
+
+/**
+ * Packs the pages a gallery already has on disk into an archive.
+ *
+ * This is the other direction of [convertGalleryArchive]: a gallery that was
+ * downloaded page by page has no archive to rewrite, and what it has is the pages
+ * themselves. They are named `%08d.ext` by the downloader, so the order they come
+ * in is the order they sort in, and the archive keeps those names.
+ *
+ * A gallery that holds only some of its pages is packed as it is. Downloading a
+ * part of a gallery on purpose is a thing people do, and the pages that are there
+ * are a gallery; refusing them would leave packing by hand as the only way to get
+ * an archive of one.
+ *
+ * The pages are removed once the archive is in place, which is what makes this a
+ * conversion and not a copy: the reader prefers an archive over loose images, so
+ * what is left behind would never be read again -- and neither would the
+ * downloader write to it. A gallery that has an archive counts as downloaded
+ * (`ensureDownload` finishes the moment it sees one), so there is no resume to
+ * keep the pages for. A partial gallery goes the same way, and its archive holds
+ * the pages that were there under the names they had.
+ */
+suspend fun packGalleryImages(
+    directory: Path,
+    gid: Long,
+    format: Int,
+    onProgress: (done: Long, total: Long) -> Unit,
+): ConvertedArchive = withContext(Dispatchers.IO) {
+    require(format == Settings.ARCHIVE_CBZ || format == Settings.ARCHIVE_DWARFS) { "Unsupported format $format" }
+    // A page still being written carries the downloader's temp suffix, and the
+    // name pattern matches a prefix: without this, half a page would be packed as
+    // a whole one.
+    val pages = listEntries(directory)
+        .filter { !it.isDirectory && it.name.matches(FileNameRegex) && !it.name.endsWith(PAGE_TEMP_SUFFIX) }
+        .sortedBy { it.name }
+    check(pages.isNotEmpty()) { "The gallery holds no pages" }
+    val entries = pages.map { page ->
+        Entry(page.name, page.size) { pipe -> streamInto(directory / page.name, pipe) }
+    }
+    val packed = writeArchive(directory / "$gid${archiveSuffixOf(format)}", format, entries, CHUNK, onProgress)
+    // The archive is in place, so the files it was built from are the copy nothing
+    // reads any more. One that will not go is not worth failing over.
+    withContext(Dispatchers.IO) {
+        pages.parMap(concurrency = 10) { page -> runCatching { (directory / page.name).delete() } }
+    }
+    packed
+}
+
+/**
+ * Writes the pages out as loose files.
+ *
+ * The names are the ones the page downloader gives: `%08d.ext`, so a gallery that
+ * came out of an archive is read exactly like one that was downloaded page by
+ * page. A file that is already there is replaced -- the pages are the gallery, and
+ * an older copy of a page is not something to keep.
+ */
+private suspend fun writeLoosePages(
+    directory: Path,
+    entries: List<Entry>,
+    onProgress: (Long, Long) -> Unit,
+): ConvertedArchive {
+    val total = entries.sumOf(Entry::size)
+    var done = 0L
+    directory.mkdirs()
+    for (entry in entries) {
+        currentCoroutineContext().ensureActive()
+        val opened = (directory / entry.name).openFileDescriptor("wt")
+        try {
+            check(entry.copyTo(opened)) { "${entry.name} could not be written" }
+        } finally {
+            runCatching { opened.close() }
+        }
+        done += entry.size
+        onProgress(done, total)
+    }
+    return ConvertedArchive(directory, done, done)
 }
 
 /**
@@ -507,16 +655,17 @@ private fun entryName(index: Int, extension: String) = "%08d.%s".format(index + 
  * native calls -- and why the descriptor is held here: the native side closes
  * the archive, not the descriptor.
  */
-private suspend fun openReader(source: Path, size: Long): SourceReader {
+private suspend fun openReader(source: Path, size: Long, all: Boolean = true): SourceReader {
     if (!source.isSmb) {
         val pfd = source.openFileDescriptor("r")
         try {
             val length = pfd.statSize.takeIf { it > 0 } ?: size
             if (isDwarfsName(source.name)) {
-                val image = dwarfsOpenAll(pfd.fd, Settings.dwarfsCacheSize.value)
+                val cache = Settings.dwarfsCacheSize.value
+                val image = if (all) dwarfsOpenAll(pfd.fd, cache) else dwarfsOpen(pfd.fd, cache)
                 return LocalDwarfsReader(pfd, image, dwarfsPageCount(image))
             }
-            val count = openArchiveAll(pfd.fd, length)
+            val count = if (all) openArchiveAll(pfd.fd, length) else openArchive(pfd.fd, length, true)
             if (count > 0 && needPassword() && Settings.archivePasswds.none(::providePassword)) {
                 throw IllegalStateException("The archive needs a password")
             }
@@ -530,10 +679,11 @@ private suspend fun openReader(source: Path, size: Long): SourceReader {
     val handle = SmbRepository.open(location)
     try {
         if (isDwarfsName(source.name)) {
-            val image = dwarfsOpenSmbAll(handle.value, handle.size, Settings.dwarfsCacheSize.value)
+            val cache = Settings.dwarfsCacheSize.value
+            val image = if (all) dwarfsOpenSmbAll(handle.value, handle.size, cache) else dwarfsOpenSmb(handle.value, handle.size, cache)
             return DwarfsReader(handle.value, image, dwarfsPageCount(image))
         }
-        val count = openArchiveSmbAll(handle.value, handle.size)
+        val count = if (all) openArchiveSmbAll(handle.value, handle.size) else openArchiveSmb(handle.value, handle.size, true)
         // A password the app already knows is worth trying: the reader does the
         // same, and a conversion is a read of the same archive.
         if (count > 0 && needPassword() && Settings.archivePasswds.none(::providePassword)) {

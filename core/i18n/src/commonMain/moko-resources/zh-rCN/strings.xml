@@ -42,6 +42,15 @@
     <string name="archive_task_directory">目录名</string>
     <string name="archive_extract_empty_name">目录名为空</string>
     <string name="local_network_extract">解压</string>
+    <string name="gallery_convert_title">转换画廊格式</string>
+    <string name="gallery_convert_title_position">%1$s（%2$d / %3$d）</string>
+    <string name="gallery_convert_count">已选择 %1$d 个画廊</string>
+    <string name="gallery_convert_note">新归档写入完成后会删除每个画廊的旧归档。</string>
+    <string name="gallery_convert_channel">画廊格式转换</string>
+    <string name="gallery_convert_preparing">准备中…</string>
+    <string name="gallery_convert_summary">已转换 %1$d 个，跳过或失败 %2$d 个</string>
+    <string name="gallery_convert_format_off">散图（不归档）</string>
+    <string name="gallery_convert_queued">待转换</string>
     <string name="archive_convert_title">转换格式</string>
     <string name="archive_convert_progress">%1$s / %2$s</string>
     <string name="archive_task_sizes">%1$s → %2$s · %3$s</string>
@@ -266,7 +275,7 @@
     <string name="download_service_label">EhViewer 下载服务</string>
     <string name="download_speed_text">%s</string>
     <string name="download_speed_text_2">%1$s，剩余 %2$s</string>
-    <string name="download_archiving">正在归档 %1$d/%2$d</string>
+    <string name="download_archiving">正在归档 %1$s</string>
     <string name="remember_download_label">记住下载标签</string>
     <string name="default_download_label">默认下载标签</string>
     <string name="added_to_download_list">已添加至下载列表</string>

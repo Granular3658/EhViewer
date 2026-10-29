@@ -48,9 +48,57 @@ import com.ehviewer.core.ui.component.GalleryListCardRating
 import com.ehviewer.core.ui.util.TransitionsVisibilityScope
 import com.ehviewer.core.ui.util.listThumbGenerator
 import com.hippo.ehviewer.EhDB
+import com.hippo.ehviewer.archive.writeFormatLabel
 import com.hippo.ehviewer.client.EhUtils
 import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.util.FileUtils
+
+/**
+ * A write in flight: a size against a total, a rate, and a bar.
+ *
+ * A conversion and the archive write that follows a download are the same kind of
+ * work and are reported the same way, so they are drawn by the same row.
+ */
+@Composable
+private fun WriteProgressRow(done: Long, total: Long, speed: Long, format: Int) {
+    ProvideTextStyle(MaterialTheme.typography.labelMedium) {
+        Row {
+            Text(text = convertSizeText(done, total))
+            // What is being written, in the space the size line leaves: quieter and
+            // a step smaller, because it is a label and not a number to read.
+            Text(
+                text = "[${writeFormatLabel(format)}]",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 6.dp).alignByBaseline(),
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Text(text = FileUtils.humanReadableByteCount(speed.coerceAtLeast(0)) + "/S")
+        }
+        LinearWavyProgressIndicator(
+            progress = { if (total > 0) done.toFloat() / total else 0f },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/**
+ * A size against a total, or just the size when the total is not known yet.
+ *
+ * The unit is said once when both sides are in it: `2.1 / 5.4 MiB` is the same
+ * number as `2.1 MiB / 5.4 MiB` and leaves room on the line for what is being
+ * written.
+ */
+private fun convertSizeText(done: Long, total: Long): String {
+    if (total <= 0) return FileUtils.humanReadableByteCount(done)
+    val doneText = FileUtils.humanReadableByteCount(done)
+    val totalText = FileUtils.humanReadableByteCount(total)
+    return if (doneText.substringAfterLast(' ') == totalText.substringAfterLast(' ')) {
+        "${doneText.substringBeforeLast(' ')} / $totalText"
+    } else {
+        "$doneText / $totalText"
+    }
+}
 
 @Composable
 context(_: SharedTransitionScope, _: TransitionsVisibilityScope)
@@ -90,6 +138,13 @@ fun DownloadCard(
         val stateFailed = stringResource(R.string.download_state_failed)
         val stateFailed2 = stringResource(R.string.download_state_failed_2, info.legacy)
         val downloadState by DownloadManager.collectDownloadState(info.gid)
+        // A conversion is not a download state: the gallery is downloaded and
+        // stays downloaded, it is being rewritten. Said in the same place the
+        // download state is, because that is the line a row has for this.
+        val convertState by DownloadManager.collectConvertProgress(info.gid)
+        // The archive write that ends a download session: the row's page counters
+        // are already at "all done" while this runs, so it needs its own numbers.
+        val archiveWrite by DownloadManager.collectArchiveWrite(info.gid)
         Column(modifier = Modifier.padding(start = 8.dp, top = 2.dp, end = 4.dp)) {
             Text(
                 text = EhUtils.getSuitableTitle(info),
@@ -98,7 +153,15 @@ fun DownloadCard(
                 style = MaterialTheme.typography.titleSmall,
             )
             Spacer(modifier = Modifier.weight(1f))
-            if (downloadState != DownloadInfo.STATE_DOWNLOAD) {
+            val writing = when {
+                convertState?.state == DownloadManager.ConvertState.RUNNING -> convertState
+                archiveWrite != null -> archiveWrite
+                else -> null
+            }
+            if (writing != null) {
+                WriteProgressRow(writing.done, writing.total, writing.speed, writing.format)
+            } else if (downloadState != DownloadInfo.STATE_DOWNLOAD) {
+                val converting = convertState
                 val stateText = when (downloadState) {
                     DownloadInfo.STATE_NONE -> stringResource(R.string.download_state_none)
                     DownloadInfo.STATE_WAIT -> stringResource(R.string.download_state_wait)
@@ -113,6 +176,8 @@ fun DownloadCard(
                     }
                     else -> null // The item has been removed and this will be disposed soon
                 }
+                // Only a queued conversion has no numbers yet; the row it belongs
+                // to says so in the line the download state would use.
                 ProvideTextStyle(MaterialTheme.typography.labelLarge) {
                     Row {
                         Text(
@@ -121,7 +186,7 @@ fun DownloadCard(
                         )
                         Spacer(modifier = Modifier.weight(1f))
                         Text(
-                            text = stateText.orEmpty(),
+                            text = if (converting != null) stringResource(R.string.gallery_convert_queued) else stateText.orEmpty(),
                             modifier = Modifier.alignByBaseline(),
                         )
                     }
@@ -189,10 +254,15 @@ fun DownloadCard(
                     }
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                val running = downloadState == DownloadInfo.STATE_WAIT || downloadState == DownloadInfo.STATE_DOWNLOAD
-                val icon = when (downloadState) {
-                    DownloadInfo.STATE_WAIT, DownloadInfo.STATE_DOWNLOAD -> Icons.Default.Pause
-                    DownloadInfo.STATE_FINISH -> Icons.Default.DownloadDone
+                // A conversion is work in progress like a download is, so it offers
+                // the same button: pause, which for a queued gallery means leaving
+                // the queue and for the one being written means stopping it.
+                val converting = convertState != null
+                val running = converting || downloadState == DownloadInfo.STATE_WAIT || downloadState == DownloadInfo.STATE_DOWNLOAD
+                val icon = when {
+                    converting -> Icons.Default.Pause
+                    downloadState == DownloadInfo.STATE_FINISH -> Icons.Default.DownloadDone
+                    running -> Icons.Default.Pause
                     else -> Icons.Default.PlayArrow
                 }
                 if (selectMode) {

@@ -16,6 +16,15 @@ plugins {
 
 val supportedAbis = arrayOf("arm64-v8a", "x86_64", "armeabi-v7a")
 
+// What a debug build produces. One ABI is one CMake configure and one native build
+// per run, and a debug build is for the device on the desk: arm64 unless another is
+// asked for with -Pehviewer.debugAbis=x86_64,arm64-v8a.
+val debugAbis = (providers.gradleProperty("ehviewer.debugAbis").orNull ?: "arm64-v8a")
+    .split(',')
+    .map(String::trim)
+    .filter(String::isNotEmpty)
+    .toTypedArray()
+
 android {
     splits {
         abi {
@@ -25,7 +34,7 @@ android {
                 include(*supportedAbis)
                 isUniversalApk = true
             } else {
-                include("arm64-v8a", "x86_64")
+                include(*debugAbis)
             }
         }
     }
