@@ -13,7 +13,7 @@ android-26 = ["android", "ndk/api-level-26"]
 
 [dependencies]
 regex-lite = "0.1"
-smb2 = "0.27"
+smb2 = "0.36"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync"] }
 jni = { version = "0.21", optional = true }
 jni_fn = { version = "0.1", optional = true }
@@ -54,9 +54,9 @@ strip = true
 lto = true
 codegen-units = 1
 
-# `stat_many`: several existence probes in one round trip, which is what asking
-# whether a gallery already holds an archive needs. The fork is ours
-# (github.com/Granular3658/smb2, branch `ehviewer-stat-many`) and is pinned by rev
+# `stat_many`: several existence probes in one round trip, and `stat_following`:
+# a stat that looks at what a link points to. The fork is ours
+# (github.com/Granular3658/smb2, branch `ehviewer-stat-many-036`) and is pinned by rev
 # rather than by branch so a build is reproducible.
 [patch.crates-io]
-smb2 = { git = "https://github.com/Granular3658/smb2", rev = "47f438f773b8c3e0eda868b691eae383464110e8" }
+smb2 = { git = "https://github.com/Granular3658/smb2", rev = "e7cefaeca44937427108836ddf15789153a52012" }

@@ -52,7 +52,9 @@ pub const AUTH_REQUIRED: &str = "smb-auth-required";
 /// that has the server's own error type converts it before the body returns.
 fn asking_for_credentials<T>(result: Result<T>) -> Result<T> {
     result.map_err(|error| match error.downcast_ref::<smb2::Error>().map(smb2::Error::kind) {
-        Some(smb2::ErrorKind::AuthRequired | smb2::ErrorKind::SigningRequired | smb2::ErrorKind::AccessDenied) => error.context(AUTH_REQUIRED),
+        Some(smb2::ErrorKind::AuthRequired | smb2::ErrorKind::SigningRequired | smb2::ErrorKind::AccessDenied | smb2::ErrorKind::GuestSessionRefused | smb2::ErrorKind::SignatureInvalid) => {
+            error.context(AUTH_REQUIRED)
+        }
         _ => error,
     })
 }
@@ -142,6 +144,8 @@ async fn connect(target: &Target) -> Result<Session> {
         dfs_enabled: false,
         dfs_target_overrides: Default::default(),
         connect_options: None,
+        response_timeout: Some(Duration::from_secs(30)),
+        previous_session_id: None,
     };
     let mut client = SmbClient::connect(config).await?;
     let tree = client.connect_share(&target.share).await?;
@@ -288,7 +292,15 @@ pub fn stat(target: &Target) -> Result<Stat> {
     runtime().block_on(async {
         with_session!(target, |session| {
             let path = &target.sub;
-            let info = timeout(OP_TIMEOUT, session.client.stat(&mut session.tree, path)).await.map_err(|_| anyhow!("Timed out stat-ing {path:?}"))??;
+            // Following the last component's link: a gallery directory that is a
+            // symlink to one is still a directory, and the link itself reports as a
+            // file. A server that refuses to follow answers with an error, and the
+            // link's own metadata is the better answer than nothing.
+            let stat = timeout(OP_TIMEOUT, session.client.stat_following(&mut session.tree, path)).await.map_err(|_| anyhow!("Timed out stat-ing {path:?}"))?;
+            let info = match stat {
+                Ok(info) => info,
+                Err(_) => timeout(OP_TIMEOUT, session.client.stat(&mut session.tree, path)).await.map_err(|_| anyhow!("Timed out stat-ing {path:?}"))??,
+            };
             let modified_millis = info.modified.to_system_time().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64).unwrap_or(0);
             Ok(Stat { is_directory: info.is_directory, size: info.size, modified_millis })
         })
