@@ -55,6 +55,18 @@ external fun smbList(
     domain: String,
 ): Array<String>
 
+/** One boolean per name: whether that entry exists in [sub]. */
+external fun smbStatMany(
+    host: String,
+    port: Int,
+    share: String,
+    sub: String,
+    names: Array<String>,
+    user: String,
+    pass: String,
+    domain: String,
+): BooleanArray
+
 /** Returns [isDirectory, size, lastModifiedMillis]. */
 external fun smbStat(
     host: String,

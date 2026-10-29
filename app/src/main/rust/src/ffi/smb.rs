@@ -4,8 +4,8 @@ use super::jvm::jni_throwing;
 use crate::smb::{self, DEFAULT_PORT, Target};
 use anyhow::{Context as _, Result, ensure};
 use jni::JNIEnv;
-use jni::objects::{JByteBuffer, JClass, JObject, JString};
-use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jint, jlong, jlongArray, jobject, jobjectArray};
+use jni::objects::{JByteBuffer, JClass, JObject, JObjectArray, JString};
+use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jbooleanArray, jint, jlong, jlongArray, jobject, jobjectArray};
 use jni_fn::jni_fn;
 
 #[allow(clippy::too_many_arguments)]
@@ -139,6 +139,26 @@ pub fn smbList(mut env: JNIEnv, _: JClass, host: JString, port: jint, share: JSt
         let target = read_target(env, &host, port, &share, &sub, &user, &pass, &domain)?;
         let entries = smb::list_dir(&target)?;
         marshal_entries(env, entries)
+    })
+}
+
+/// Returns one boolean per name: whether that entry exists in `sub`.
+#[jni_fn("com.hippo.ehviewer.jni.SmbKt")]
+pub fn smbStatMany(mut env: JNIEnv, _: JClass, host: JString, port: jint, share: JString, sub: JString, names: JObjectArray, user: JString, pass: JString, domain: JString) -> jbooleanArray {
+    jni_throwing(&mut env, |env| {
+        let target = read_target(env, &host, port, &share, &sub, &user, &pass, &domain)?;
+        let count = env.get_array_length(&names)?;
+        let mut requested: Vec<String> = Vec::with_capacity(count as usize);
+        for index in 0..count {
+            let element = env.get_object_array_element(&names, index)?;
+            let name: String = env.get_string(&element.into())?.into();
+            requested.push(name);
+        }
+        let found = smb::stat_many(&target, &requested)?;
+        let values: Vec<jboolean> = found.into_iter().map(|exists| exists as jboolean).collect();
+        let array = env.new_boolean_array(values.len() as jint)?;
+        env.set_boolean_array_region(&array, 0, &values)?;
+        Ok(array.into_raw())
     })
 }
 

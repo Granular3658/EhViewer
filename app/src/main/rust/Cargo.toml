@@ -53,3 +53,10 @@ panic = "abort"
 strip = true
 lto = true
 codegen-units = 1
+
+# `stat_many`: several existence probes in one round trip, which is what asking
+# whether a gallery already holds an archive needs. The fork is ours
+# (github.com/Granular3658/smb2, branch `ehviewer-stat-many`) and is pinned by rev
+# rather than by branch so a build is reproducible.
+[patch.crates-io]
+smb2 = { git = "https://github.com/Granular3658/smb2", rev = "47f438f773b8c3e0eda868b691eae383464110e8" }

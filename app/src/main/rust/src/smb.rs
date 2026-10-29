@@ -268,6 +268,22 @@ pub fn list_shares(host: &str, port: u16, user: &str, pass: &str, domain: &str) 
     })
 }
 
+/// Which of `names` exist in the target's own path, in one round trip.
+///
+/// `stat` costs a round trip per name, and asking whether a gallery already holds
+/// an archive asks about five. The names are joined onto the target's path so the
+/// caller passes only the file names it is looking for.
+pub fn stat_many(target: &Target, names: &[String]) -> Result<Vec<bool>> {
+    runtime().block_on(async {
+        with_session!(target, |session| {
+            let paths: Vec<String> = names.iter().map(|name| if target.sub.is_empty() { name.clone() } else { format!("{}/{name}", target.sub) }).collect();
+            let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+            let results = timeout(OP_TIMEOUT, session.client.stat_many(&mut session.tree, &refs)).await.map_err(|_| anyhow!("Timed out probing {} names", refs.len()))??;
+            Ok(results.into_iter().map(|result| result.is_ok()).collect())
+        })
+    })
+}
+
 pub fn stat(target: &Target) -> Result<Stat> {
     runtime().block_on(async {
         with_session!(target, |session| {

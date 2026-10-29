@@ -15,6 +15,7 @@ import com.hippo.ehviewer.jni.smbRename
 import com.hippo.ehviewer.jni.smbSetCacheLimitMb
 import com.hippo.ehviewer.jni.smbShares
 import com.hippo.ehviewer.jni.smbStat
+import com.hippo.ehviewer.jni.smbStatMany
 import com.hippo.ehviewer.jni.smbTest
 import com.hippo.ehviewer.jni.smbWrite
 import com.hippo.ehviewer.jni.smbWriteClose
@@ -154,6 +155,29 @@ object SmbRepository {
             } else {
                 smbList(location.host, location.port, location.share, location.subPath, credentials.user, credentials.password, credentials.domain).size
             }
+        }
+    }
+
+    /**
+     * Which of [names] exist in [location], in one round trip.
+     *
+     * [stat] answers one name per round trip, and asking whether a gallery already
+     * holds an archive asks about five: on a share reached over the internet that is
+     * five times the latency for one question. The names are joined onto the
+     * location's own path, so the caller passes file names only.
+     */
+    suspend fun statMany(location: SmbLocation, names: List<String>): List<Boolean> = withContext(Dispatchers.IO) {
+        withTarget(location) { credentials ->
+            smbStatMany(
+                location.host,
+                location.port,
+                location.share,
+                location.subPath,
+                names.toTypedArray(),
+                credentials.user,
+                credentials.password,
+                credentials.domain,
+            ).toList()
         }
     }
 

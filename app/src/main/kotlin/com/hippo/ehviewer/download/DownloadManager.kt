@@ -37,6 +37,7 @@ import com.ehviewer.core.database.model.DownloadLabel
 import com.ehviewer.core.files.delete
 import com.ehviewer.core.files.find
 import com.ehviewer.core.files.isDirectory
+import com.ehviewer.core.files.isSmb
 import com.ehviewer.core.files.toOkioPath
 import com.ehviewer.core.files.toUri
 import com.ehviewer.core.model.BaseGalleryInfo
@@ -47,6 +48,8 @@ import com.ehviewer.core.util.mapNotNull
 import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.exception.FatalException
+import com.hippo.ehviewer.smb.SmbLocation
+import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.spider.COMIC_INFO_FILE
 import com.hippo.ehviewer.spider.SpeedTracker
 import com.hippo.ehviewer.spider.SpiderQueen
@@ -1250,11 +1253,29 @@ val DownloadInfo.archiveFile get() = downloadDir?.run {
  */
 suspend fun resolveArchiveFile(info: GalleryInfo): Path? {
     val download = DownloadManager.getDownloadInfo(info.gid) ?: return null
-    download.archiveFile?.let { return it }
+    // A share is asked once, in one frame; a local directory costs nothing to ask
+    // five times, so it keeps the plain lookup.
+    download.downloadDir?.takeIf { !it.isSmb }?.findArchive(info.gid)?.let { return it }
     val dirname = info.downloadDirname()
     val dir = resolveDownloadDirSuspending(download.location, dirname) ?: return null
     dir.parent?.let { DownloadManager.recordDownloadDir(info.gid, dirname, it.toString()) }
-    return dir.run { ARCHIVE_SUFFIXES.firstNotNullOfOrNull { find("${info.gid}.$it") } }
+    return dir.findArchive(info.gid)
+}
+
+/**
+ * The gallery's archive in this directory, if it has one.
+ *
+ * On a share the five suffixes travel together in one request, because each of them
+ * is a round trip and the answer is almost always "none of them": a probe that costs
+ * five times the latency for one question is the shape this avoids.
+ */
+private suspend fun Path.findArchive(gid: Long): Path? {
+    if (!isSmb) return ARCHIVE_SUFFIXES.firstNotNullOfOrNull { find("$gid.$it") }
+    val names = ARCHIVE_SUFFIXES.map { "$gid.$it" }
+    val present = SmbLocation.parse(this)?.let { location ->
+        runCatching { SmbRepository.statMany(location, names) }.getOrNull()
+    } ?: return ARCHIVE_SUFFIXES.firstNotNullOfOrNull { find("$gid.$it") }
+    return present.indexOfFirst { it }.takeIf { it >= 0 }?.let { resolve(names[it]) }
 }
 
 /**
