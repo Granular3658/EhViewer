@@ -952,7 +952,8 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_archiveWriterAppend(JNIEnv *env, jclass cl
 }
 
 /// Closes the archive opened by archiveWriterOpen, writing its central
-/// directory. Returns 0 on success, -1 when none was open.
+/// directory. Returns 0 on success, -1 when none was open or the central
+/// directory could not be written.
 JNIEXPORT jint JNICALL
 Java_com_hippo_ehviewer_jni_ArchiveKt_archiveWriterClose(JNIEnv *env, jclass clazz) {
     EH_UNUSED(env);
@@ -964,7 +965,15 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_archiveWriterClose(JNIEnv *env, jclass cla
     if (arc == NULL) {
         return -1;
     }
-    archive_write_close(arc);
+    // The central directory and the end-of-central-directory record are written
+    // here, and they are what makes the file an archive at all. A share that
+    // filled up or dropped during them leaves several gigabytes of entry data
+    // that nothing can open, so this failure has to reach the caller: it used to
+    // be dropped, which reported a failed export as a finished one.
+    int ret = archive_write_close(arc);
+    if (ret != ARCHIVE_OK) {
+        LOGE("%s%s", "archive close failed: ", archive_error_string(arc));
+    }
     archive_write_free(arc);
-    return 0;
+    return ret == ARCHIVE_OK ? 0 : -1;
 }

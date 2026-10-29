@@ -521,9 +521,13 @@ class SpiderDen(val info: GalleryInfo) {
                         ),
                     ),
                 )
-            } finally {
-                writer.close()
+            } catch (e: Throwable) {
+                // A close that fails while the packing is already failing rides
+                // along as suppressed: the first failure is the one that says why.
+                runCatching { writer.close() }.exceptionOrNull()?.let(e::addSuppressed)
+                throw e
             }
+            writer.close()
             check(written == pages + 1) { "Archive wrote $written of ${pages + 1} entries" }
         }
         if (source.isDwarfs()) {
@@ -566,7 +570,18 @@ class SpiderDen(val info: GalleryInfo) {
             )
         }
 
-        fun close() = if (dwarfs) dwarfsWriterClose(handle) else archiveWriterClose()
+        /**
+         * Finishes the archive, reporting a failure.
+         *
+         * The central directory is written here, so this is the step that a share
+         * which filled up or dropped breaks -- and what it leaves behind is entry
+         * data with nothing indexing it, which no reader can open. The result used
+         * to be dropped, which reported a failed export as a finished one.
+         */
+        fun close() {
+            val code = if (dwarfs) dwarfsWriterClose(handle) else archiveWriterClose()
+            check(code == 0) { "Failed to finish the archive" }
+        }
     }
 
     private suspend fun archiveTo(
@@ -639,9 +654,13 @@ class SpiderDen(val info: GalleryInfo) {
                     ),
                 ),
             )
-        } finally {
-            writer.close()
+        } catch (e: Throwable) {
+            // A close that fails while the packing is already failing rides along
+            // as suppressed: the first failure is the one that says why.
+            runCatching { writer.close() }.exceptionOrNull()?.let(e::addSuppressed)
+            throw e
         }
+        writer.close()
         // The writer reports failures only through logcat, and a silently empty
         // archive is exactly what a FIFO source used to produce.
         check(written == pages + 1) { "Archive wrote $written of ${pages + 1} entries" }
