@@ -492,6 +492,17 @@
     <string name="yesterday">昨天</string>
     <string name="some_days_ago">%d 天前</string>
     <string name="archive">压缩包</string>
+    <string name="archive_at_home">archive@home</string>
+    <string name="archive_at_home_no_cache">无缓存下载</string>
+    <string name="archive_at_home_normal">普通下载</string>
+    <string name="archive_at_home_balance">当前余额</string>
+    <string name="archive_at_home_failure">archive@home 请求失败</string>
+    <string name="archive_at_home_invalid_key">API Key 无效</string>
+    <string name="archive_at_home_key_hint">来自 archive-at-home.org 的 API Key</string>
+    <string name="archive_at_home_key_unset">未设置</string>
+    <string name="archive_at_home_save">保存</string>
+    <string name="archive_source">压缩包来源</string>
+    <string name="archive_source_official">E-Hentai 官方</string>
     <string name="archive_free">免费</string>
     <string name="archive_original">原始</string>
     <string name="archive_resample">重采样</string>

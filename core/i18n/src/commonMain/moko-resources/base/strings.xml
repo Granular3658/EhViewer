@@ -513,6 +513,17 @@
     <string name="yesterday">Yesterday</string>
     <string name="some_days_ago">%d days ago</string>
     <string name="archive">Archive</string>
+    <string name="archive_at_home">archive@home</string>
+    <string name="archive_at_home_no_cache">No-cache download</string>
+    <string name="archive_at_home_normal">Normal download</string>
+    <string name="archive_at_home_balance">Current balance</string>
+    <string name="archive_at_home_failure">archive@home request failed</string>
+    <string name="archive_at_home_invalid_key">Invalid API key</string>
+    <string name="archive_at_home_key_hint">API key from archive-at-home.org</string>
+    <string name="archive_at_home_key_unset">Not set</string>
+    <string name="archive_at_home_save">Save</string>
+    <string name="archive_source">Archive source</string>
+    <string name="archive_source_official">E-Hentai official</string>
     <string name="archive_free">Free</string>
     <string name="archive_original">Original</string>
     <string name="archive_resample">Resample</string>

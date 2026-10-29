@@ -130,6 +130,12 @@ object Settings : DataStorePreferences(null) {
     // separately and encrypted by SmbCredentialStore.
     val smbLocations = stringSetPref("smb_locations", emptySet())
     val smbCredentials = stringPref("smb_credentials_v1", "{}")
+
+    // archive@home is a third-party archive mirror with its own API key. Empty
+    // means "not configured": the gallery detail's archive button then behaves
+    // exactly as it did before, offering only the site's own archiver.
+    val archiveAtHomeKey = stringPref("archive_at_home_key", "")
+
     val defaultDownloadLocationUri = stringOrNullPref("default_download_location")
     val showDownloadSource = boolPref("show_download_source", false)
 

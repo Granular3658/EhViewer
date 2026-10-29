@@ -19,6 +19,9 @@ fun FundsItem(
     amount: Int,
     modifier: Modifier = Modifier,
     textStyle: TextStyle = LocalTextStyle.current,
+    // The site reports GP in thousands, so the badge carries a "k"; an amount
+    // that is already in GP -- a mirror's balance -- must not grow one.
+    suffix: String? = if (type == "GP") "k" else null,
 ) {
     Row(
         modifier = modifier,
@@ -29,8 +32,8 @@ fun FundsItem(
             Text(text = type)
         }
         RollingNumber(number = amount, style = textStyle, separator = true)
-        if (type == "GP") {
-            Text(text = "k")
+        if (suffix != null) {
+            Text(text = suffix)
         }
     }
 }

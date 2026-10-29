@@ -30,6 +30,8 @@ import com.ehviewer.core.util.logcat
 import com.hippo.ehviewer.EhApplication.Companion.ktorClient
 import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.Settings
+import com.hippo.ehviewer.client.ArchiveAtHome
+import com.hippo.ehviewer.client.ArchiveAtHomeException
 import com.hippo.ehviewer.client.EhEngine
 import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.EhUtils
@@ -110,6 +112,10 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         val res: String,
         val isHath: Boolean,
         val title: String,
+        /** The link comes from archive@home instead of the site's archiver. */
+        val atHome: Boolean = false,
+        /** archive@home: rebuild instead of answering from its cache. */
+        val force: Boolean = false,
     )
 
     override fun onCreate() {
@@ -124,13 +130,20 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         when (intent?.action) {
             ACTION_START -> {
                 val bundle = intent.getBundleExtra(KEY_GALLERY) ?: return stop()
-                val res = intent.getStringExtra(KEY_RES) ?: return stop()
+                val atHome = intent.getBooleanExtra(KEY_AT_HOME, false)
+                // A mirror answers one archive per gallery, so there is no `res`
+                // to name; the site's own archiver needs one to know which of its
+                // two rows was tapped.
+                val res = intent.getStringExtra(KEY_RES).orEmpty()
+                if (!atHome && res.isEmpty()) return stop()
                 val request = Request(
                     galleryDetail = decodeFromSavedState(bundle),
                     gid = bundle.getLong(KEY_GID),
                     res = res,
                     isHath = intent.getBooleanExtra(KEY_HATH, false),
                     title = intent.getStringExtra(KEY_TITLE).orEmpty(),
+                    atHome = atHome,
+                    force = intent.getBooleanExtra(KEY_FORCE, false),
                 )
                 // The notification has to exist before the work starts: a service
                 // that takes minutes to reach startForeground is killed. Only the
@@ -318,10 +331,18 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         // 416 to one it reads as out of bounds, so a part file left by an earlier
         // attempt is only in the way: start over rather than pick it up.
         part.delete()
-        val url = EhEngine.downloadArchive(gid, request.galleryDetail.token, request.res, request.isHath)
-            ?: throw IOException("No archive link for $gid")
+        val url = if (request.atHome) {
+            ArchiveAtHome.archiveUrl(gid, request.galleryDetail.token, request.force)
+        } else {
+            EhEngine.downloadArchive(gid, request.galleryDetail.token, request.res, request.isHath)
+                ?: throw IOException("No archive link for $gid")
+        }
         ktorClient.prepareRequest(url) {
-            applyEhConfig(EhUrl.getGalleryDetailUrl(gid, request.galleryDetail.token), EhUrl.origin)
+            // A mirror is a third party: it gets the key that was stored for it
+            // and no site referer, origin or cookie.
+            if (!request.atHome) {
+                applyEhConfig(EhUrl.getGalleryDetailUrl(gid, request.galleryDetail.token), EhUrl.origin)
+            }
             timeout {
                 requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
                 socketTimeoutMillis = 60_000
@@ -435,10 +456,12 @@ class ArchiveDownloadService : Service(), CoroutineScope {
     }
 
     private fun finish(gid: Long, error: Throwable? = null, message: String? = null) {
-        val text = message ?: if (error == null) {
-            getString(R.string.archive_download_done)
-        } else {
-            error.message ?: getString(R.string.download_archive_failure)
+        val text = message ?: when {
+            error == null -> getString(R.string.archive_download_done)
+            // A revoked key is the one refusal the user can act on, and the
+            // server's own words for it are English prose in a notification.
+            error is ArchiveAtHomeException && error.unauthorized -> getString(R.string.archive_at_home_invalid_key)
+            else -> error.message ?: getString(R.string.download_archive_failure)
         }
         val notification = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(if (error == null) android.R.drawable.stat_sys_download_done else com.hippo.ehviewer.R.drawable.ic_baseline_warning_24)
@@ -465,10 +488,33 @@ class ArchiveDownloadService : Service(), CoroutineScope {
         private const val KEY_GID = "gid"
         private const val KEY_RES = "res"
         private const val KEY_HATH = "hath"
+        private const val KEY_AT_HOME = "at_home"
+        private const val KEY_FORCE = "force"
         private const val KEY_TITLE = "title"
         private const val NOTIFICATION_ID = 10
         private const val NOTIFY_INTERVAL_MILLIS = 500L
         private const val SPEED_SAMPLE_MILLIS = 1000L
+
+        /**
+         * Queues the gallery's archive from archive@home.
+         *
+         * The link is fetched inside the service, like the site's own: it is the
+         * paid call, and it belongs where a failure can be reported on the
+         * notification that is already showing.
+         */
+        fun startAtHome(context: Context, galleryDetail: GalleryDetail, force: Boolean) {
+            val bundle = Bundle().apply {
+                putLong(KEY_GID, galleryDetail.gid)
+                putAll(encodeToSavedState(galleryDetail))
+            }
+            val intent = Intent(context, ArchiveDownloadService::class.java)
+                .setAction(ACTION_START)
+                .putExtra(KEY_GALLERY, bundle)
+                .putExtra(KEY_AT_HOME, true)
+                .putExtra(KEY_FORCE, force)
+                .putExtra(KEY_TITLE, EhUtils.getSuitableTitle(galleryDetail))
+            ContextCompat.startForegroundService(context, intent)
+        }
 
         fun start(context: Context, galleryDetail: GalleryDetail, archive: Archive) {
             val bundle = Bundle().apply {

@@ -73,7 +73,7 @@ fun ArchiveList(
                 // "Free!" on the page means the account's allowance covers it, which
                 // is not the same as free: only a download that was already unlocked
                 // costs nothing, and that is what the colour says too.
-                cost = when {
+                label = when {
                     it.isUnlockedBy(unlocked) -> archiveUnlocked
                     it.cost == "Free!" -> archiveFree
                     else -> it.cost
@@ -92,7 +92,7 @@ fun ArchiveList(
         items(hath) {
             ArchiveItem(
                 name = if (it.res == "org") archiveOriginal else it.name,
-                cost = if (it.cost == "Free") archiveFree else it.cost,
+                label = if (it.cost == "Free") archiveFree else it.cost,
                 size = it.size,
                 onClick = { onItemClick(it) },
             )
@@ -114,14 +114,19 @@ private fun Archive.isUnlockedBy(unlocked: String?): Boolean = when (unlocked) {
 
 /**
  * One archive option.
+ *
+ * [label] is what the line above the button says -- a price for the site's
+ * archiver, the download mode for a mirror -- and [size] is what the line below
+ * it says. Both are nullable because a source that does not have one leaves the
+ * line out; drawing it empty reads as a value that failed to load.
  */
 @Composable
-private fun ArchiveItem(
+internal fun ArchiveItem(
     name: String,
-    cost: String,
-    size: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    label: String? = null,
+    size: String? = null,
     unlocked: Boolean = false,
 ) {
     val labelStyle = MaterialTheme.typography.labelMedium
@@ -139,10 +144,12 @@ private fun ArchiveItem(
         ButtonDefaults.buttonColors()
     }
     Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = cost,
-            style = labelStyle,
-        )
+        if (label != null) {
+            Text(
+                text = label,
+                style = labelStyle,
+            )
+        }
         Button(
             onClick = onClick,
             shapes = ButtonDefaults.shapes(),
@@ -151,9 +158,11 @@ private fun ArchiveItem(
         ) {
             Text(text = name)
         }
-        Text(
-            text = size,
-            style = labelStyle,
-        )
+        if (size != null) {
+            Text(
+                text = size,
+                style = labelStyle,
+            )
+        }
     }
 }

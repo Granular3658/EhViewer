@@ -109,6 +109,8 @@ import com.ehviewer.core.util.withIOContext
 import com.ehviewer.core.util.withUIContext
 import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.Settings
+import com.hippo.ehviewer.client.ArchiveAtHome
+import com.hippo.ehviewer.client.ArchiveAtHomeException
 import com.hippo.ehviewer.client.EhEngine
 import com.hippo.ehviewer.client.EhFilter.remember
 import com.hippo.ehviewer.client.EhUrl
@@ -119,6 +121,7 @@ import com.hippo.ehviewer.client.exception.NoHathClientException
 import com.hippo.ehviewer.coil.PrefetchAround
 import com.hippo.ehviewer.coil.justDownload
 import com.hippo.ehviewer.collectAsState
+import com.hippo.ehviewer.download.ArchiveDownloadService
 import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.ktbuilder.executeIn
 import com.hippo.ehviewer.ktbuilder.imageRequest
@@ -128,6 +131,7 @@ import com.hippo.ehviewer.ui.confirmRemoveDownload
 import com.hippo.ehviewer.ui.destinations.GalleryCommentsScreenDestination
 import com.hippo.ehviewer.ui.getFavoriteIcon
 import com.hippo.ehviewer.ui.jumpToReaderByPage
+import com.hippo.ehviewer.ui.main.ArchiveAtHomeList
 import com.hippo.ehviewer.ui.main.ArchiveList
 import com.hippo.ehviewer.ui.main.EhPreviewItem
 import com.hippo.ehviewer.ui.main.GalleryCommentCard
@@ -571,9 +575,52 @@ fun BelowHeader(galleryDetail: GalleryDetail, voteTag: VoteTag) {
                 }
             }
         }
+        val sourceOfficial = stringResource(R.string.archive_source_official)
+        val sourceAtHome = stringResource(R.string.archive_at_home)
+        val invalidKey = stringResource(R.string.archive_at_home_invalid_key)
+        val atHomeFailed = stringResource(R.string.archive_at_home_failure)
+        suspend fun showAtHomeDialog() {
+            runSuspendCatching {
+                val balance = bgWork { ArchiveAtHome.balance() }
+                // Which of the two buttons: the cached one leaves `force` off.
+                val force = showNoButton {
+                    ArchiveAtHomeList(
+                        balance = balance,
+                        size = galleryDetail.size,
+                        onDownload = { force -> resume(force) },
+                    )
+                }
+                // Before the snackbar, which suspends until it is dismissed: a
+                // back-press during those seconds cancels this coroutine and the
+                // service would never be started.
+                ArchiveDownloadService.startAtHome(context, galleryDetail, force)
+                snackbar(downloadStarted)
+            }.onFailure {
+                logcat(it)
+                when {
+                    it is ArchiveAtHomeException && it.unauthorized -> snackbar(invalidKey)
+                    it is ArchiveAtHomeException -> snackbar(it.message ?: atHomeFailed)
+                    else -> snackbar(atHomeFailed)
+                }
+            }
+        }
         fun showArchiveDialog() {
             launchIO {
-                if (galleryDetail.apiUid < 0) {
+                // Asked before the sign-in gate: the mirror's key is the only
+                // credential it needs, so a configured key makes this button useful
+                // without an e-hentai account. The site's own archiver still needs
+                // one, and says so when it is picked.
+                val atHome = if (ArchiveAtHome.isConfigured) {
+                    awaitSelectItem(
+                        items = listOf(sourceOfficial, sourceAtHome),
+                        title = R.string.archive_source,
+                    ) == 1
+                } else {
+                    false
+                }
+                if (atHome) {
+                    showAtHomeDialog()
+                } else if (galleryDetail.apiUid < 0) {
                     snackbar(signInFirst)
                 } else {
                     runSuspendCatching {

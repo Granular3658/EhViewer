@@ -21,6 +21,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -116,6 +118,47 @@ fun AnimatedVisibilityScope.EhScreen(navigator: DestinationsNavigator) = Screen(
                         EhUtils.signOut()
                     }
                 }
+            }
+            // The archive button can offer a second source, and that source is
+            // a site with its own key. It sits under the account because it is the
+            // same kind of thing -- a credential the app holds for a site -- but it
+            // is editable, and empty is the default: the button then behaves
+            // exactly as it did before. Outside the signed-in block on purpose:
+            // that key is the only credential this source needs, and it has nothing
+            // to do with an e-hentai account.
+            val archiveAtHomeKey by Settings.archiveAtHomeKey.collectAsState()
+            var archiveAtHomeDraft by remember { mutableStateOf("") }
+            val keyUnset = stringResource(id = R.string.archive_at_home_key_unset)
+            Preference(
+                title = stringResource(id = R.string.archive_at_home),
+                // The key is a secret, so the row shows its last four
+                // characters and nothing else.
+                summary = archiveAtHomeKey.trim().takeIf(String::isNotEmpty)
+                    ?.let { "\u2022\u2022\u2022\u2022" + it.takeLast(4) }
+                    ?: keyUnset,
+            ) {
+                launch {
+                    archiveAtHomeDraft = archiveAtHomeKey
+                    awaitConfirmationOrCancel(
+                        confirmText = R.string.archive_at_home_save,
+                        title = R.string.archive_at_home,
+                    ) {
+                        Column {
+                            Text(text = stringResource(id = R.string.archive_at_home_key_hint))
+                            Spacer(modifier = Modifier.size(dimensionResource(id = com.hippo.ehviewer.R.dimen.keyline_margin)))
+                            OutlinedTextField(
+                                value = archiveAtHomeDraft,
+                                onValueChange = { archiveAtHomeDraft = it },
+                                singleLine = true,
+                            )
+                        }
+                    }
+                    // Trimmed: a pasted key carries a newline, and the header
+                    // it would end up in is malformed with one.
+                    Settings.archiveAtHomeKey.value = archiveAtHomeDraft.trim()
+                }
+            }
+            if (hasSignedIn) {
                 val gallerySite = Settings.gallerySite.asMutableState()
                 SimpleMenuPreferenceInt(
                     title = stringResource(id = R.string.settings_eh_gallery_site),
