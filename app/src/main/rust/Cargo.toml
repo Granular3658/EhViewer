@@ -59,4 +59,4 @@ codegen-units = 1
 # (github.com/Granular3658/smb2, branch `ehviewer-stat-many-036`) and is pinned by rev
 # rather than by branch so a build is reproducible.
 [patch.crates-io]
-smb2 = { git = "https://github.com/Granular3658/smb2", rev = "e7cefaeca44937427108836ddf15789153a52012" }
+smb2 = { git = "https://github.com/Granular3658/smb2", rev = "b5281487d39488b0069db84ac245c2aa938e5d28" }

@@ -79,6 +79,14 @@ impl Target {
     fn addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
+
+    /// Where the operation was aimed, credentials left out: what a log line needs
+    /// to say which request failed. Without it, "failed: ... during Create" names
+    /// neither the path nor the operation, and a status like
+    /// `STATUS_OBJECT_PATH_NOT_FOUND` cannot be traced to a caller.
+    fn path(&self) -> String {
+        if self.sub.is_empty() { format!("smb://{}/{}", self.addr(), self.share) } else { format!("smb://{}/{}/{}", self.addr(), self.share, self.sub) }
+    }
 }
 
 struct Session {
@@ -222,7 +230,7 @@ macro_rules! with_session {
                     // what it was. Without it, a report of that message has
                     // nothing behind it -- the crate's own lines say what the
                     // connection did, not what the operation asked for.
-                    log::warn!(target: "smb", "failed: {error:#}");
+                    log::warn!(target: "smb", "failed on {}: {error:#}", target.path());
                     break Err(error);
                 }
                 outcome => break outcome,
