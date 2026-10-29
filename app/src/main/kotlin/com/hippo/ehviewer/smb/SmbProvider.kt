@@ -288,12 +288,23 @@ class SmbProvider : ContentProvider() {
                 }
             }
             val pfd = object : ParcelFileDescriptor(writeSide) {
+                // The failure is reported once. `AutoCloseOutputStream.close()`
+                // calls the descriptor first and only then marks its own stream
+                // closed, so a throw from here leaves that stream open -- and its
+                // finalizer closes it again, which threw a second time from the
+                // finalizer thread (`Uncaught exception thrown by finalizer` plus
+                // a `LeakedClosableViolation`) instead of releasing the fd.
+                private var reported = false
+
                 override fun close() {
                     try {
                         super.close()
                     } finally {
                         finished.await(120, TimeUnit.SECONDS)
-                        failure.get()?.let { throw IOException("SMB write failed: $uri", it) }
+                        if (!reported) {
+                            reported = true
+                            failure.get()?.let { throw IOException("SMB write failed: $uri", it) }
+                        }
                     }
                 }
             }
