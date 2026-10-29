@@ -10,6 +10,7 @@ import com.hippo.ehviewer.legacy.readLegacySpiderInfo
 import kotlinx.io.Buffer
 import kotlinx.io.readByteArray
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.decodeFromByteArray
 import kotlinx.serialization.encodeToByteArray
@@ -29,13 +30,48 @@ class SpiderInfo(
     val pTokenMap: MutableMap<Int, String> = hashMapOf(),
 
     var previewPerPage: Int = -1,
-)
+) {
+    /**
+     * The bytes this object was last read from or written as.
+     *
+     * The marker is rewritten at the end of every session, reading included, and a
+     * session that only looks at pages changes none of these fields -- so the write
+     * is a network round trip that puts byte-identical content back. Comparing
+     * against what is already there skips it.
+     *
+     * Null means "whatever is on disk is not this object", which is the state a
+     * freshly built instance and one restored from the local cache are in: neither
+     * read the file, so neither may assume it matches.
+     */
+    @Transient
+    var writtenBytes: ByteArray? = null
+}
 
 private val cbor = Cbor {
     ignoreUnknownKeys = true
 }
 
-fun SpiderInfo.write(file: Path) = file.write { write(cbor.encodeToByteArray(contextOf<SpiderInfo>())) }
+fun SpiderInfo.encode(): ByteArray = cbor.encodeToByteArray(contextOf<SpiderInfo>())
+
+fun SpiderInfo.write(file: Path) = file.write { write(encode()) }
+
+/**
+ * Writes the marker, unless the file already holds exactly these bytes.
+ *
+ * Used for the session-end rewrite and nothing else: the local cache copy is not
+ * this, because skipping its write leaves an empty entry behind, and a marker that
+ * is only read has nothing to save anyway.
+ */
+fun SpiderInfo.writeIfChanged(file: Path): Boolean {
+    val bytes = encode()
+    if (bytes.contentEquals(writtenBytes)) {
+        logcat("SpiderInfo") { "unchanged, not rewritten: $file" }
+        return false
+    }
+    file.write { write(bytes) }
+    writtenBytes = bytes
+    return true
+}
 
 fun SpiderInfo.saveToCache() {
     runSuspendCatching {
@@ -63,7 +99,8 @@ fun readFromCache(gid: Long): SpiderInfo? = spiderInfoCache.read(gid.toString())
 }
 
 fun readCompatFromPath(file: Path): SpiderInfo? = runCatching {
-    file.read { cbor.decodeFromByteArray<SpiderInfo>(readByteArray()) }
+    val bytes = file.read { readByteArray() }
+    cbor.decodeFromByteArray<SpiderInfo>(bytes).apply { writtenBytes = bytes }
 }.getOrNull() ?: runCatching {
     file.readLegacySpiderInfo()
 }.getOrNull()
@@ -73,7 +110,7 @@ fun readCompatFromPath(file: Path): SpiderInfo? = runCatching {
  * SMB `.ehviewer` is read straight from the share, never through a descriptor.
  */
 fun readCompatFromBytes(bytes: ByteArray): SpiderInfo? = runCatching {
-    cbor.decodeFromByteArray<SpiderInfo>(bytes)
+    cbor.decodeFromByteArray<SpiderInfo>(bytes).apply { writtenBytes = bytes }
 }.getOrNull() ?: runCatching {
     Buffer().apply { write(bytes) }.readLegacySpiderInfo()
 }.getOrNull()

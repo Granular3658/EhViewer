@@ -421,7 +421,7 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
     @Synchronized
     private fun writeSpiderInfoToLocal() {
         if (!isReady) return
-        spiderDen.downloadDir?.run { spiderInfo.write(resolve(SPIDER_INFO_FILENAME)) }
+        spiderDen.downloadDir?.run { spiderInfo.writeIfChanged(resolve(SPIDER_INFO_FILENAME)) }
         spiderInfo.saveToCache()
     }
 
