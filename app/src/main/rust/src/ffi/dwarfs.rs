@@ -158,18 +158,63 @@ impl Image {
 
 /// Walks the whole tree so the page order is the image's own layout rather than
 /// whatever order the index stores inodes in.
-fn collect(dir: Dir<'_>, prefix: &str, out: &mut Vec<Entry>) {
+fn collect(dir: Dir<'_>, prefix: &str, out: &mut Vec<Entry>, all: bool) {
     for entry in dir.entries() {
         let name = entry.name();
         let path = if prefix.is_empty() { name.to_owned() } else { format!("{prefix}/{name}") };
         let inode = entry.inode();
         if let Some(inner) = inode.as_dir() {
-            collect(inner, &path, out);
+            collect(inner, &path, out, all);
         } else if let Some(file) = inode.as_file()
-            && is_playable(name)
+            && (all || is_playable(name))
         {
             out.push(Entry { path, size: file.as_chunks().total_size() });
         }
+    }
+}
+
+/// Compares two names the way the archive reader does: a run of digits is a
+/// number, so `2.webp` comes before `10.webp`.
+///
+/// The C side sorts with `strnatcmp`, and an image that shows its pages in a
+/// different order than a zip of the same files would is a bug that only shows up
+/// on the pages themselves. Plain byte order puts 10 before 2, which is wrong for
+/// anything a gallery is named after.
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < a.len() && j < b.len() {
+        if a[i].is_ascii_digit() && b[j].is_ascii_digit() {
+            let (si, sj) = (i, j);
+            while i < a.len() && a[i].is_ascii_digit() {
+                i += 1;
+            }
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            let (na, nb) = (strip_zeros(&a[si..i]), strip_zeros(&b[sj..j]));
+            // A longer number is a bigger one; equal lengths compare digit by
+            // digit, which is what the bytes already are.
+            let ord = na.len().cmp(&nb.len()).then_with(|| na.cmp(nb));
+            if ord != std::cmp::Ordering::Equal {
+                return ord;
+            }
+        } else {
+            let ord = a[i].cmp(&b[j]);
+            if ord != std::cmp::Ordering::Equal {
+                return ord;
+            }
+            i += 1;
+            j += 1;
+        }
+    }
+    (a.len() - i).cmp(&(b.len() - j))
+}
+
+fn strip_zeros(digits: &[u8]) -> &[u8] {
+    match digits.iter().position(|c| *c != b'0') {
+        Some(start) => &digits[start..],
+        None => &[],
     }
 }
 
@@ -208,7 +253,7 @@ pub fn dwarfsOpen(mut env: JNIEnv, _: JClass, fd: jint, cache_mb: jint) -> jlong
         ensure!(unsafe { libc::fstat(fd, &mut st) } == 0, "fstat failed");
         let size = st.st_size as u64;
         ensure!(size > 0, "the image is empty");
-        open(Source::Fd(FdSource { fd, size }), cache_mb)
+        open(Source::Fd(FdSource { fd, size }), cache_mb, false)
     })
 }
 
@@ -221,11 +266,37 @@ pub fn dwarfsOpenSmb(mut env: JNIEnv, _: JClass, handle: jlong, size: jlong, cac
     jni_throwing(&mut env, |_| {
         let size = size as u64;
         ensure!(size > 0, "the image is empty");
-        open(Source::Smb(SmbSource { handle: handle as u64, size }), cache_mb)
+        open(Source::Smb(SmbSource { handle: handle as u64, size }), cache_mb, false)
     })
 }
 
-fn open(source: Source, cache_mb: jint) -> Result<jlong> {
+/// Opens an image as a container rather than as a gallery: every regular file is
+/// listed, in the order the image holds them.
+///
+/// A conversion rewrites the file, so dropping what it does not recognise or
+/// reordering what it keeps would be the wrong thing to do to it.
+#[jni_fn("com.hippo.ehviewer.jni.DwarfsKt")]
+pub fn dwarfsOpenAll(mut env: JNIEnv, _: JClass, fd: jint, cache_mb: jint) -> jlong {
+    jni_throwing(&mut env, |_| {
+        let fd = fd as RawFd;
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        ensure!(unsafe { libc::fstat(fd, &mut st) } == 0, "fstat failed");
+        let size = st.st_size as u64;
+        ensure!(size > 0, "the image is empty");
+        open(Source::Fd(FdSource { fd, size }), cache_mb, true)
+    })
+}
+
+#[jni_fn("com.hippo.ehviewer.jni.DwarfsKt")]
+pub fn dwarfsOpenSmbAll(mut env: JNIEnv, _: JClass, handle: jlong, size: jlong, cache_mb: jint) -> jlong {
+    jni_throwing(&mut env, |_| {
+        let size = size as u64;
+        ensure!(size > 0, "the image is empty");
+        open(Source::Smb(SmbSource { handle: handle as u64, size }), cache_mb, true)
+    })
+}
+
+fn open(source: Source, cache_mb: jint, all: bool) -> Result<jlong> {
     let mut config = Config::default();
     // The default is 512 MiB, a desktop number, so the caller decides. It has
     // to stay at or above one block or the library refuses the image outright,
@@ -235,9 +306,14 @@ fn open(source: Source, cache_mb: jint) -> Result<jlong> {
 
     let (index, archive) = Archive::new_with_config(source, &config)?;
     let mut entries = Vec::new();
-    collect(index.root(), "", &mut entries);
+    collect(index.root(), "", &mut entries, all);
     ensure!(!entries.is_empty(), "the image holds no regular files");
-    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    // The reader shows pages and wants them in one fixed order whatever order the
+    // image was built in. A conversion is rewriting the container, so it keeps the
+    // layout it was given instead of imposing one.
+    if !all {
+        entries.sort_by(|a, b| natural_cmp(&a.path, &b.path));
+    }
 
     let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
     let image = Arc::new(Mutex::new(Image { index, archive, entries }));
@@ -262,6 +338,21 @@ pub fn dwarfsPageName(mut env: JNIEnv, _: JClass, handle: jlong, page: jint) -> 
         let image = image.lock().map_err(|_| anyhow!("the image is poisoned"))?;
         let entry = image.entries.get(page as usize).ok_or_else(|| anyhow!("page {page} out of range"))?;
         Ok(env.new_string(&entry.path)?.into_raw())
+    })
+}
+
+/// The page's uncompressed length.
+///
+/// A zip writer declares each entry's length before it reads it, and the page is
+/// handed over through a pipe, which reports itself as a FIFO of size 0 -- so the
+/// length has to come from the image rather than from the descriptor.
+#[jni_fn("com.hippo.ehviewer.jni.DwarfsKt")]
+pub fn dwarfsPageSize(mut env: JNIEnv, _: JClass, handle: jlong, page: jint) -> jlong {
+    jni_throwing(&mut env, |_| {
+        let image = lookup(handle)?;
+        let image = image.lock().map_err(|_| anyhow!("the image is poisoned"))?;
+        let entry = image.entries.get(page as usize).ok_or_else(|| anyhow!("page {page} out of range"))?;
+        Ok(entry.size as jlong)
     })
 }
 

@@ -23,8 +23,15 @@ external fun dwarfsOpen(fd: Int, cacheMb: Int): Long
  * reads, which is all an image is read with.
  */
 external fun dwarfsOpenSmb(handle: Long, size: Long, cacheMb: Int): Long
+
+/** The image as a container: every regular file, in the image's own order. */
+external fun dwarfsOpenAll(fd: Int, cacheMb: Int): Long
+external fun dwarfsOpenSmbAll(handle: Long, size: Long, cacheMb: Int): Long
 external fun dwarfsPageCount(handle: Long): Int
 external fun dwarfsPageName(handle: Long, page: Int): String
+
+/** The page's uncompressed length, which a zip writer needs up front. */
+external fun dwarfsPageSize(handle: Long, page: Int): Long
 external fun dwarfsReadPage(handle: Long, page: Int): ByteBuffer
 
 /** Writes a page straight into a descriptor, the way an archive page is saved. */
@@ -41,6 +48,6 @@ external fun dwarfsClose(handle: Long)
  * no lengths: a descriptor for a remote file is a pipe, and a pipe cannot be
  * stat'ed anyway.
  */
-external fun dwarfsWriterOpen(fd: Int): Long
+external fun dwarfsWriterOpen(fd: Int, level: Int): Long
 external fun dwarfsWriterAppend(handle: Long, fdBatch: IntArray, names: Array<String>, size: Int): Int
 external fun dwarfsWriterClose(handle: Long): Int

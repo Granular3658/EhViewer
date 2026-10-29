@@ -112,6 +112,16 @@ object Settings : DataStorePreferences(null) {
     val archiveFormat = intPref("archive_format", ARCHIVE_OFF)
     val archiveMetadata = boolPref("archive_metadata", true)
 
+    /**
+     * Whether a conversion or a pack removes what it read.
+     *
+     * One setting rather than one per dialog: it says what the user wants done
+     * with a source once an archive holds it, and that answer does not depend on
+     * which screen asked. Off by default -- it is the only step here that cannot
+     * be undone.
+     */
+    val archiveDeleteSource = boolPref("archive_delete_source", false)
+
     // Multiple download locations. The "_2" suffix distinguishes this multi-location
     // set from the pre-existing single-location prefs (downloadScheme/Path/...).
     val downloadLocations = stringSetPref("download_locations_2", emptySet())
@@ -130,6 +140,13 @@ object Settings : DataStorePreferences(null) {
     // Hosts the local-network browser has been told about, as "host:port".
     // Nothing discovers them yet: a host gets here by being typed in.
     val localNetworkHosts = stringSetPref("local_network_hosts", emptySet())
+
+    // Folders on this device the local-network browser has been told about, as
+    // document URIs. Not download locations: this is somewhere to look, and the
+    // download list is somewhere to write, with rules of its own -- one of them
+    // being that it cannot be emptied, which a folder added to browse has no
+    // business being held to.
+    val localNetworkLocations = stringSetPref("local_network_locations", emptySet())
 
     // Privacy
     val security = boolPref("require_unlock", false)
@@ -154,6 +171,12 @@ object Settings : DataStorePreferences(null) {
     // of them stay around. The library refuses an image whose blocks are larger
     // than this, so it cannot go arbitrarily low.
     val dwarfsCacheSize = intPref("dwarfs_cache_size_mb", 128)
+
+    // The zstd level everything this app writes in DwarFS is compressed at: the
+    // data chunks and the metadata sections both. 3 is what upstream mkdwarfs
+    // starts at and what this wrote while the level was hard-coded; the rest of
+    // the range trades writing time for a smaller image.
+    val dwarfsCompressionLevel = intPref("dwarfs_compression_level", 3)
     val enableCronet = boolPref("enable_cronet", true)
     val enableQuic = boolPref("enable_quic", true)
     val hardwareBitmapThreshold = intPref("hardware_bitmap_threshold", 16384)

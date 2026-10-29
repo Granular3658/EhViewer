@@ -86,6 +86,14 @@ static void remember_archive_error(struct archive *arc) {
 static size_t archiveSize = 0;
 static bool archiveIsSmb = false;
 static uint64_t archiveSmbHandle = 0;
+/* Whether the map holds every regular file or only the playable ones.
+ *
+ * The reader wants the images: an archive is a gallery to it, and a text file
+ * in the middle is not a page. A conversion wants the file: it is rewriting a
+ * container, and what is in it is the archive's business, not ours. The two
+ * disagree about the map, so the mode is chosen when the archive is opened and
+ * every walk below follows it. */
+static bool archiveAllEntries = false;
 static entry *entries = NULL;
 static size_t entryCount = 0;
 static size_t entries_capacity = 0;
@@ -239,6 +247,11 @@ static inline bool archive_entry_is_playable(struct archive_entry *entry) {
            filename_is_playable_file(archive_entry_pathname(entry));
 }
 
+/* Whether this entry belongs in the map the archive was opened for. */
+static inline bool archive_entry_is_mapped(struct archive_entry *entry) {
+    return archiveAllEntries ? archive_entry_is_file(entry) : archive_entry_is_playable(entry);
+}
+
 static inline int compare_entries(const void *a, const void *b) {
     const char *fa = ((entry *) a)->filename;
     const char *fb = ((entry *) b)->filename;
@@ -298,7 +311,7 @@ static size_t archive_map_entries_central_dir(bool sort) {
     size_t count = 0;
     for (size_t i = 0; i < cd.count; i++) {
         const zip_cd_entry *e = &cd.entries[i];
-        if (zip_cd_is_directory(e) || !filename_is_playable_file(e->name))
+        if (zip_cd_is_directory(e) || (!archiveAllEntries && !filename_is_playable_file(e->name)))
             continue;
         if (count == entries_capacity) {
             entries_capacity = entries_capacity ? entries_capacity * 2 : 256;
@@ -334,7 +347,7 @@ static size_t archive_map_entries_index(archive_ctx *ctx, bool sort) {
     int status;
     while ((status = archive_read_next_header(ctx->arc, &ctx->entry)) == ARCHIVE_OK) {
         const char *name = archive_entry_pathname(ctx->entry);
-        if (archive_entry_is_file(ctx->entry) && filename_is_playable_file(name)) {
+        if (archive_entry_is_mapped(ctx->entry)) {
             if (count == entries_capacity) {
                 entries_capacity = entries_capacity ? entries_capacity * 2 : 256;
                 entries = realloc(entries, entries_capacity * sizeof(entry));
@@ -472,7 +485,7 @@ static archive_ctx *archive_alloc_ctx() {
 
 static int archive_skip_to_index(archive_ctx *ctx, int index) {
     while (archive_read_next_header(ctx->arc, &ctx->entry) == ARCHIVE_OK) {
-        if (!archive_entry_is_playable(ctx->entry))
+        if (!archive_entry_is_mapped(ctx->entry))
             continue;
         if (ctx->next_index++ == index) {
             return ctx->next_index - 1;
@@ -546,7 +559,8 @@ static int archive_get_ctx(archive_ctx **ctxptr, int idx) {
     return 0;
 }
 
-static int archive_open_common(jboolean sort_entries) {
+static int archive_open_common(jboolean sort_entries, jboolean all_entries) {
+    archiveAllEntries = all_entries;
     archive_ctx *ctx = NULL;
     ctx_pool = calloc(CTX_POOL_SIZE, sizeof(archive_ctx **));
     ctx = archive_alloc_ctx();
@@ -609,7 +623,7 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_openArchive(JNIEnv *env, jclass thiz, jint
     archiveSize = size;
     archiveIsSmb = false;
     archiveSmbHandle = 0;
-    return archive_open_common(sort_entries);
+    return archive_open_common(sort_entries, false);
 }
 
 /*
@@ -629,7 +643,46 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_openArchiveSmb(JNIEnv *env, jclass thiz, j
     archiveSize = (size_t) size;
     archiveIsSmb = true;
     archiveSmbHandle = (uint64_t) handle;
-    return archive_open_common(sort_entries);
+    return archive_open_common(sort_entries, false);
+}
+
+/*
+ * Open the same archive as a container rather than as a gallery: every regular
+ * file is mapped, in the order the archive holds them.
+ *
+ * A conversion rewrites the file, so what it must not do is decide that some of
+ * it is not worth keeping -- and it must not reorder what it does keep. The
+ * reader wants the opposite of both, which is why this is a second entry point
+ * and not a flag the reader has to remember to turn off.
+ */
+JNIEXPORT jint JNICALL
+Java_com_hippo_ehviewer_jni_ArchiveKt_openArchiveAll(JNIEnv *env, jclass thiz, jint fd, jlong size) {
+    EH_UNUSED(env);
+    EH_UNUSED(thiz);
+    archiveAddr = mmap(0, size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (archiveAddr == MAP_FAILED) {
+        LOGE("%s%s", "mmap failed with error ", strerror(errno));
+        return 0;
+    }
+    archiveSize = size;
+    archiveIsSmb = false;
+    archiveSmbHandle = 0;
+    return archive_open_common(false, true);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_hippo_ehviewer_jni_ArchiveKt_openArchiveSmbAll(JNIEnv *env, jclass thiz, jlong handle, jlong size) {
+    EH_UNUSED(env);
+    EH_UNUSED(thiz);
+    if (handle <= 0 || size <= 0) {
+        LOGE("%s", "Invalid SMB archive source");
+        return 0;
+    }
+    archiveAddr = MAP_FAILED;
+    archiveSize = (size_t) size;
+    archiveIsSmb = true;
+    archiveSmbHandle = (uint64_t) handle;
+    return archive_open_common(false, true);
 }
 
 /*
@@ -732,6 +785,38 @@ Java_com_hippo_ehviewer_jni_ArchiveKt_lastArchiveError(JNIEnv *env, jclass thiz)
     EH_UNUSED(thiz);
     if (!last_error[0]) return NULL;
     return (*env)->NewStringUTF(env, last_error);
+}
+
+/*
+ * The name of one mapped entry, as the archive holds it.
+ *
+ * A conversion writes the entries into another container and the name is the
+ * only thing that says which page is which, so the caller needs the whole name
+ * and not just its extension.
+ */
+JNIEXPORT jstring JNICALL
+Java_com_hippo_ehviewer_jni_ArchiveKt_archiveEntryName(JNIEnv *env, jclass thiz, jint index) {
+    EH_UNUSED(thiz);
+    if (entries == NULL || index < 0 || (size_t) index >= entryCount)
+        return NULL;
+    return (*env)->NewStringUTF(env, entries[index].filename);
+}
+
+/*
+ * How long one mapped entry is, or -1 when the archive did not say.
+ *
+ * A caller that copies an entry into a pipe needs the length before it starts:
+ * libarchive refuses to archive a FIFO, and that is exactly what a pipe reports
+ * itself as, so the writer cannot take the length from the descriptor the way it
+ * does for a real file.
+ */
+JNIEXPORT jlong JNICALL
+Java_com_hippo_ehviewer_jni_ArchiveKt_archiveEntrySize(JNIEnv *env, jclass thiz, jint index) {
+    EH_UNUSED(env);
+    EH_UNUSED(thiz);
+    if (entries == NULL || index < 0 || (size_t) index >= entryCount)
+        return -1;
+    return (jlong) entries[index].size;
 }
 
 JNIEXPORT void JNICALL

@@ -1,11 +1,16 @@
 package com.hippo.ehviewer.ui.screen
 
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.net.wifi.WifiManager
+import android.provider.DocumentsContract
 import android.util.Log
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibilityScope
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -53,7 +58,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.ehviewer.core.files.exists
 import com.ehviewer.core.i18n.R
+import com.ehviewer.core.util.logcat
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.download.invalidateDownloadLocationCache
@@ -68,6 +75,9 @@ import com.hippo.ehviewer.ui.main.NavigationIcon
 import com.hippo.ehviewer.ui.navToReader
 import com.hippo.ehviewer.ui.settings.SmbCredentialsDialog
 import com.hippo.ehviewer.ui.settings.SmbLocationDialog
+import com.hippo.ehviewer.util.documentIdOf
+import com.hippo.ehviewer.util.downloadSourceLabel
+import com.hippo.ehviewer.util.listLocalEntries
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
@@ -76,6 +86,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import moe.tarsin.snackbar
+import okio.Path
+import okio.Path.Companion.toPath
 
 private const val DEFAULT_SMB_PORT = 445
 
@@ -156,6 +168,12 @@ private fun String.appendSegment(segment: String) = if (isEmpty()) segment else 
 /** A host as the list shows it: kept by hand, or found by the last scan. */
 private data class HostRow(val value: String, val discovered: Boolean)
 
+/** One row of a listing: a share and a folder on the device describe a child the same way. */
+private data class BrowserEntry(val name: String, val isDirectory: Boolean, val size: Long)
+
+/** What a picked tree has to be granted before it can be read and written. */
+private const val URI_FLAGS = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+
 /**
  * A typed host, in the form the list stores: `host[:port]`.
  *
@@ -205,12 +223,25 @@ private fun hostRows(saved: Set<String>, discovered: List<String>): List<HostRow
 @Composable
 fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator) = Screen(navigator) {
     val savedHosts by Settings.localNetworkHosts.collectAsState()
+    val savedLocations by Settings.localNetworkLocations.collectAsState()
     var host by rememberSaveable { mutableStateOf<String?>(null) }
     var port by rememberSaveable { mutableIntStateOf(DEFAULT_SMB_PORT) }
     var share by rememberSaveable { mutableStateOf<String?>(null) }
     var subPath by rememberSaveable { mutableStateOf("") }
+    // A location on the device, browsed with the same list as a share: the two
+    // differ in where the bytes are, not in what a directory is. `safRoot` is the
+    // location itself -- which the tree never lists, so it is the one directory
+    // the breadcrumb has to offer -- and `safDir` is where the browsing is. Kept
+    // as strings because a Path is not saveable and a tree walk is worth keeping
+    // across a rotation.
+    var safRoot by rememberSaveable { mutableStateOf<String?>(null) }
+    var safDir by rememberSaveable { mutableStateOf<String?>(null) }
     var addingHost by remember { mutableStateOf(false) }
+    var addingMenu by remember { mutableStateOf(false) }
     var savingLocation by remember { mutableStateOf<SmbLocation?>(null) }
+    var converting by remember { mutableStateOf<ArchiveTask.Convert?>(null) }
+    var packing by remember { mutableStateOf<ArchiveTask.Pack?>(null) }
+    var extracting by remember { mutableStateOf<ArchiveTask.Extract?>(null) }
     var discovering by remember { mutableStateOf(false) }
     // What the last scan found, kept for the visit rather than written to the
     // setting: a scan describes the network it ran on, and keeping every scan's
@@ -220,7 +251,22 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
     // Back goes up one level, the way it does in any file browser, and only
     // leaves the screen from the top of the list. Closing the whole screen from
     // several directories down throws away the path that was just walked.
-    BackHandler(enabled = host != null) {
+    BackHandler(enabled = host != null || safRoot != null) {
+        val deviceDir = safDir
+        val deviceRoot = safRoot
+        if (deviceDir != null && deviceRoot != null) {
+            // Up one level, and out of the location only from its own root. The
+            // segments of a document URI are separated by '/', and a name's own
+            // slash arrives encoded, so cutting at the last one is a level.
+            val parent = deviceDir.substringBeforeLast('/', "")
+            if (deviceDir == deviceRoot || parent.isEmpty()) {
+                safRoot = null
+                safDir = null
+            } else {
+                safDir = parent
+            }
+            return@BackHandler
+        }
         when {
             subPath.isNotEmpty() -> subPath = subPath.substringBeforeLast('/', "")
             share != null -> share = null
@@ -230,6 +276,7 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
     val context = LocalContext.current
 
     val cannotList = stringResource(id = R.string.local_network_cannot_list)
+    val cannotGetLocation = stringResource(id = R.string.settings_download_cant_get_download_location)
     val alreadyAdded = stringResource(id = R.string.settings_download_location_already_added)
     // `snackbar` takes the host as a context receiver, so it has to be called
     // with that context in hand rather than from a plain local function.
@@ -267,9 +314,44 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
         }
     }
 
+    // The picker the download settings use, for a different list: what is added
+    // here is somewhere to browse, and the download locations are left alone --
+    // they are somewhere to write, and one of them has rules the other has not.
+    val pickLocation = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
+        if (treeUri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(treeUri, URI_FLAGS)
+                val documentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+                val path = documentUri.toString().toPath()
+                check(path.exists()) { "$path is not there" }
+                // Deliberately not `keepNoMediaFileStatus`: this adds somewhere to
+                // browse, not somewhere to download, and dropping a `.nomedia` into
+                // a folder the app was only asked to look at is a change the user
+                // did not ask for. Adding it in the download settings still does.
+                val uriStr = documentUri.toString()
+                // Compared by the folder, not by the string: the same place can be
+                // named by a tree URI and by a document URI, and adding it twice
+                // would put two rows for one folder in the list.
+                val folder = documentIdOf(uriStr)
+                val known = Settings.localNetworkLocations.value.any {
+                    it == uriStr || (folder != null && documentIdOf(it) == folder)
+                }
+                if (known) {
+                    launchSnackbar(alreadyAdded)
+                } else {
+                    Settings.localNetworkLocations.value = Settings.localNetworkLocations.value + uriStr
+                }
+            }.onFailure {
+                logcat(it)
+                launchSnackbar(cannotGetLocation)
+            }
+        }
+    }
+
     // The listing for the level on screen, or null while it is being fetched.
     var names by remember { mutableStateOf<List<String>?>(null) }
-    var entries by remember { mutableStateOf<List<SmbRepository.Entry>?>(null) }
+    var entries by remember { mutableStateOf<List<BrowserEntry>?>(null) }
     // Whether the level on screen failed to list, as opposed to listing nothing.
     // The two used to be the same thing on screen, and a directory that could
     // not be read looked exactly like a directory with nothing in it.
@@ -282,16 +364,57 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
     var refused by remember { mutableStateOf<SmbLocation?>(null) }
     var attempts by remember { mutableStateOf(0) }
 
+    // Folders this browser was given, which are its own list and not the download
+    // locations: one is somewhere to look, the other is somewhere to write, and a
+    // folder added here is not a download target until it is added as one -- so
+    // the rule that the download list cannot be emptied has nothing to do with it.
+    //
+    // Kept as the strings settings holds, not as Paths: a Path normalises a
+    // content URI (`content://` becomes `content:/`), and the permission was
+    // granted for the string the picker returned. Sorted by the name shown,
+    // because a set has no order of its own.
+    val deviceLocations = remember(savedLocations) {
+        savedLocations.sortedBy { downloadSourceLabel(it.toPath()) }
+    }
+
     val location = remember(host, port, share, subPath) {
         val h = host
         val s = share
         if (h != null && s != null) SmbLocation(h, port, s, subPath) else null
     }
 
-    LaunchedEffect(host, port, share, subPath, attempts) {
+    // The directory on screen, whichever side it is on. A conversion, a pack and
+    // the reader all start from a path, and both sides give one -- which is what
+    // lets the same list serve a share and a location on the device.
+    val currentDir: Path? = safDir?.toPath() ?: location?.path
+
+    // Where the device location's own path begins, for the breadcrumb: everything
+    // below it is what the segments are.
+    val safSubPath = remember(safRoot, safDir) {
+        val root = safRoot
+        val dir = safDir
+        if (root == null || dir == null || !dir.startsWith("$root/")) "" else dir.substring(root.length + 1)
+    }
+
+    LaunchedEffect(host, port, share, subPath, safDir, attempts) {
         names = null
         entries = null
         listingFailed = false
+        // A location on the device answers a query, not a session: there are no
+        // credentials to be refused and no share list to walk, so it is listed
+        // before the share branches below are looked at.
+        val deviceDir = safDir
+        if (deviceDir != null) {
+            val outcome = runCatching { deviceDir.toPath().listLocalEntries() }
+            if (!currentCoroutineContext().isActive) return@LaunchedEffect
+            outcome.onFailure { error ->
+                if (error is CancellationException) throw error
+                Log.w("saf", "listing $deviceDir did not list", error)
+                listingFailed = true
+            }
+            entries = outcome.getOrNull()?.map { BrowserEntry(it.name, it.isDirectory, it.size) }
+            return@LaunchedEffect
+        }
         val h = host ?: return@LaunchedEffect
         val s = share
         // A refusal is about credentials, and is answered by asking for them;
@@ -333,7 +456,7 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                     listingFailed = true
                 }
             }
-            entries = outcome.getOrNull()
+            entries = outcome.getOrNull()?.map { BrowserEntry(it.name, it.isDirectory, it.size) }
         }
     }
 
@@ -344,7 +467,7 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
     val entryListState = rememberLazyListState()
     LaunchedEffect(entries) {
         val list = entries ?: return@LaunchedEffect
-        val page = location?.let { lastPageByDirectory[it.uriString] } ?: return@LaunchedEffect
+        val page = currentDir?.let { lastPageByDirectory[it.toString()] } ?: return@LaunchedEffect
         val name = list.filter { !it.isDirectory && isImage(it.name) }.getOrNull(page)?.name
             ?: return@LaunchedEffect
         val index = list.indexOfFirst { it.name == name }
@@ -358,28 +481,54 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                     title = { Text(text = stringResource(id = R.string.local_network)) },
                     navigationIcon = { NavigationIcon() },
                     actions = {
-                        if (host == null) {
+                        if (host == null && safRoot == null) {
                             IconButton(onClick = { discover() }, enabled = !discovering) {
                                 Icon(
                                     imageVector = Icons.Default.Refresh,
                                     contentDescription = stringResource(id = R.string.local_network_search),
                                 )
                             }
-                            IconButton(onClick = { addingHost = true }) {
-                                Icon(
-                                    imageVector = Icons.Default.Add,
-                                    contentDescription = stringResource(id = R.string.local_network_add_host),
-                                )
+                            // One button for two kinds of location: a server is
+                            // typed, a folder on the device is picked, and both end
+                            // up in the list below.
+                            Box {
+                                IconButton(onClick = { addingMenu = true }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Add,
+                                        contentDescription = stringResource(id = R.string.local_network_add_host),
+                                    )
+                                }
+                                DropdownMenu(expanded = addingMenu, onDismissRequest = { addingMenu = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text(text = stringResource(id = R.string.local_network_add_host)) },
+                                        onClick = {
+                                            addingMenu = false
+                                            addingHost = true
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(text = stringResource(id = R.string.local_network_add_location)) },
+                                        onClick = {
+                                            addingMenu = false
+                                            pickLocation.launch(null)
+                                        },
+                                    )
+                                }
                             }
                         }
                     },
                 )
                 Breadcrumb(
                     root = stringResource(R.string.local_network),
-                    host = host,
-                    share = share,
-                    subPath = subPath,
+                    // A location on the device has no host and no share: its first
+                    // segment is the location itself, named the way the download
+                    // list names it, and what follows is the path inside it.
+                    host = safRoot?.let { downloadSourceLabel(it.toPath()) } ?: host,
+                    share = if (safRoot != null) null else share,
+                    subPath = if (safRoot != null) safSubPath else subPath,
                     onRoot = {
+                        safRoot = null
+                        safDir = null
                         host = null
                         share = null
                         subPath = ""
@@ -390,24 +539,53 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                     // which is a different place depending on how deep the path
                     // is, and reads as the tap having gone wrong.
                     onHost = {
-                        share = null
-                        subPath = ""
+                        val root = safRoot
+                        if (root != null) {
+                            safDir = root
+                        } else {
+                            share = null
+                            subPath = ""
+                        }
                     },
                     onShare = { subPath = "" },
-                    onSegment = { subPath = it },
+                    onSegment = { segment ->
+                        val root = safRoot
+                        if (root != null) safDir = "$root/$segment" else subPath = segment
+                    },
                 )
             }
         },
     ) { paddingValues ->
         Box(modifier = Modifier.padding(paddingValues).fillMaxSize()) {
             when {
-                host == null -> HostList(
+                host == null && safRoot == null -> HostList(
                     rows = hostRows(savedHosts, discovered),
+                    locations = deviceLocations,
                     onOpen = { openHost, openPort ->
                         host = openHost
                         port = openPort
                         share = null
                         subPath = ""
+                    },
+                    onOpenLocation = { path ->
+                        safRoot = path
+                        safDir = path
+                    },
+                    onRemoveLocation = { uriStr ->
+                        // No last-one rule here: this list is somewhere to look,
+                        // and an empty one is a browser with no folders in it.
+                        val remaining = Settings.localNetworkLocations.value - uriStr
+                        Settings.localNetworkLocations.value = remaining
+                        // The permission belongs to the folder, not to the string.
+                        // It stays if another folder entry names the same folder --
+                        // and also if a download location does, because that one
+                        // was granted for a place the app still writes to.
+                        val folder = documentIdOf(uriStr)
+                        val stillUsed = folder != null &&
+                            (remaining + Settings.downloadLocations.value).any { documentIdOf(it) == folder }
+                        if (!stillUsed) {
+                            runCatching { context.contentResolver.releasePersistableUriPermission(Uri.parse(uriStr), URI_FLAGS) }
+                        }
                     },
                     onRemember = { value ->
                         Settings.localNetworkHosts.value = Settings.localNetworkHosts.value + value
@@ -418,7 +596,7 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                     },
                 )
                 listingFailed -> Empty(text = cannotList)
-                share == null -> NameList(
+                share == null && safRoot == null -> NameList(
                     names = names,
                     onOpen = { name ->
                         share = name
@@ -434,12 +612,26 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                 else -> EntryList(
                     entries = entries,
                     listState = entryListState,
-                    onOpenDirectory = { name -> subPath = subPath.appendSegment(name) },
+                    // Both sides are a path under the directory on screen, which is
+                    // why the same three callbacks serve a share and a location.
+                    onOpenDirectory = { name ->
+                        val dir = currentDir
+                        if (dir != null) {
+                            if (safRoot != null) {
+                                // Appended as text, not as a Path: the state has to
+                                // stay the string the permission was granted for.
+                                val current = safDir ?: return@EntryList
+                                safDir = "$current/$name"
+                            } else {
+                                subPath = subPath.appendSegment(name)
+                            }
+                        }
+                    },
                     onOpenFile = { name ->
-                        val current = location
-                        if (current != null) {
+                        val dir = currentDir
+                        if (dir != null) {
                             if (isArchive(name)) {
-                                navToReader(current.copy(subPath = current.subPath.appendSegment(name)).uriString)
+                                navToReader((dir / name).toString())
                             } else if (isImage(name)) {
                                 // The images of this directory, in the order they
                                 // are listed, so the tapped one is the page that
@@ -448,19 +640,43 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
                                 val images = entries.orEmpty()
                                     .filter { !it.isDirectory && isImage(it.name) }
                                 navToReader(
-                                    current.uriString,
-                                    images.map {
-                                        current.copy(subPath = current.subPath.appendSegment(it.name)).uriString
-                                    },
+                                    dir.toString(),
+                                    images.map { (dir / it.name).toString() },
                                     images.indexOfFirst { it.name == name }.coerceAtLeast(0),
                                 )
                             }
                         }
                     },
-                    onAddToDownloadLocations = { name ->
-                        val current = location
-                        if (current != null) {
-                            savingLocation = current.copy(subPath = current.subPath.appendSegment(name))
+                    // A share's directory can be kept as a download location; a
+                    // folder on the device is somewhere to browse and not a place
+                    // the app writes to, so there is nothing to add -- the menu
+                    // offers it only where it means something.
+                    onAddToDownloadLocations = if (safRoot != null) {
+                        null
+                    } else {
+                        { name: String ->
+                            val current = location
+                            if (current != null) {
+                                savingLocation = current.copy(subPath = current.subPath.appendSegment(name))
+                            }
+                        }
+                    },
+                    onConvert = { entry ->
+                        val dir = currentDir
+                        if (dir != null) converting = ArchiveTask.Convert(dir / entry.name, entry.size)
+                    },
+                    onPack = { entry ->
+                        val dir = currentDir
+                        if (dir != null) packing = ArchiveTask.Pack(dir / entry.name, entry.name)
+                    },
+                    onExtract = { entry ->
+                        val dir = currentDir
+                        if (dir != null) {
+                            extracting = ArchiveTask.Extract(
+                                source = dir / entry.name,
+                                sourceSize = entry.size,
+                                directoryName = entry.name.substringBeforeLast('.', entry.name),
+                            )
                         }
                     },
                 )
@@ -530,6 +746,53 @@ fun AnimatedVisibilityScope.LocalNetworkScreen(navigator: DestinationsNavigator)
             },
         )
     }
+
+    // The archive's own size is what the ratio is against, and the listing
+    // already answered it -- asking the share again would be a round trip for a
+    // number this screen is holding.
+    // A task wrote a file into the directory on screen, and the listing was read
+    // before that file existed. Re-reading it in place -- rather than through the
+    // effect that clears the list first -- keeps the scroll where it was and
+    // avoids a flash of "empty" between the two reads.
+    fun refreshListing() {
+        val dir = currentDir ?: return
+        scope.launch {
+            val outcome = if (safRoot != null) {
+                runCatching { dir.listLocalEntries().map { BrowserEntry(it.name, it.isDirectory, it.size) } }
+            } else {
+                val target = location ?: return@launch
+                runCatching { SmbRepository.list(target).map { BrowserEntry(it.name, it.isDirectory, it.size) } }
+            }
+            outcome.getOrNull()?.let { entries = it }
+        }
+    }
+
+    converting?.let { task ->
+        ArchiveTaskDialog(
+            task = task,
+            onDismiss = { converting = null },
+            onFinished = ::refreshListing,
+            showMessage = { launchSnackbar(it) },
+        )
+    }
+
+    extracting?.let { task ->
+        ArchiveTaskDialog(
+            task = task,
+            onDismiss = { extracting = null },
+            onFinished = ::refreshListing,
+            showMessage = { launchSnackbar(it) },
+        )
+    }
+
+    packing?.let { task ->
+        ArchiveTaskDialog(
+            task = task,
+            onDismiss = { packing = null },
+            onFinished = ::refreshListing,
+            showMessage = { launchSnackbar(it) },
+        )
+    }
 }
 
 @Composable
@@ -556,47 +819,31 @@ private fun Breadcrumb(
             .padding(horizontal = 16.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // The way back out of the browser. The host segment below goes to that
-        // host's shares, so without this there is nothing above a host and the
-        // list of hosts can only be reached with the back gesture.
-        Text(
-            text = root,
-            color = MaterialTheme.colorScheme.primary,
-            maxLines = 1,
-            softWrap = false,
-            modifier = Modifier.clickable(onClick = onRoot),
-        )
-        Text(text = " / ", maxLines = 1, softWrap = false)
-        Text(
-            text = host,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary,
-            maxLines = 1,
-            softWrap = false,
-            modifier = Modifier.clickable(onClick = onHost),
-        )
-        if (share != null) {
-            Text(text = " / ", maxLines = 1, softWrap = false)
-            Text(
-                text = share,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
-                maxLines = 1,
-                softWrap = false,
-                modifier = Modifier.clickable(onClick = onShare),
-            )
-        }
+        // One item per level, the last of them being where the screen is: that
+        // one is bold and in the accent colour, the ones above it are quiet --
+        // everything here used to be the same weight, so the path read as a list
+        // of equals and the level on screen had to be worked out from the listing.
         var accumulated = ""
-        for (segment in subPath.split('/').filter { it.isNotEmpty() }) {
-            accumulated = accumulated.appendSegment(segment)
-            val target = accumulated
-            Text(text = " / ", maxLines = 1, softWrap = false)
+        val crumbs = buildList {
+            add(root to onRoot)
+            add(host to onHost)
+            if (share != null) add(share to onShare)
+            for (segment in subPath.split('/').filter { it.isNotEmpty() }) {
+                accumulated = accumulated.appendSegment(segment)
+                val target = accumulated
+                add(segment to { onSegment(target) })
+            }
+        }
+        crumbs.forEachIndexed { index, (label, onClick) ->
+            if (index > 0) Text(text = " / ", maxLines = 1, softWrap = false)
+            val here = index == crumbs.lastIndex
             Text(
-                text = segment,
-                color = MaterialTheme.colorScheme.primary,
+                text = label,
+                fontWeight = if (here) FontWeight.Bold else null,
+                color = if (here) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 softWrap = false,
-                modifier = Modifier.clickable { onSegment(target) },
+                modifier = Modifier.clickable(onClick = onClick),
             )
         }
     }
@@ -642,15 +889,39 @@ private fun wifiInterfaceAddress(context: Context): String {
 @Composable
 private fun HostList(
     rows: List<HostRow>,
+    locations: List<String>,
     onOpen: (String, Int) -> Unit,
+    onOpenLocation: (String) -> Unit,
+    onRemoveLocation: (String) -> Unit,
     onRemember: (String) -> Unit,
     onRemove: (String) -> Unit,
 ) {
-    if (rows.isEmpty()) {
+    if (rows.isEmpty() && locations.isEmpty()) {
         Empty(text = stringResource(id = R.string.local_network_no_hosts))
         return
     }
     LazyColumn(modifier = Modifier.fillMaxSize()) {
+        // A folder on this device is listed before a server on the network: it is
+        // there whether the network is. It is named the way the download list
+        // names one, so that a place reads the same wherever it is shown.
+        items(locations, key = { it }) { path ->
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .clickable { onOpenLocation(path) }
+                    .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = downloadSourceLabel(path.toPath()),
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { onRemoveLocation(path) }) {
+                    Text(text = stringResource(id = R.string.settings_download_remove_location))
+                }
+            }
+            HorizontalDivider()
+        }
         items(rows, key = { it.value }) { row ->
             val saved = parseSavedHost(row.value)
             Row(
@@ -733,11 +1004,16 @@ private fun NameList(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EntryList(
-    entries: List<SmbRepository.Entry>?,
+    entries: List<BrowserEntry>?,
     listState: LazyListState,
     onOpenDirectory: (String) -> Unit,
     onOpenFile: (String) -> Unit,
-    onAddToDownloadLocations: (String) -> Unit,
+    // Null where the listing is not a share: a folder on the device is already a
+    // download location, so there is nothing to add it to.
+    onAddToDownloadLocations: ((String) -> Unit)?,
+    onConvert: (BrowserEntry) -> Unit,
+    onPack: (BrowserEntry) -> Unit,
+    onExtract: (BrowserEntry) -> Unit,
 ) {
     if (entries == null) {
         Empty(text = "")
@@ -757,7 +1033,10 @@ private fun EntryList(
                             onClick = {
                                 if (entry.isDirectory) onOpenDirectory(entry.name) else onOpenFile(entry.name)
                             },
-                            onLongClick = { if (entry.isDirectory) menuFor = entry.name },
+                            // An archive has something to do that opening it does
+                            // not: rewriting it in the other format. Anything else
+                            // in the list has no long press, as before.
+                            onLongClick = { if (entry.isDirectory || isArchive(entry.name)) menuFor = entry.name },
                         )
                         .padding(horizontal = 16.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -772,13 +1051,42 @@ private fun EntryList(
                     }
                 }
                 DropdownMenu(expanded = menuFor == entry.name, onDismissRequest = { menuFor = null }) {
-                    DropdownMenuItem(
-                        text = { Text(text = stringResource(id = R.string.local_network_add_to_download_locations)) },
-                        onClick = {
-                            menuFor = null
-                            onAddToDownloadLocations(entry.name)
-                        },
-                    )
+                    if (entry.isDirectory) {
+                        val addToLocations = onAddToDownloadLocations
+                        if (addToLocations != null) {
+                            DropdownMenuItem(
+                                text = { Text(text = stringResource(id = R.string.local_network_add_to_download_locations)) },
+                                onClick = {
+                                    menuFor = null
+                                    addToLocations(entry.name)
+                                },
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text(text = stringResource(id = R.string.local_network_pack_archive)) },
+                            onClick = {
+                                menuFor = null
+                                onPack(entry)
+                            },
+                        )
+                    } else {
+                        DropdownMenuItem(
+                            text = { Text(text = stringResource(id = R.string.archive_convert_title)) },
+                            onClick = {
+                                menuFor = null
+                                onConvert(entry)
+                            },
+                        )
+                        if (isArchive(entry.name)) {
+                            DropdownMenuItem(
+                                text = { Text(text = stringResource(id = R.string.local_network_extract)) },
+                                onClick = {
+                                    menuFor = null
+                                    onExtract(entry)
+                                },
+                            )
+                        }
+                    }
                 }
             }
             HorizontalDivider()

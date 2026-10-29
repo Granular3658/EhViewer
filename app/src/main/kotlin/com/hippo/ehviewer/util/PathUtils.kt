@@ -6,6 +6,8 @@ import android.os.Environment
 import android.provider.DocumentsContract
 import androidx.core.provider.DocumentsContractCompat
 import arrow.core.Either
+import com.ehviewer.core.files.list
+import com.ehviewer.core.files.metadataOrNull
 import com.ehviewer.core.files.openFileDescriptor
 import com.ehviewer.core.files.read
 import com.ehviewer.core.files.toUri
@@ -80,6 +82,61 @@ val Path.displayName: String
         }
         return name
     }
+
+/**
+ * The folder a location URI names, or null when it names no document.
+ *
+ * Two URIs can name the same folder: the picker hands back a document URI, and a
+ * location added elsewhere may be a tree URI for the same place. Comparing the
+ * strings then says "different" about one folder, which is how the same location
+ * ends up in the list twice and how a permission gets released while the other
+ * entry still needs it. The document id is the folder.
+ */
+fun documentIdOf(location: String): String? = runCatching {
+    val uri = Uri.parse(location)
+    when {
+        DocumentsContract.isTreeUri(uri) -> DocumentsContract.getTreeDocumentId(uri)
+        DocumentsContract.isDocumentUri(appCtx, uri) -> DocumentsContract.getDocumentId(uri)
+        else -> null
+    }
+}.getOrNull()
+
+/** One child of a directory on the device: its name, what it is, how long. */
+data class LocalEntry(val name: String, val isDirectory: Boolean, val size: Long)
+
+/**
+ * The children of [this], with their lengths, in one query.
+ *
+ * `FileSystem.list` answers names only, so a length then costs a query per
+ * child, and a directory of two thousand pages costs two thousand of them. The
+ * provider already holds all three columns side by side, so they come back
+ * together here.
+ *
+ * A plain directory is not a document, and is read off the file system instead.
+ */
+fun Path.listLocalEntries(): List<LocalEntry> {
+    val uri = toUri()
+    if (uri.scheme == ContentResolver.SCHEME_FILE) {
+        return list().mapNotNull { child ->
+            child.metadataOrNull()?.let { LocalEntry(child.name, it.isDirectory, it.size ?: 0L) }
+        }
+    }
+    val children = DocumentsContract.buildChildDocumentsUriUsingTree(uri, DocumentsContract.getDocumentId(uri))
+    val projection = arrayOf(
+        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+        DocumentsContract.Document.COLUMN_MIME_TYPE,
+        DocumentsContract.Document.COLUMN_SIZE,
+    )
+    return appCtx.contentResolver.query(children, projection, null, null, null)?.use { c ->
+        buildList(c.count) {
+            while (c.moveToNext()) {
+                val name = c.getString(0) ?: continue
+                val directory = c.getString(1) == DocumentsContract.Document.MIME_TYPE_DIR
+                add(LocalEntry(name, directory, if (directory) 0L else c.getLong(2)))
+            }
+        }
+    }.orEmpty()
+}
 
 fun Path.sha1() = openFileDescriptor("r").use { nativeSha1(it.fd) }
 fun Path.utf8() = read { readString() }

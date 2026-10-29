@@ -200,6 +200,25 @@ fun AnimatedVisibilityScope.AdvancedScreen(navigator: DestinationsNavigator) = S
                 summary = stringResource(id = R.string.settings_advanced_dwarfs_cache_size_summary),
                 pref = Settings.dwarfsCacheSize,
             )
+            // What everything this app writes in DwarFS is compressed at. The range
+            // is zstd's own, and the number is reported in the row with the one
+            // sentence that says what raising it buys and costs.
+            val compressionLevel = Settings.dwarfsCompressionLevel.asMutableState()
+            val compressionLevels = remember { (1..22).toList() }
+            DropdownListPreference(
+                value = compressionLevel.value,
+                onValueChange = { compressionLevel.value = it },
+                items = compressionLevels.associateWith(Int::toString),
+                title = { Text(stringResource(id = R.string.settings_advanced_dwarfs_compression_level)) },
+                summary = {
+                    Text(
+                        stringResource(
+                            id = R.string.settings_advanced_dwarfs_compression_level_summary,
+                            compressionLevel.value,
+                        ),
+                    )
+                },
+            )
             var currentLanguage by remember { mutableStateOf(getAppLanguage()) }
             val languages = remember { getLanguages() }
             DropdownListPreference(

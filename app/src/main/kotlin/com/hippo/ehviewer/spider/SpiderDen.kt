@@ -426,7 +426,7 @@ class SpiderDen(val info: GalleryInfo) {
      * how anyone uses a menu.
      */
     private fun openWriter(fd: Int, format: Int) = if (format == Settings.ARCHIVE_DWARFS) {
-        ArchiveWriter(dwarfs = true, handle = dwarfsWriterOpen(fd))
+        ArchiveWriter(dwarfs = true, handle = dwarfsWriterOpen(fd, Settings.dwarfsCompressionLevel.value))
     } else {
         check(archiveWriterOpen(fd) == 0) { "Failed to open archive for writing" }
         ArchiveWriter(dwarfs = false, handle = 0)
