@@ -41,6 +41,7 @@ import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhEngine
 import com.hippo.ehviewer.client.EhUtils.getSuitableTitle
 import com.hippo.ehviewer.client.ehRequest
+import com.hippo.ehviewer.client.exception.DownloadLocationNotWritable
 import com.hippo.ehviewer.client.getImageKey
 import com.hippo.ehviewer.coil.read
 import com.hippo.ehviewer.coil.suspendEdit
@@ -151,7 +152,7 @@ class SpiderDen(val info: GalleryInfo) {
         mode = value
         if (mode == SpiderQueen.MODE_DOWNLOAD) {
             if (downloadDir == null) {
-                downloadDir = getGalleryWritableDownloadDir(info).apply { mkdirs() }
+                downloadDir = getGalleryWritableDownloadDir(info).ensureWritable()
             }
             // An SMB gallery has no local temp directory: its images go straight to
             // the share and the archive is built from them there.
@@ -694,7 +695,7 @@ class SpiderDen(val info: GalleryInfo) {
     }
 
     suspend fun initDownloadDir() {
-        downloadDir = getGalleryWritableDownloadDir(info).apply { mkdirs() }
+        downloadDir = getGalleryWritableDownloadDir(info).ensureWritable()
     }
 
     /**
@@ -781,6 +782,26 @@ suspend fun GalleryInfo.downloadDirname(): String {
  */
 suspend fun openSpiderDen(info: GalleryInfo, dirname: String, location: String?): SpiderDen = SpiderDen(info, dirname).apply {
     downloadDir = resolveDownloadDirSuspending(location, dirname)
+}
+
+/**
+ * Creates the directory, and refuses to go on without it.
+ *
+ * Anything that goes wrong in here means the same thing to the caller, and the
+ * provider is free to fail either way: a share mounted read-only may throw from
+ * the mkdir call, or answer nothing and leave the stat to report it. Both used to
+ * end the same way -- a `runSuspendCatching` that reports `FatalException` and
+ * drops everything else -- so a download with nowhere to write carried on and
+ * every page failed on its own, which looks like a download that runs and never
+ * progresses.
+ */
+private fun Path.ensureWritable(): Path {
+    val writable = runCatching {
+        mkdirs()
+        isDirectory
+    }.getOrDefault(false)
+    if (!writable) throw DownloadLocationNotWritable(toString())
+    return this
 }
 
 /**

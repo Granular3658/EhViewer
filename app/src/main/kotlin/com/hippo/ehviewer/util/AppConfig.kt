@@ -82,6 +82,12 @@ object AppConfig {
      * on a worker thread at startup and leaves the answer here; the getter still
      * computes it when the cache is cold, so a caller that arrives first gets the
      * same answer it always did rather than waiting for someone else's work.
+     *
+     * A cached directory that has become unwritable -- a card pulled out, a share
+     * remounted read-only -- is deliberately not re-resolved here. Re-resolving
+     * would quietly move the download somewhere else, and a download that goes
+     * where it was not asked to go is worse than one that says it cannot start;
+     * the download path checks and reports instead.
      */
     val defaultDownloadDir: File?
         get() = defaultDownloadDirCache ?: getDirInExternalAppDir(DOWNLOAD)

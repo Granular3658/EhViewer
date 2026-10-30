@@ -534,6 +534,7 @@
     <string name="clear_search_history_confirm">要清除搜索记录吗？</string>
     <string name="search_history_cleared">已清除搜索记录</string>
     <string name="download_service">下载服务</string>
+    <string name="download_location_not_writable">下载位置不可写</string>
     <string name="favorite_name">收藏画廊</string>
     <string name="black_dark_theme">纯黑深色主题</string>
     <string name="harmonize_category_color">类别颜色适配动态配色</string>

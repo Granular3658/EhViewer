@@ -214,6 +214,13 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
             }
             downloadMode = intoDownloadMode
         }
+    }.onFailure {
+        // Swallowing this left a download that could not write anywhere looking
+        // like one that runs and never progresses. Anything that is worth a
+        // notification is raised; the rest stays in the log, but nothing is
+        // dropped without a trace.
+        logcat(it)
+        (it as? FatalException)?.let(::notifyFatal)
     }
 
     private fun setMode(@Mode mode: Int) {

@@ -36,6 +36,7 @@ import com.hippo.ehviewer.client.EhEngine
 import com.hippo.ehviewer.client.EhUrl
 import com.hippo.ehviewer.client.EhUtils
 import com.hippo.ehviewer.client.applyEhConfig
+import com.hippo.ehviewer.client.exception.DownloadLocationNotWritable
 import com.hippo.ehviewer.client.parser.Archive
 import com.hippo.ehviewer.spider.SpiderDen
 import com.hippo.ehviewer.spider.downloadDirname
@@ -224,6 +225,10 @@ class ArchiveDownloadService : Service(), CoroutineScope {
             logcat(e)
             DownloadManager.abandonArchiveDownload(request.gid)
             DownloadManager.releaseArchiveDownload(request.gid)
+            // A request that never reached the queue still deserves a word when
+            // the reason is one the user can fix: a location that cannot be
+            // written is not going to start working on the next tap either.
+            if (e is DownloadLocationNotWritable) finish(request.gid, e)
         }
     }
 
@@ -461,6 +466,9 @@ class ArchiveDownloadService : Service(), CoroutineScope {
             // A revoked key is the one refusal the user can act on, and the
             // server's own words for it are English prose in a notification.
             error is ArchiveAtHomeException && error.unauthorized -> getString(R.string.archive_at_home_invalid_key)
+            // The message is the path, which on its own does not say what is
+            // wrong with it.
+            error is DownloadLocationNotWritable -> "${getString(R.string.download_location_not_writable)}: ${error.message}"
             else -> error.message ?: getString(R.string.download_archive_failure)
         }
         val notification = NotificationCompat.Builder(this, channelId)

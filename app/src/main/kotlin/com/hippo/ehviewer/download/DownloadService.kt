@@ -39,6 +39,7 @@ import com.ehviewer.core.util.logcat
 import com.ehviewer.core.util.unsafeLazy
 import com.hippo.ehviewer.archive.writeFormatLabel
 import com.hippo.ehviewer.client.EhUtils
+import com.hippo.ehviewer.client.exception.DownloadLocationNotWritable
 import com.hippo.ehviewer.client.exception.FatalException
 import com.hippo.ehviewer.client.exception.InsufficientGpException
 import com.hippo.ehviewer.client.exception.IpBannedException
@@ -188,6 +189,7 @@ class DownloadService :
             is IpBannedException -> R.string.error_ip_banned to error.message
             is InsufficientGpException -> R.string.insufficient_funds to error.message
             is QuotaExceededException -> R.string.stat_509_alert_title to getString(R.string.stat_509_alert_text)
+            is DownloadLocationNotWritable -> R.string.download_location_not_writable to error.message
         }
         fatalNotification.run {
             builder.setWhen(System.currentTimeMillis())
