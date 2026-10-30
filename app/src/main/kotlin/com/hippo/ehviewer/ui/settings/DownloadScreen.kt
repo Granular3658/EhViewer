@@ -84,6 +84,7 @@ import com.hippo.ehviewer.spider.readComicInfoFromBytes
 import com.hippo.ehviewer.spider.readCompatFromBytes
 import com.hippo.ehviewer.spider.readCompatFromPath
 import com.hippo.ehviewer.spider.speedLevelToSpeed
+import com.hippo.ehviewer.spider.toLocalTags
 import com.hippo.ehviewer.ui.Screen
 import com.hippo.ehviewer.ui.keepNoMediaFileStatus
 import com.hippo.ehviewer.ui.main.NavigationIcon
@@ -655,6 +656,13 @@ private data class LocalGallery(
     val pages: Int,
     val title: String? = null,
     val thumb: String? = null,
+    // What a `ComicInfo.xml` holds beyond the identity, and the marker files never
+    // do. Empty for a directory that only has a marker: there is nothing to read
+    // the rest out of.
+    val titleJpn: String? = null,
+    val tags: List<String>? = null,
+    val language: String? = null,
+    val rating: Float = 0f,
 )
 
 /** What the presence probe asks about: the markers, and every thumbnail name. */
@@ -673,9 +681,24 @@ private fun LocalGallery.withThumb(known: Map<String, Boolean>) = copy(thumb = T
 /** The name a `ComicInfo.xml` gives the gallery; the marker never has one. */
 private fun ComicInfo.localTitle() = series?.ifBlank { null }
 
-/** A `ComicInfo.xml` holds the link, the page count and, usually, the name. */
+/**
+ * What a `ComicInfo.xml` says about its gallery, as far as the file goes.
+ *
+ * Everything here is written by `getComicInfo`, so it reads back what was written
+ * rather than guessing: the categories and the uploader the site knows are not in
+ * the file, and stay empty until the API answers.
+ */
 private fun ComicInfo.toLocalGallery() = GalleryDetailUrlParser.parse(web)?.let {
-    LocalGallery(it.gid, it.token, pageCount, localTitle())
+    LocalGallery(
+        gid = it.gid,
+        token = it.token,
+        pages = pageCount,
+        title = localTitle(),
+        titleJpn = alternateSeries?.ifBlank { null },
+        tags = toLocalTags(),
+        language = languageISO?.ifBlank { null }?.uppercase(),
+        rating = communityRating?.toFloatOrNull() ?: 0f,
+    )
 }
 
 private class RestoreItem(
@@ -687,10 +710,14 @@ private class RestoreItem(
     val thumb: String? = local.thumb,
     val galleryInfo: BaseGalleryInfo = BaseGalleryInfo(local.gid, local.token).apply {
         // Filled in before the API is asked, so that a restore that reached no
-        // network still has a name to show. The API overwrites both when it
-        // answers; the name falls back to the directory's own.
+        // network still has more than an id to show. The API overwrites all of it
+        // when it answers; the name falls back to the directory's own.
         title = local.title ?: dirname
+        titleJpn = local.titleJpn
         pages = local.pages
+        simpleTags = local.tags
+        simpleLanguage = local.language
+        rating = local.rating
     },
 ) : GalleryInfo by galleryInfo
 private val RESTORE_NOT_FOUND = appCtx.getString(R.string.settings_download_restore_not_found)

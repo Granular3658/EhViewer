@@ -107,6 +107,45 @@ fun ComicInfo.toSimpleTags() = listOfNotNull(
     teams,
 ).flatten().ifEmpty { null }
 
+/**
+ * The tags this file holds, each with the namespace it came from.
+ *
+ * [toSimpleTags] flattens the five lists, which is what a tag search wants: the
+ * namespaces are noise when what is being matched is a name. A restore wants the
+ * opposite -- an artist and a group are different things, and only the field a
+ * name came out of says which it was.
+ *
+ * Two of the writer's fields already merge on the way out and stay merged on the
+ * way back: `Penciller` holds artists and cosplayers, and `Genre` holds locations
+ * and other tags. The namespaces that cannot be expressed as a field -- female,
+ * male, mixed -- are prefixed by the writer itself and keep what they came with.
+ */
+fun ComicInfo.toLocalTags(): List<String>? = listOfNotNull(
+    writer?.map { "${TagNamespace.Group.value}:$it" },
+    penciller?.map { "${TagNamespace.Artist.value}:$it" },
+    characters?.map { "${TagNamespace.Character.value}:$it" },
+    teams?.map { "${TagNamespace.Parody.value}:$it" },
+    genre?.map(::genreTag),
+).flatten().ifEmpty { null }
+
+/** The namespaces the writer has no field for, so it prefixes them itself. */
+private val PREFIXED_BY_WRITER = listOf(TagNamespace.Female, TagNamespace.Male, TagNamespace.Mixed)
+
+/**
+ * One `Genre` entry, said the way the rest of the app says a tag.
+ *
+ * The writer puts the namespaces it has no field for in front of the name with
+ * their short form -- `f:yuri`, `m:goblin` -- and leaves the rest bare. A tag is
+ * stored with its full namespace, so the short form is put back to what it stands
+ * for, and a bare one becomes an other tag: a location is written bare as well
+ * and cannot be told apart from one.
+ */
+private fun genreTag(tag: String): String {
+    val prefix = tag.substringBefore(':', "")
+    val namespace = PREFIXED_BY_WRITER.firstOrNull { it.prefix == prefix } ?: TagNamespace.from(prefix)
+    return if (namespace == null) "${TagNamespace.Other.value}:$tag" else "${namespace.value}:${tag.substringAfter(':')}"
+}
+
 fun writeComicInfo(info: ComicInfo, file: Path) = file.write { xml.encodeToSink(this, info) }
 
 fun readComicInfo(file: Path): ComicInfo? = runCatching {
