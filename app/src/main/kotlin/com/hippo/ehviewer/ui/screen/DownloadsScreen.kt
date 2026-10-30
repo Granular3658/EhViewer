@@ -169,6 +169,9 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
     // The galleries a conversion was asked for, while the format is being chosen.
     var converting by remember { mutableStateOf<Collection<DownloadInfo>?>(null) }
     val selectMode by rememberUpdatedState(checkedInfoMap.isNotEmpty())
+    // What the last conversion did to a gallery is worth seeing once: opening the
+    // list again retires the numbers a row has already drawn.
+    LaunchedEffect(Unit) { DownloadManager.clearSeenConvertResults() }
     DrawerHandle(!selectMode && !searchBarExpanded)
 
     val density = LocalDensity.current

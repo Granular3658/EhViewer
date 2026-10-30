@@ -171,6 +171,8 @@ class GalleryConvertService : Service(), CoroutineScope {
     }
 
     private suspend fun run(request: Request) {
+        // What went in and what came out, for the row to show once it is over.
+        var result: Pair<Long, Long>? = null
         try {
             val download = DownloadManager.getDownloadInfo(request.gid)
             val info = download?.galleryInfo
@@ -190,11 +192,12 @@ class GalleryConvertService : Service(), CoroutineScope {
                 lastSampleAt = 0
                 speed = 0
                 notify(getString(R.string.gallery_convert_preparing), 0, 0)
-                packGalleryImages(directory, request.gid, request.format) { done, total ->
+                val packed = packGalleryImages(directory, request.gid, request.format) { done, total ->
                     val speed = sampleSpeed(done)
                     notify(progressText(done, total, speed), done, total)
                     DownloadManager.updateConvertProgress(request.gid, request.format, done, total, speed)
                 }
+                result = packed.packedBytes to packed.size
                 converted++
                 Log.d(tag, "convert ${request.gid}: packed the pages in ${directory.name}")
                 return
@@ -215,11 +218,12 @@ class GalleryConvertService : Service(), CoroutineScope {
             lastSampleAt = 0
             speed = 0
             notify(getString(R.string.gallery_convert_preparing), 0, 0)
-            convertGalleryArchive(archive, size, request.format) { done, total ->
+            val output = convertGalleryArchive(archive, size, request.format) { done, total ->
                 val speed = sampleSpeed(done)
                 notify(progressText(done, total, speed), done, total)
                 DownloadManager.updateConvertProgress(request.gid, request.format, done, total, speed)
             }
+            result = size to output.size
             // The new archive is complete and in place, so the old one is the
             // duplicate now.
             runCatching { archive.delete() }.onFailure { logcat(it) }
@@ -232,9 +236,15 @@ class GalleryConvertService : Service(), CoroutineScope {
             failed++
         } finally {
             if (current?.gid == request.gid) current = null
-            // Whatever happened, the row goes back to being a downloaded gallery:
-            // a failure is said by the notification, not left in the list.
-            DownloadManager.clearConvertProgress(request.gid)
+            // Whatever happened, the row goes back to being a downloaded gallery: a
+            // failure is said by the notification, not left in the list. A finished
+            // one leaves its two sizes behind for a moment first.
+            val sizes = result
+            if (sizes == null) {
+                DownloadManager.clearConvertProgress(request.gid)
+            } else {
+                DownloadManager.finishConvertProgress(request.gid, request.format, sizes.first, sizes.second)
+            }
         }
     }
 
@@ -345,7 +355,9 @@ class GalleryConvertService : Service(), CoroutineScope {
     }
 
     override fun onDestroy() {
-        DownloadManager.clearAllConvertProgress()
+        // The service going away ends the work, not the results: a finished
+        // conversion's numbers stay on its row until the list is opened again.
+        DownloadManager.clearRunningConvertProgress()
         cancel()
         super.onDestroy()
     }

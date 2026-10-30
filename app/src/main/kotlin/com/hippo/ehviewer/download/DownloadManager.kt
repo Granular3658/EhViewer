@@ -470,7 +470,7 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
      * the download list, and a row cannot ask a service: this is the one place
      * both of them can see.
      */
-    enum class ConvertState { QUEUED, RUNNING }
+    enum class ConvertState { QUEUED, RUNNING, DONE }
 
     /** How far a conversion has got, in the units a transfer is reported in. */
     data class ConvertProgress(val state: ConvertState, val format: Int, val done: Long, val total: Long, val speed: Long)
@@ -490,14 +490,78 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
     }
 
     /** Whether a conversion holds this gallery, queued or being written. */
-    fun isConverting(gid: Long) = convertProgress.value.containsKey(gid)
+    fun isConverting(gid: Long) = convertProgress.value[gid]?.let { it.state != ConvertState.DONE } == true
+
+    /**
+     * The numbers a finished conversion leaves on its row.
+     *
+     * A conversion rewrites a gallery that was already downloaded, so there is no
+     * state for the row to fall back to that says anything happened: it snaps back
+     * to the uploader's size the frame the work ends. What went in and what came
+     * out is the one thing worth seeing, so it stays until the list is opened
+     * again -- and a row that was not on screen when the work ended still has it
+     * for that visit.
+     *
+     * A size the platform would not give is not a result: a share that will not say
+     * how long a file is answers -1, and there is no ratio to draw from that, so
+     * nothing is left behind.
+     */
+    fun finishConvertProgress(gid: Long, format: Int, before: Long, after: Long) {
+        if (before <= 0 || after <= 0) {
+            clearConvertProgress(gid)
+            return
+        }
+        seenConvertResults -= gid
+        convertProgress.update { it + (gid to ConvertProgress(ConvertState.DONE, format, after, before, 0)) }
+    }
+
+    /**
+     * The results the list has already drawn, so opening it again can retire them.
+     *
+     * Only touched from composition, which is one thread.
+     */
+    private val seenConvertResults = mutableSetOf<Long>()
+
+    /** The row drew this result; the next visit to the list retires it. */
+    fun markConvertResultSeen(gid: Long) {
+        if (convertProgress.value[gid]?.state == ConvertState.DONE) seenConvertResults += gid
+    }
+
+    /**
+     * Retires the results a row has drawn, for the list to call when it is opened.
+     *
+     * A finished conversion's numbers are worth seeing once: they are not a state
+     * the gallery is in, they are what the last conversion did to it. One the list
+     * was not open to draw is kept, so opening the list afterwards still shows it.
+     */
+    fun clearSeenConvertResults() {
+        val retired = seenConvertResults.toSet()
+        seenConvertResults.clear()
+        if (retired.isEmpty()) return
+        convertProgress.update { current ->
+            current.filter { (gid, progress) -> progress.state != ConvertState.DONE || gid !in retired }
+        }
+    }
 
     fun clearConvertProgress(gid: Long) {
+        seenConvertResults -= gid
         convertProgress.update { it - gid }
     }
 
     fun clearAllConvertProgress() {
+        seenConvertResults.clear()
         convertProgress.value = emptyMap()
+    }
+
+    /**
+     * Drops the work in flight, keeping what finished.
+     *
+     * The service calls this as it goes away: the queue is over, but the numbers a
+     * finished conversion leaves behind are not part of the queue -- clearing them
+     * here is what made a row revert the instant its work ended.
+     */
+    fun clearRunningConvertProgress() {
+        convertProgress.update { current -> current.filterValues { it.state == ConvertState.DONE } }
     }
 
     // No initial value read out of the flow: a flow emits what it holds as soon as
