@@ -71,6 +71,7 @@ import com.hippo.ehviewer.smb.SmbCredentialStore
 import com.hippo.ehviewer.smb.SmbLocation
 import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.spider.COMIC_INFO_FILE
+import com.hippo.ehviewer.spider.ComicInfo
 import com.hippo.ehviewer.spider.MIN_SPEED_LEVEL
 import com.hippo.ehviewer.spider.SpiderDen
 import com.hippo.ehviewer.spider.SpiderQueen.Companion.SPIDER_INFO_FILENAME
@@ -474,36 +475,44 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                      * directories at once deadlocks it; these suspend calls do
                      * their own work on the IO dispatcher instead.
                      */
-                    suspend fun readSmbIds(location: SmbLocation): GalleryDetailUrlParser.Result? {
+                    suspend fun readSmbIds(location: SmbLocation): LocalGallery? {
                         // Probe the two known marker names instead of listing the
                         // directory. A gallery holds thousands of images, and
                         // enumerating them to look for a 280-byte marker is what
-                        // turns one restore into megabytes of traffic.
-                        if (SmbRepository.statOrNull(location.child(SPIDER_INFO_FILENAME)) != null) {
-                            SmbRepository.readAll(location.child(SPIDER_INFO_FILENAME), MAX_RESTORE_MARKER_BYTES)?.let { bytes ->
-                                readCompatFromBytes(bytes)?.run { GalleryDetailUrlParser.Result(gid, token) }
-                            }?.let { return it }
+                        // turns one restore into megabytes of traffic. Both are
+                        // probed even when the first one answers, because the
+                        // marker never carries a name and the file next to it
+                        // usually does.
+                        val marker = if (SmbRepository.statOrNull(location.child(SPIDER_INFO_FILENAME)) != null) {
+                            SmbRepository.readAll(location.child(SPIDER_INFO_FILENAME), MAX_RESTORE_MARKER_BYTES)?.let(::readCompatFromBytes)
+                        } else {
+                            null
                         }
-                        if (SmbRepository.statOrNull(location.child(COMIC_INFO_FILE)) != null) {
-                            SmbRepository.readAll(location.child(COMIC_INFO_FILE), MAX_RESTORE_MARKER_BYTES)?.let { bytes ->
-                                readComicInfoFromBytes(bytes)?.run { GalleryDetailUrlParser.parse(web) }
-                            }?.let { return it }
+                        val comic = if (SmbRepository.statOrNull(location.child(COMIC_INFO_FILE)) != null) {
+                            SmbRepository.readAll(location.child(COMIC_INFO_FILE), MAX_RESTORE_MARKER_BYTES)?.let(::readComicInfoFromBytes)
+                        } else {
+                            null
                         }
-                        return null
+                        return when {
+                            marker != null -> LocalGallery(marker.gid, marker.token, marker.pages, comic?.localTitle())
+                            comic != null -> comic.toLocalGallery()
+                            else -> null
+                        }
                     }
 
-                    suspend fun readPathIds(file: Path): GalleryDetailUrlParser.Result? = file.find(SPIDER_INFO_FILENAME)?.let {
-                        readCompatFromPath(it)?.run {
-                            GalleryDetailUrlParser.Result(gid, token)
-                        }
-                    } ?: file.find(COMIC_INFO_FILE)?.let {
-                        readComicInfo(it)?.run {
-                            GalleryDetailUrlParser.parse(web)
+                    suspend fun readPathIds(file: Path): LocalGallery? {
+                        val marker = file.find(SPIDER_INFO_FILENAME)?.let(::readCompatFromPath)
+                        val comic = file.find(COMIC_INFO_FILE)?.let(::readComicInfo)
+                        return when {
+                            marker != null -> LocalGallery(marker.gid, marker.token, marker.pages, comic?.localTitle())
+                            comic != null -> comic.toLocalGallery()
+                            else -> null
                         }
                     }
 
                     return runSuspendCatching {
-                        val (gid, token) = (if (smb != null) readSmbIds(smb) else readPathIds(file)) ?: return null
+                        val local = (if (smb != null) readSmbIds(smb) else readPathIds(file)) ?: return null
+                        val gid = local.gid
                         val dirname = file.name
                         if (!seenGids.add(gid)) {
                             duplicateCount.incrementAndGet()
@@ -515,7 +524,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                             DownloadManager.recordDownloadDir(gid, dirname, location)
                             return null
                         }
-                        RestoreItem(dirname, gid, token, location)
+                        RestoreItem(dirname, local, location)
                     }.onFailure {
                         logcat(it)
                     }.getOrNull()
@@ -549,7 +558,14 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     // directories measured 5.5 MB and 750 ms -- so concurrency
                     // here buys queueing, not throughput.
                     val result = candidates.parMapNotNull(concurrency = 4) { getRestoreItem(it) }.also {
-                        fillGalleryListByApi(it, EhUrl.referer)
+                        // Titles, thumbnails, categories and tags come from here,
+                        // and so does the page count for a directory that has no
+                        // marker. None of it is needed to open the gallery again,
+                        // so a network that is down costs metadata, not the
+                        // restore: every item keeps what was read off the disk.
+                        runCatching { fillGalleryListByApi(it, EhUrl.referer) }.onFailure {
+                            logcat(it)
+                        }
                     }
                     if (result.isEmpty() && duplicateCount.get() == 0) {
                         launchSnackbar(RESTORE_NOT_FOUND)
@@ -562,11 +578,17 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                         // returns. Keep it small: this is a metadata write, not a
                         // throughput path.
                         result.parMap(concurrency = 4) {
-                            if (it.pages != 0) {
-                                DownloadManager.recordDownloadDir(it.gid, it.dirname, it.location)
-                                if (DownloadManager.restoreDownload(it.galleryInfo, it.dirname, it.location)) {
-                                    restoredCount.incrementAndGet()
-                                }
+                            DownloadManager.recordDownloadDir(it.gid, it.dirname, it.location)
+                            if (DownloadManager.restoreDownload(it.galleryInfo, it.dirname, it.location)) {
+                                restoredCount.incrementAndGet()
+                            }
+                            // Only for a gallery the API answered for: the file is
+                            // rebuilt out of the info object, and one carrying a
+                            // name but no tags would wipe the artists the
+                            // directory already recorded. `simpleTags` is set by
+                            // the parser for every gallery it returned and by
+                            // nothing else, so it is the cheap way to tell.
+                            if (it.simpleTags != null) {
                                 SpiderDen(it.galleryInfo, it.dirname, it.location).writeComicInfo(false)
                             }
                         }
@@ -607,13 +629,29 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
     }
 }
 
+/** What a directory says about its gallery without asking anyone. */
+private class LocalGallery(val gid: Long, val token: String, val pages: Int, val title: String? = null)
+
+/** The name a `ComicInfo.xml` gives the gallery; the marker never has one. */
+private fun ComicInfo.localTitle() = series?.ifBlank { null }
+
+/** A `ComicInfo.xml` holds the link, the page count and, usually, the name. */
+private fun ComicInfo.toLocalGallery() = GalleryDetailUrlParser.parse(web)?.let {
+    LocalGallery(it.gid, it.token, pageCount, localTitle())
+}
+
 private class RestoreItem(
     val dirname: String,
-    gid: Long,
-    token: String,
+    local: LocalGallery,
     /** The location the scan found this directory in; see `putDownloadLocation`. */
     val location: String,
-    val galleryInfo: BaseGalleryInfo = BaseGalleryInfo(gid, token),
+    val galleryInfo: BaseGalleryInfo = BaseGalleryInfo(local.gid, local.token).apply {
+        // Filled in before the API is asked, so that a restore that reached no
+        // network still has a name to show. The API overwrites both when it
+        // answers; the name falls back to the directory's own.
+        title = local.title ?: dirname
+        pages = local.pages
+    },
 ) : GalleryInfo by galleryInfo
 private val RESTORE_NOT_FOUND = appCtx.getString(R.string.settings_download_restore_not_found)
 private val RESTORE_COUNT_MSG = { restored: Int, duplicates: Int -> appCtx.getString(R.string.settings_download_restore_successfully, restored, duplicates) }

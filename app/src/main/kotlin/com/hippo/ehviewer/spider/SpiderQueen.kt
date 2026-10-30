@@ -25,6 +25,7 @@ import com.ehviewer.core.i18n.R
 import com.ehviewer.core.model.GalleryInfo
 import com.ehviewer.core.model.GalleryPreview
 import com.ehviewer.core.util.logcat
+import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.Settings
 import com.hippo.ehviewer.client.EhEngine
 import com.hippo.ehviewer.client.EhUrl
@@ -33,6 +34,7 @@ import com.hippo.ehviewer.client.EhUrl.referer
 import com.hippo.ehviewer.client.EhUtils
 import com.hippo.ehviewer.client.exception.FatalException
 import com.hippo.ehviewer.client.exception.QuotaExceededException
+import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.smb.SmbRepository
 import com.hippo.ehviewer.util.displayString
 import kotlin.concurrent.atomics.AtomicInt
@@ -270,6 +272,23 @@ class SpiderQueen private constructor(val galleryInfo: GalleryInfo) : CoroutineS
             galleryInfo.pages
         }
         check(pages > 0)
+        // The database can still say zero -- a restored item whose marker was gone
+        // -- and this is where the real count arrives. Writing it back is database
+        // state, not the gallery: nothing on the share changes, and the next
+        // restore scan has the number without asking anyone. Only for a gallery
+        // that is in the download list, or merely reading one would put a row in
+        // the database.
+        if (DownloadManager.containDownloadInfo(galleryInfo.gid)) {
+            // `let`, not `run`: inside a lambda with a receiver an unqualified
+            // `pages` is the receiver's own property, and `info.pages = pages`
+            // would write the field to itself.
+            DownloadManager.getDownloadInfo(galleryInfo.gid)?.let { info ->
+                if (info.pages != pages) {
+                    info.pages = pages
+                    EhDB.putDownloadInfo(info)
+                }
+            }
+        }
         pageStates = IntArray(pages)
         notifyGetPages(pages)
     }
