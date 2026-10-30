@@ -278,7 +278,7 @@ class ArchiveDownloadService : Service(), CoroutineScope {
             // The check has to sit here, before the request: after it, the GP is
             // already spent and skipping saves nothing.
             val existing = SpiderDen(request.galleryDetail).apply { initDownloadDir() }
-                .downloadDir?.let { dir -> ARCHIVE_SUFFIXES.firstNotNullOfOrNull { dir.find("$gid.$it") } }
+                .downloadDir?.findArchive(gid)
             if (existing != null) {
                 Log.d(tag, "archive $gid: already have ${existing.name}, not asking the archiver")
                 DownloadManager.markArchiveDownloaded(gid, request.galleryDetail.pages)

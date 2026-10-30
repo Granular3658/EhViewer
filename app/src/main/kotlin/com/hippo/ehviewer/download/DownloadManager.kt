@@ -81,6 +81,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import logcat.LogPriority
+import moe.tarsin.coroutines.runSuspendCatching
 import okio.Path
 import okio.Path.Companion.toOkioPath
 import okio.Path.Companion.toPath
@@ -811,47 +812,51 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
                     null
                 }
             }
-        }.parMapNotNull(concurrency = 5) { (info, updateGallery, updateArtist) ->
-            info.downloadDir?.run {
-                val comicInfo = find(COMIC_INFO_FILE)?.let { readComicInfo(it) }
-                if (comicInfo != null) {
-                    val galleryInfo = if (updateGallery) {
-                        info.pages = comicInfo.pageCount
-                        info.simpleTags = comicInfo.toSimpleTags()
-                        info.galleryInfo
-                    } else {
-                        null
-                    }
-
-                    val artistList = if (updateArtist && comicInfo.penciller != null) {
-                        info.artistInfoList = DownloadArtist.from(info.gid, comicInfo.penciller)
-                        info.gid to info.artistInfoList
-                    } else {
-                        null
-                    }
-
-                    if (galleryInfo != null || artistList != null) {
-                        galleryInfo to artistList
-                    } else {
-                        null
-                    }
-                } else if (info.pages == 0) {
-                    val galleryInfo = find(SPIDER_INFO_FILENAME)?.let {
-                        readCompatFromPath(it)?.run {
-                            info.pages = pages
-                            info.galleryInfo
-                        }
-                    }
-
-                    galleryInfo?.let { it to null }
+        }
+        // Which marker each directory holds, asked once per share before the fan
+        // out: this runs at every start, over every download the list knows.
+        val presence = probeNames(list.mapNotNull { it.first.downloadDir }, MARKER_FILENAMES)
+        val updated = list.parMapNotNull(concurrency = 5) { (info, updateGallery, updateArtist) ->
+            val dir = info.downloadDir ?: return@parMapNotNull null
+            val known = presence[dir.toString()]
+            // Known absent: skip the open instead of paying for one that fails.
+            val comicInfo = if (known?.get(COMIC_INFO_FILE) != false) readComicInfo(dir / COMIC_INFO_FILE) else null
+            if (comicInfo != null) {
+                val galleryInfo = if (updateGallery) {
+                    info.pages = comicInfo.pageCount
+                    info.simpleTags = comicInfo.toSimpleTags()
+                    info.galleryInfo
                 } else {
                     null
                 }
+
+                val artistList = if (updateArtist && comicInfo.penciller != null) {
+                    info.artistInfoList = DownloadArtist.from(info.gid, comicInfo.penciller)
+                    info.gid to info.artistInfoList
+                } else {
+                    null
+                }
+
+                if (galleryInfo != null || artistList != null) {
+                    galleryInfo to artistList
+                } else {
+                    null
+                }
+            } else if (info.pages == 0) {
+                val marker = if (known?.get(SPIDER_INFO_FILENAME) != false) readCompatFromPath(dir / SPIDER_INFO_FILENAME) else null
+                val galleryInfo = marker?.run {
+                    info.pages = pages
+                    info.galleryInfo
+                }
+
+                galleryInfo?.let { it to null }
+            } else {
+                null
             }
         }
 
         val galleryInfoList = buildList {
-            list.forEach { (info, artists) ->
+            updated.forEach { (info, artists) ->
                 info?.let {
                     add(it)
                 }
@@ -1363,6 +1368,37 @@ suspend fun resolveArchiveFile(info: GalleryInfo): Path? {
     return dir.findArchive(info.gid)
 }
 
+/** The two files a download directory can identify itself with. */
+internal val MARKER_FILENAMES = listOf(COMIC_INFO_FILE, SPIDER_INFO_FILENAME)
+
+/**
+ * Which of [names] each of [dirs] holds, asked once per share.
+ *
+ * A batch of names is one compound request, so fifty names cost the same two
+ * round trips as one, while a stat per name is a round trip each -- and both
+ * callers run over a whole library. A directory that is not on a share is left
+ * out: a stat on a local path is free.
+ *
+ * A name the share never answered for is absent from that directory's map, which
+ * a caller has to read as "not known" and not as "not there".
+ */
+internal suspend fun probeNames(dirs: List<Path>, names: List<String>): Map<String, Map<String, Boolean>> {
+    val presence = HashMap<String, Map<String, Boolean>>(dirs.size * 2)
+    dirs.filter { it.isSmb }.groupBy { it.parent?.toString() }.forEach { (parent, group) ->
+        val location = parent?.let { SmbLocation.parse(it) } ?: return@forEach
+        val requested = group.flatMap { dir -> names.map { "${dir.name}/$it" } }
+        val answers = runSuspendCatching { SmbRepository.existingNames(location, requested) }
+            .getOrDefault(emptyMap())
+        group.forEach { dir ->
+            val prefix = "${dir.name}/"
+            presence[dir.toString()] = answers.asSequence()
+                .filter { it.key.startsWith(prefix) }
+                .associate { it.key.removePrefix(prefix) to it.value }
+        }
+    }
+    return presence
+}
+
 /**
  * The gallery's archive in this directory, if it has one.
  *
@@ -1370,7 +1406,7 @@ suspend fun resolveArchiveFile(info: GalleryInfo): Path? {
  * is a round trip and the answer is almost always "none of them": a probe that costs
  * five times the latency for one question is the shape this avoids.
  */
-private suspend fun Path.findArchive(gid: Long): Path? {
+internal suspend fun Path.findArchive(gid: Long): Path? {
     if (!isSmb) return ARCHIVE_SUFFIXES.firstNotNullOfOrNull { find("$gid.$it") }
     val names = ARCHIVE_SUFFIXES.map { "$gid.$it" }
     val present = SmbLocation.parse(this)?.let { location ->

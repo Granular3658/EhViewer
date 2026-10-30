@@ -63,11 +63,13 @@ import com.hippo.ehviewer.client.parser.GalleryDetailUrlParser
 import com.hippo.ehviewer.client.parser.ParserUtils
 import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.download.DownloadManager
+import com.hippo.ehviewer.download.MARKER_FILENAMES
 import com.hippo.ehviewer.download.THUMB_FILENAMES
 import com.hippo.ehviewer.download.allDownloadLocations
 import com.hippo.ehviewer.download.downloadDir
 import com.hippo.ehviewer.download.downloadLocation
 import com.hippo.ehviewer.download.invalidateDownloadLocationCache
+import com.hippo.ehviewer.download.probeNames
 import com.hippo.ehviewer.smb.SmbCredentialStore
 import com.hippo.ehviewer.smb.SmbLocation
 import com.hippo.ehviewer.smb.SmbRepository
@@ -555,24 +557,10 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     // Which marker and thumbnail names each candidate holds, asked
                     // once per share: a batch of fifty names is one compound
                     // request, so it costs the same two round trips as one name,
-                    // while a stat per name is a round trip each. A share that
-                    // refuses a batch is asked again at half the size, down to a
-                    // plain stat; whatever it never answers for is left out of the
-                    // map, and the reads below try those names anyway.
-                    val presence = HashMap<String, Map<String, Boolean>>()
-                    candidates.filter { it.isSmb }.groupBy { it.parent?.toString() }.forEach { (parent, dirs) ->
-                        val location = parent?.let { SmbLocation.parse(it) } ?: return@forEach
-                        val names = dirs.flatMap { dir -> PROBE_FILENAMES.map { "${dir.name}/$it" } }
-                        val answers = runSuspendCatching { SmbRepository.existingNames(location, names) }
-                            .onFailure { logcat(it) }
-                            .getOrDefault(emptyMap())
-                        dirs.forEach { dir ->
-                            val prefix = "${dir.name}/"
-                            presence[dir.toString()] = answers.asSequence()
-                                .filter { it.key.startsWith(prefix) }
-                                .associate { it.key.removePrefix(prefix) to it.value }
-                        }
-                    }
+                    // while a stat per name is a round trip each. Whatever a share
+                    // never answers for is left out of the map, and the reads below
+                    // try those names anyway.
+                    val presence = probeNames(candidates, PROBE_FILENAMES)
                     // The scan fans out over every candidate, and each one costs
                     // four SMB operations. Unbounded, a library of a hundred
                     // directories puts more than a hundred of them in flight at
@@ -668,9 +656,6 @@ private data class LocalGallery(
     val title: String? = null,
     val thumb: String? = null,
 )
-
-/** The two files a directory can identify itself with. `ComicInfo.xml` first: it has a name. */
-private val MARKER_FILENAMES = listOf(COMIC_INFO_FILE, SPIDER_INFO_FILENAME)
 
 /** What the presence probe asks about: the markers, and every thumbnail name. */
 private val PROBE_FILENAMES = MARKER_FILENAMES + THUMB_FILENAMES

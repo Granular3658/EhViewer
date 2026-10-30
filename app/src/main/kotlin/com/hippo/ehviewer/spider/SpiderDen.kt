@@ -45,9 +45,9 @@ import com.hippo.ehviewer.client.exception.DownloadLocationNotWritable
 import com.hippo.ehviewer.client.getImageKey
 import com.hippo.ehviewer.coil.read
 import com.hippo.ehviewer.coil.suspendEdit
-import com.hippo.ehviewer.download.ARCHIVE_SUFFIXES
 import com.hippo.ehviewer.download.DownloadManager
 import com.hippo.ehviewer.download.defaultDownloadLocation
+import com.hippo.ehviewer.download.findArchive
 import com.hippo.ehviewer.download.resolveDownloadDir
 import com.hippo.ehviewer.download.resolveDownloadDirSuspending
 import com.hippo.ehviewer.download.tempDownloadDir
@@ -446,7 +446,7 @@ class SpiderDen(val info: GalleryInfo) {
         // a plain `.zip`, so a gallery can be nothing but that -- looking only for
         // the two formats this app writes sent it to `archiveTo`, which packs from
         // loose images that an archiver download never had.
-        val source = ARCHIVE_SUFFIXES.firstNotNullOfOrNull { downloadDir!!.find("$gid.$it") }
+        val source = downloadDir?.findArchive(gid)
         when {
             source == null -> archiveTo(file, format)
             source.name == "$gid." + archiveSuffix(format) -> source.sendTo(file)
