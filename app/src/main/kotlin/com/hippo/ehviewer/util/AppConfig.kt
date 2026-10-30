@@ -32,6 +32,17 @@ fun File.ensureDirectory() = if (exists()) isDirectory else mkdirs()
 fun Path.ensureDirectory() = if (exists()) isDirectory else mkdirs().let { true }
 
 object AppConfig {
+    /**
+     * The answer [warmDefaultDownloadDir] found, once it has found one.
+     *
+     * Volatile rather than a `lazy`: a `lazy` makes every other thread wait for
+     * whichever one is computing, and the computation can block on a storage
+     * provider for seconds -- on the main thread that is an ANR, while reading a
+     * null and computing it again is merely the work this used to do every time.
+     */
+    @Volatile
+    private var defaultDownloadDirCache: File? = null
+
     const val APP_DIRNAME = "EhViewer"
     private const val DOWNLOAD = "download"
     private const val TEMP = "temp"
@@ -64,9 +75,30 @@ object AppConfig {
      * empty path, which resolves to `.` and makes every `mkdirs()` fail relative
      * to the process working directory. A fresh install has no such directory
      * yet, so the first download of every install failed.
+     *
+     * Resolving it asks the system for the external app directory and creates the
+     * child, which is disk work -- and it used to be repeated on every read,
+     * including reads from composition. [warmDefaultDownloadDir] resolves it once
+     * on a worker thread at startup and leaves the answer here; the getter still
+     * computes it when the cache is cold, so a caller that arrives first gets the
+     * same answer it always did rather than waiting for someone else's work.
      */
     val defaultDownloadDir: File?
-        get() = getDirInExternalAppDir(DOWNLOAD)
+        get() = defaultDownloadDirCache ?: getDirInExternalAppDir(DOWNLOAD)
+
+    /**
+     * Resolves [defaultDownloadDir] ahead of the first reader.
+     *
+     * Called from a coroutine of its own at startup: the work belongs off the main
+     * thread, and it must not be able to delay anything else -- a wedged external
+     * storage provider blocks inside here for as long as it likes.
+     *
+     * Only a directory that resolved is remembered. A null means "not right now",
+     * and the next reader should be free to ask again.
+     */
+    fun warmDefaultDownloadDir() {
+        getDirInExternalAppDir(DOWNLOAD)?.let { defaultDownloadDirCache = it }
+    }
     val externalTempPersistDir
         get() = getDirInExternalAppDir(TEMP)?.toOkioPath()
     val externalParseErrorDir: File?

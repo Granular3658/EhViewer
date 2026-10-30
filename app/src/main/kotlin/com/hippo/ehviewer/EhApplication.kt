@@ -152,6 +152,10 @@ class EhApplication : Application(), SingletonImageLoader.Factory {
             }
             EhTagDatabase.launchUpdate()
             @Suppress("UNUSED_EXPRESSION")
+            // Its own coroutine: resolving this can block on the storage
+            // provider, and the splash screen waits for `initialized`, which is
+            // set further down this block.
+            launch { AppConfig.warmDefaultDownloadDir() }
             launch { EhDB }
             launch { dataStateFlow.value }
             launch { OSUtils.totalMemory }
