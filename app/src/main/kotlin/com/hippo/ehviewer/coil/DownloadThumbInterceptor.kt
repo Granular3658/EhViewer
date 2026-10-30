@@ -17,6 +17,7 @@ import com.ehviewer.core.files.toUri
 import com.hippo.ehviewer.EhApplication.Companion.thumbCache
 import com.hippo.ehviewer.EhDB
 import com.hippo.ehviewer.client.getThumbKey
+import com.hippo.ehviewer.download.THUMB_FILENAMES
 import com.hippo.ehviewer.download.downloadDir
 import okio.Path
 
@@ -102,7 +103,7 @@ object DownloadThumbInterceptor : Interceptor {
             serve(chain, dir / name)?.let { return it }
             rememberLocalThumb(info, null)
         }
-        val found = THUMB_NAMES.map { dir / it }.firstOrNull { it.isFile } ?: return chain.proceed()
+        val found = THUMB_FILENAMES.map { dir / it }.firstOrNull { it.isFile } ?: return chain.proceed()
         return serve(chain, found)?.also { rememberLocalThumb(info, found.name) } ?: chain.proceed()
     }
 
@@ -124,12 +125,4 @@ object DownloadThumbInterceptor : Interceptor {
     }
 }
 
-/**
- * Every name a directory's thumbnail has been written under.
- *
- * `thumb.webp` is what this app writes now, `thumb.jpg` is the name it inherited,
- * and `.thumb` is what versions before the thumbnail-cache split wrote -- the
- * constant for it is gone, but the files it left behind are not.
- */
-private val THUMB_NAMES = listOf("thumb.webp", "thumb.jpg", ".thumb")
 private const val TAG = "DownloadThumbInterceptor"

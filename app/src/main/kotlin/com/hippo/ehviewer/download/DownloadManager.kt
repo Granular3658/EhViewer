@@ -346,11 +346,19 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
      * `key = { it.gid }`, so two entries for one gid make it throw. Same guard as
      * `addDownload` uses.
      */
-    suspend fun restoreDownload(galleryInfo: BaseGalleryInfo, dirname: String, location: String? = null): Boolean {
+    suspend fun restoreDownload(
+        galleryInfo: BaseGalleryInfo,
+        dirname: String,
+        location: String? = null,
+        localThumb: String? = null,
+    ): Boolean {
         if (containDownloadInfo(galleryInfo.gid)) return false
 
         val info = DownloadInfo(galleryInfo.asEntity(), dirname, location)
         info.state = DownloadInfo.STATE_NONE
+        // What the restore scan saw next to the pages, so the first card drawn
+        // does not have to ask the share which thumbnail file it wrote.
+        info.localThumb = localThumb
 
         // Add to all download list and map
         sortMutex.withLock {
@@ -1178,6 +1186,15 @@ val allDownloadLocations: List<Path>
         locationPathCache[set] = paths
         return paths
     }
+
+/**
+ * Every name a download directory's thumbnail has been written under.
+ *
+ * `thumb.webp` is what this app writes now, `thumb.jpg` is the name it inherited,
+ * and `.thumb` is what versions before the thumbnail-cache split wrote -- the
+ * constant for it is gone, but the files it left behind are not.
+ */
+val THUMB_FILENAMES = listOf("thumb.webp", "thumb.jpg", ".thumb")
 
 /** Locations that can receive new downloads, including writable SMB shares. */
 val writableDownloadLocations: List<Path>

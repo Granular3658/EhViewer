@@ -63,6 +63,7 @@ import com.hippo.ehviewer.client.parser.GalleryDetailUrlParser
 import com.hippo.ehviewer.client.parser.ParserUtils
 import com.hippo.ehviewer.collectAsState
 import com.hippo.ehviewer.download.DownloadManager
+import com.hippo.ehviewer.download.THUMB_FILENAMES
 import com.hippo.ehviewer.download.allDownloadLocations
 import com.hippo.ehviewer.download.downloadDir
 import com.hippo.ehviewer.download.downloadLocation
@@ -457,7 +458,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                 // restore and no duplicates for three copies of one gallery, and three
                 // duplicates once the list had the entry.
                 val seenGids = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
-                suspend fun getRestoreItem(file: Path): RestoreItem? {
+                suspend fun getRestoreItem(file: Path, known: Map<String, Boolean>?): RestoreItem? {
                     // An SMB candidate was listed through the client, so it is
                     // already known to be a directory; asking `file.isDirectory`
                     // would send us back through the provider for nothing.
@@ -468,50 +469,54 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     val location = file.parent?.toString() ?: return null
 
                     /**
-                     * gid/token of an SMB directory, read straight from the
-                     * repository. The provider's synchronous query/open bridge
-                     * blocks the calling thread while it waits for a *second*
-                     * thread of the same bounded pool, so scanning enough
-                     * directories at once deadlocks it; these suspend calls do
-                     * their own work on the IO dispatcher instead.
+                     * The first of the marker files this directory holds, read from
+                     * the share.
+                     *
+                     * `ComicInfo.xml` comes first: it carries the name, which the
+                     * marker never does, and the same id, token and page count. A
+                     * file that is there but does not parse falls through to the
+                     * next one -- preferring the XML is not a promise that it is
+                     * readable.
+                     *
+                     * The provider's synchronous query/open bridge blocks the
+                     * calling thread while it waits for a *second* thread of the
+                     * same bounded pool, so scanning enough directories at once
+                     * deadlocks it; these suspend calls do their own work on the IO
+                     * dispatcher instead.
                      */
-                    suspend fun readSmbIds(location: SmbLocation): LocalGallery? {
-                        // Probe the two known marker names instead of listing the
-                        // directory. A gallery holds thousands of images, and
-                        // enumerating them to look for a 280-byte marker is what
-                        // turns one restore into megabytes of traffic. Both are
-                        // probed even when the first one answers, because the
-                        // marker never carries a name and the file next to it
-                        // usually does.
-                        val marker = if (SmbRepository.statOrNull(location.child(SPIDER_INFO_FILENAME)) != null) {
-                            SmbRepository.readAll(location.child(SPIDER_INFO_FILENAME), MAX_RESTORE_MARKER_BYTES)?.let(::readCompatFromBytes)
-                        } else {
-                            null
+                    suspend fun readSmbMarker(location: SmbLocation, known: Map<String, Boolean>): LocalGallery? {
+                        for (name in MARKER_FILENAMES) {
+                            // Known absent: skip it without paying for an open that
+                            // would fail. Not known at all: try it -- the probe
+                            // could not answer for this name.
+                            if (known[name] == false) continue
+                            val bytes = SmbRepository.readAll(location.child(name), MAX_RESTORE_MARKER_BYTES) ?: continue
+                            localGalleryOf(name, bytes)?.let { return it.withThumb(known) }
                         }
-                        val comic = if (SmbRepository.statOrNull(location.child(COMIC_INFO_FILE)) != null) {
-                            SmbRepository.readAll(location.child(COMIC_INFO_FILE), MAX_RESTORE_MARKER_BYTES)?.let(::readComicInfoFromBytes)
-                        } else {
-                            null
-                        }
-                        return when {
-                            marker != null -> LocalGallery(marker.gid, marker.token, marker.pages, comic?.localTitle())
-                            comic != null -> comic.toLocalGallery()
-                            else -> null
-                        }
+                        return null
                     }
 
-                    suspend fun readPathIds(file: Path): LocalGallery? {
-                        val marker = file.find(SPIDER_INFO_FILENAME)?.let(::readCompatFromPath)
-                        val comic = file.find(COMIC_INFO_FILE)?.let(::readComicInfo)
-                        return when {
-                            marker != null -> LocalGallery(marker.gid, marker.token, marker.pages, comic?.localTitle())
-                            comic != null -> comic.toLocalGallery()
-                            else -> null
+                    suspend fun readPathMarker(file: Path): LocalGallery? {
+                        // A stat on a local path is free next to the read, so this
+                        // side probes instead of carrying a map around.
+                        val thumbs = THUMB_FILENAMES.filter { file.find(it) != null }
+                        for (name in MARKER_FILENAMES) {
+                            val path = file.find(name) ?: continue
+                            val local = if (name == COMIC_INFO_FILE) {
+                                readComicInfo(path)?.toLocalGallery()
+                            } else {
+                                readCompatFromPath(path)?.let { LocalGallery(it.gid, it.token, it.pages) }
+                            }
+                            if (local != null) return local.copy(thumb = thumbs.firstOrNull())
                         }
+                        return null
                     }
 
                     return runSuspendCatching {
-                        val local = (if (smb != null) readSmbIds(smb) else readPathIds(file)) ?: return null
+                        val local = when {
+                            smb != null -> readSmbMarker(smb, known.orEmpty())
+                            else -> readPathMarker(file)
+                        } ?: return null
                         val gid = local.gid
                         val dirname = file.name
                         if (!seenGids.add(gid)) {
@@ -547,6 +552,27 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                                 .getOrDefault(emptyList())
                         }
                     }
+                    // Which marker and thumbnail names each candidate holds, asked
+                    // once per share: a batch of fifty names is one compound
+                    // request, so it costs the same two round trips as one name,
+                    // while a stat per name is a round trip each. A share that
+                    // refuses a batch is asked again at half the size, down to a
+                    // plain stat; whatever it never answers for is left out of the
+                    // map, and the reads below try those names anyway.
+                    val presence = HashMap<String, Map<String, Boolean>>()
+                    candidates.filter { it.isSmb }.groupBy { it.parent?.toString() }.forEach { (parent, dirs) ->
+                        val location = parent?.let { SmbLocation.parse(it) } ?: return@forEach
+                        val names = dirs.flatMap { dir -> PROBE_FILENAMES.map { "${dir.name}/$it" } }
+                        val answers = runSuspendCatching { SmbRepository.existingNames(location, names) }
+                            .onFailure { logcat(it) }
+                            .getOrDefault(emptyMap())
+                        dirs.forEach { dir ->
+                            val prefix = "${dir.name}/"
+                            presence[dir.toString()] = answers.asSequence()
+                                .filter { it.key.startsWith(prefix) }
+                                .associate { it.key.removePrefix(prefix) to it.value }
+                        }
+                    }
                     // The scan fans out over every candidate, and each one costs
                     // four SMB operations. Unbounded, a library of a hundred
                     // directories puts more than a hundred of them in flight at
@@ -557,7 +583,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                     // slowly. A share serialises the operations anyway -- 45
                     // directories measured 5.5 MB and 750 ms -- so concurrency
                     // here buys queueing, not throughput.
-                    val result = candidates.parMapNotNull(concurrency = 4) { getRestoreItem(it) }.also {
+                    val result = candidates.parMapNotNull(concurrency = 4) { getRestoreItem(it, presence[it.toString()]) }.also {
                         // Titles, thumbnails, categories and tags come from here,
                         // and so does the page count for a directory that has no
                         // marker. None of it is needed to open the gallery again,
@@ -579,7 +605,7 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
                         // throughput path.
                         result.parMap(concurrency = 4) {
                             DownloadManager.recordDownloadDir(it.gid, it.dirname, it.location)
-                            if (DownloadManager.restoreDownload(it.galleryInfo, it.dirname, it.location)) {
+                            if (DownloadManager.restoreDownload(it.galleryInfo, it.dirname, it.location, it.thumb)) {
                                 restoredCount.incrementAndGet()
                             }
                             // Only for a gallery the API answered for: the file is
@@ -629,8 +655,35 @@ fun AnimatedVisibilityScope.DownloadScreen(navigator: DestinationsNavigator) = S
     }
 }
 
-/** What a directory says about its gallery without asking anyone. */
-private class LocalGallery(val gid: Long, val token: String, val pages: Int, val title: String? = null)
+/**
+ * What a directory says about its gallery without asking anyone.
+ *
+ * [thumb] is the name of the thumbnail file found next to the pages, which the
+ * restore records so that drawing the card does not have to look for it again.
+ */
+private data class LocalGallery(
+    val gid: Long,
+    val token: String,
+    val pages: Int,
+    val title: String? = null,
+    val thumb: String? = null,
+)
+
+/** The two files a directory can identify itself with. `ComicInfo.xml` first: it has a name. */
+private val MARKER_FILENAMES = listOf(COMIC_INFO_FILE, SPIDER_INFO_FILENAME)
+
+/** What the presence probe asks about: the markers, and every thumbnail name. */
+private val PROBE_FILENAMES = MARKER_FILENAMES + THUMB_FILENAMES
+
+/** One of the marker files, read from bytes the caller already has. */
+private fun localGalleryOf(name: String, bytes: ByteArray): LocalGallery? = if (name == COMIC_INFO_FILE) {
+    readComicInfoFromBytes(bytes)?.toLocalGallery()
+} else {
+    readCompatFromBytes(bytes)?.let { LocalGallery(it.gid, it.token, it.pages) }
+}
+
+/** Records which thumbnail the directory holds, when the probe knows. */
+private fun LocalGallery.withThumb(known: Map<String, Boolean>) = copy(thumb = THUMB_FILENAMES.firstOrNull { known[it] == true })
 
 /** The name a `ComicInfo.xml` gives the gallery; the marker never has one. */
 private fun ComicInfo.localTitle() = series?.ifBlank { null }
@@ -645,6 +698,8 @@ private class RestoreItem(
     local: LocalGallery,
     /** The location the scan found this directory in; see `putDownloadLocation`. */
     val location: String,
+    /** The thumbnail file the scan found next to the pages, if it looked. */
+    val thumb: String? = local.thumb,
     val galleryInfo: BaseGalleryInfo = BaseGalleryInfo(local.gid, local.token).apply {
         // Filled in before the API is asked, so that a restore that reached no
         // network still has a name to show. The API overwrites both when it

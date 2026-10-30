@@ -1,5 +1,6 @@
 package com.hippo.ehviewer.smb
 
+import com.ehviewer.core.util.logcat
 import com.hippo.ehviewer.jni.smbClearCache
 import com.hippo.ehviewer.jni.smbClose
 import com.hippo.ehviewer.jni.smbCreate
@@ -26,6 +27,7 @@ import java.nio.ByteBuffer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import moe.tarsin.coroutines.runSuspendCatching
 
 /**
  * The server refused the session, so it wants credentials or better ones.
@@ -38,6 +40,9 @@ import kotlinx.coroutines.withContext
 class SmbAuthRequired(message: String) : Exception(message)
 
 private const val AUTH_REQUIRED_MARK = "smb-auth-required"
+
+/** Names per compound probe. See [SmbRepository.existingNames] for the shrinking. */
+private const val PRESENCE_BATCH_SIZE = 50
 
 /**
  * How often a scan is read while it runs.
@@ -179,6 +184,56 @@ object SmbRepository {
                 credentials.domain,
             ).toList()
         }
+    }
+
+    /**
+     * Which of [names] exist under [location].
+     *
+     * [names] are paths relative to the location, so one call can cover every
+     * gallery directory under it. A batch is one compound request: fifty names
+     * cost the same two round trips as one, and that is the only reason to ask
+     * this way.
+     *
+     * What it costs is that a share which cannot answer a compound -- a small
+     * credit grant, a proxy that mangles them -- fails the whole batch instead of
+     * the single name that is missing. So a failed batch is retried at half the
+     * size, and the size that worked is kept for the rest of the scan. At one
+     * name a batch costs more than a plain stat, so that last step is the stat.
+     */
+    suspend fun existingNames(location: SmbLocation, names: List<String>): Map<String, Boolean> {
+        // Only names the share actually answered for appear here. A name that
+        // could not be asked about is absent, which a caller has to read as "not
+        // known" and not as "not there".
+        val answers = HashMap<String, Boolean>(names.size * 2)
+        var batch = PRESENCE_BATCH_SIZE
+        var index = 0
+        while (index < names.size) {
+            val size = minOf(batch, names.size - index)
+            val chunk = names.subList(index, index + size)
+            val answer = runSuspendCatching {
+                if (size == 1) {
+                    listOf(statOrNull(location.child(chunk[0])) != null)
+                } else {
+                    statMany(location, chunk)
+                }
+            }.onFailure {
+                logcat("SmbRepository") { "probe of $size names failed: ${it.message}" }
+            }.getOrNull()
+            when {
+                // Nothing came back for this batch: halve it and ask again. The
+                // smaller size stays for the rest of the scan, because whatever
+                // refused this batch will refuse the next one too.
+                answer == null && size > 1 -> batch = size / 2
+                // A single name that cannot be answered is a name nothing more
+                // can be asked about; leave it out and move on.
+                answer == null -> index += 1
+                else -> {
+                    chunk.forEachIndexed { offset, name -> answers[name] = answer[offset] }
+                    index += size
+                }
+            }
+        }
+        return answers
     }
 
     suspend fun stat(location: SmbLocation): Stat = withContext(Dispatchers.IO) {
