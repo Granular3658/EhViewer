@@ -37,7 +37,6 @@ import coil3.request.ImageRequest
 import coil3.request.allowRgb565
 import coil3.request.crossfade
 import coil3.serviceLoaderEnabled
-import coil3.util.DebugLogger
 import com.ehviewer.core.database.SearchDatabase
 import com.ehviewer.core.database.roomDb
 import com.ehviewer.core.files.deleteContent
@@ -233,17 +232,17 @@ class EhApplication : Application(), SingletonImageLoader.Factory {
         crossfade(300)
         val drawable = AppCompatResources.getDrawable(appCtx, R.drawable.image_failed)
         if (drawable != null) error(drawable.asImage(true))
-        if (BuildConfig.DEBUG) {
-            logger(DebugLogger())
-        } else {
-            eventListener(object : EventListener() {
-                override fun onError(request: ImageRequest, result: ErrorResult) {
-                    logcat("ImageLoader", LogPriority.ERROR) {
-                        "🚨 Failed - ${request.data}\n${result.throwable.asLog()}"
-                    }
+        // One listener in both builds. Coil's `DebugLogger` narrates every request
+        // -- start, success, which cache it came from -- which is a line per image
+        // per load, and it buries everything else in the log. What earns a line is
+        // a failure, and `request.data` in it names the image that failed.
+        eventListener(object : EventListener() {
+            override fun onError(request: ImageRequest, result: ErrorResult) {
+                logcat("ImageLoader", LogPriority.ERROR) {
+                    "🚨 Failed - ${request.data}\n${result.throwable.asLog()}"
                 }
-            })
-        }
+            }
+        })
     }
 
     companion object {
