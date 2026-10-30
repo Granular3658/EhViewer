@@ -20,6 +20,16 @@ interface AbstractDownloadInfo {
     var finished: Int
     var downloaded: Int
     var total: Int
+
+    /**
+     * Which file in the download directory holds the thumbnail, or null when it
+     * is not known.
+     *
+     * Recorded so that drawing a card does not have to ask the directory what is
+     * there: on a share that question is a round trip, and the answer changes
+     * only when the file does.
+     */
+    var localThumb: String?
 }
 
 @Entity(
@@ -51,6 +61,9 @@ data class DownloadEntity(
 
     @ColumnInfo(name = "LABEL", index = true)
     override var label: String? = null,
+
+    @ColumnInfo(name = "LOCAL_THUMB")
+    override var localThumb: String? = null,
 
     @Ignore
     override var speed: Long = 0,

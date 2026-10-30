@@ -15,17 +15,30 @@ import com.hippo.ehviewer.client.getThumbKey
 import com.hippo.ehviewer.client.getV2PreviewKey
 import com.hippo.ehviewer.client.thumbUrl
 import com.hippo.ehviewer.download.DownloadManager
+import com.hippo.ehviewer.download.downloadDir
 import com.hippo.ehviewer.ktbuilder.execute
 
 // Load in original size so the memory cache can be reused for preload requests
 fun ImageRequest.Builder.ehUrl(info: GalleryInfo) = apply {
-    val key = info.thumbKey!!
-    data(info.thumbUrl)
-    size(SizeResolver.ORIGINAL)
+    val key = info.thumbKey
     val downloadInfo = (info as? DownloadInfo) ?: DownloadManager.getDownloadInfo(info.gid)
     if (downloadInfo != null) {
         downloadInfo(downloadInfo)
     }
+    if (key == null) {
+        // A restored gallery carries no thumbnail key: nothing was ever fetched
+        // from the site for it, so the only picture left is one an earlier session
+        // cached in the directory. Finding that file is IO, so the directory
+        // itself is the data and the thumbnail interceptor looks inside.
+        //
+        // Not simply left unset: coil rejects a request with no data before any
+        // interceptor runs, so an empty request never reaches the one place that
+        // knows where the picture is.
+        downloadInfo?.downloadDir?.let { data(it) }
+        return@apply
+    }
+    data(info.thumbUrl)
+    size(SizeResolver.ORIGINAL)
     memoryCacheKey(key)
     diskCacheKey(key)
 }
