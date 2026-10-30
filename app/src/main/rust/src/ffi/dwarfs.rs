@@ -361,16 +361,23 @@ pub fn dwarfsPageSize(mut env: JNIEnv, _: JClass, handle: jlong, page: jint) -> 
 /// The buffer is this module's own, not the archive pool's: a page's size comes
 /// from the image, while every buffer in that pool is exactly `max_file_size`,
 /// and mixing the two would let one reader hand the other a buffer that is too
-/// small. Java releases it with `dwarfsReleaseByteBuffer`.
+/// small. Java releases it with `dwarfsReleaseByteBuffer`. A page of size zero
+/// comes back as an empty buffer: an empty file in the image is a file, and the
+/// caller's job is to fail to decode it, not this function's to throw.
 #[jni_fn("com.hippo.ehviewer.jni.DwarfsKt")]
 pub fn dwarfsReadPage(mut env: JNIEnv, _: JClass, handle: jlong, page: jint) -> jobject {
     jni_throwing(&mut env, |env| {
         let image = lookup(handle)?;
         let mut image = image.lock().map_err(|_| anyhow!("the image is poisoned"))?;
         let size = image.entries.get(page as usize).ok_or_else(|| anyhow!("page {page} out of range"))?.size as usize;
-        ensure!(size > 0, "page {page} is empty");
-
-        let addr = unsafe { malloc(size) };
+        // An empty file is still a file. A third-party pack can carry one -- a
+        // stray entry that is not an image -- and refusing to read it turned an
+        // otherwise intact image into one that throws at that page instead of
+        // showing the broken page the file is. The allocation is never zero
+        // because `malloc(0)` is allowed to return a pointer that cannot be
+        // freed; the buffer Java gets is empty all the same.
+        let alloc = size.max(1);
+        let addr = unsafe { malloc(alloc) };
         ensure!(!addr.is_null(), "out of memory for a {size} byte page");
         // Every allocation and release of a page buffer is logged with its
         // address, so that when the allocator aborts on a corrupted chunk the
@@ -404,7 +411,12 @@ pub fn dwarfsReadPageToFd(mut env: JNIEnv, _: JClass, handle: jlong, page: jint,
         let image = lookup(handle)?;
         let mut image = image.lock().map_err(|_| anyhow!("the image is poisoned"))?;
         let size = image.entries.get(page as usize).ok_or_else(|| anyhow!("page {page} out of range"))?.size as usize;
-        ensure!(size > 0, "page {page} is empty");
+        // Same reasoning as `dwarfsReadPage`: there is nothing to write, and the
+        // target gets an empty entry instead of an error that fails a whole
+        // conversion over one stray file.
+        if size == 0 {
+            return Ok(1 as jboolean);
+        }
 
         let mut buf = vec![0u8; size];
         image.read_into(page as usize, &mut buf)?;
