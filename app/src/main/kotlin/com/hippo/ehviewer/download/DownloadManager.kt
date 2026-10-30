@@ -73,6 +73,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.flow.update
@@ -120,14 +121,25 @@ object DownloadManager : OnSpiderListener, CoroutineScope {
     private val sortMode
         get() = SortMode.from(Settings.downloadSortMode.value)
 
-    var isInitialized by mutableStateOf(false)
-        private set
+    /**
+     * Whether the list is ready to be drawn.
+     *
+     * A flow and not a snapshot state, because this object is built on a worker
+     * thread -- the database is read here, and `runAssertingNotMainThread` says so
+     * -- while the first composition may already be running. A snapshot state
+     * created on that worker is a state the composition took its snapshot before:
+     * reading it throws `Reading a state that was created after the snapshot was
+     * taken`, which is how a cold start that lands on the download list crashed.
+     * A flow carries no snapshot, so it can be written from any thread.
+     */
+    private val _isInitialized = MutableStateFlow(false)
+    val isInitialized = _isInitialized.asStateFlow()
 
     init {
         launch {
             val mode = sortMode
             if (mode != SortMode.Default) sortDownloads(mode)
-            isInitialized = true
+            _isInitialized.value = true
         }
     }
 

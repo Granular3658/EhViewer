@@ -214,7 +214,11 @@ fun AnimatedVisibilityScope.DownloadsScreen(navigator: DestinationsNavigator) = 
         },
     )
     val hint = stringResource(R.string.search_bar_hint, title)
-    val list = if (DownloadManager.isInitialized) {
+    // Collected rather than read: the flag is set on the worker that builds the
+    // manager, and a snapshot state written there cannot be read from a
+    // composition that started before it existed.
+    val initialized by DownloadManager.isInitialized.collectAsState()
+    val list = if (initialized) {
         // The list handed to the Lazy layout has to keep its identity. `items(list, …)`
         // captures it and indexes it from the interval content, while the layout's
         // measured items come from the previous composition: replacing the list object
